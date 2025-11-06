@@ -1,6 +1,7 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .serializers import UserSerializer, DomSerializer
+from .models import Dom
 from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework import status
@@ -8,6 +9,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.decorators import authentication_classes, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import TokenAuthentication
+from django.db.models import Q
 
 
 # Vista de login 
@@ -93,3 +95,113 @@ def crear_dom(request):
         },
         status=status.HTTP_400_BAD_REQUEST
     )
+
+# Metodo para obtener DOMS x ID'S necesario para la actualización de los registros DOM
+@api_view(['GET'])
+def obtener_dom(request, dom_id):
+    try:
+        dom = Dom.objects.get(dom_id=dom_id)
+        serializer = DomSerializer(dom)
+
+        return Response(
+            {
+                'success': True,
+                'data': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+    except Dom.DomNotExist:
+        return Response(
+            {
+                'success': False,
+                'message': f'registro con id {dom_id} no encontrado'
+            },
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+@api_view(['GET', 'PUT', 'PATCH'])
+def dom_detail(request, dom_id):
+    try:
+        dom = Dom.objects.get(dom_id=dom_id)
+    except Dom.DoesNotExist:
+        return Response({'error': 'DOM no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == 'GET':
+        serializer = DomSerializer(dom)
+        return Response(serializer.data)
+    
+    elif request.method in ['PUT', 'PATCH']:
+        serializer = DomSerializer(dom, data=request.data, partial=(request.method == 'PATCH'))
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+# Metodo para obtener DOM en barra de busqueda funcionalidad editat DOMS se admitirá busqueda x id o por nombre
+@api_view(['GET'])
+def buscar_doms(resquet):
+    search_query = resquet.GET.get('search', '')
+    dom_id = resquet.GET.get('id', '')
+
+    doms = Dom.objects.all()
+
+    # IF para realizar busqueda x id
+    if dom_id:
+        doms = doms.filter(dom_id=dom_id)
+    # IF para realizar busqueda x nombre cliente
+    if search_query:
+        doms = doms.filter(nombre_cliente__icontains=search_query)
+    
+    serializer = DomSerializer(doms, many=True)
+
+    return Response(
+        {
+            'success': True,
+            'count': len(serializer.data),
+            'data': serializer.data
+        },
+        status=status.HTTP_200_OK
+    )
+
+# Metódo para actualizar un DOM
+@api_view(['PUT', 'PATCH'])
+def actualizar_dom(request, dom_id):
+    # PUT: actualización completa
+    # PATCH: actualización parcial
+    try:
+        dom = Dom.objects.get(dom_id=dom_id)
+
+        partial = request.method == 'PATCH'
+        serializer = DomSerializer(dom, data=request.data, partial=partial )
+
+        if serializer.is_valid():
+            dom_actualizado = serializer.save()
+
+            return Response (
+                {
+                    'success': True,
+                    'message': 'Dom actualizado exitosamente',
+                    'data': {
+                        'dom_id': dom_actualizado.dom_id,
+                        'nombre_cliente': dom_actualizado.nombre_cliente
+                    }
+                }, 
+                status=status.HTTP_200_OK
+            )
+        return Response(
+            {
+                'success': False,
+                'message': 'Error al actualizar el Dom',
+                'errors': serializer.errors
+            },
+            satrus=status.HTTP_400_BAD_REQUEST
+        )
+    except Dom.DoesNotExist:
+        return Response (
+            {
+                'success': False,
+                'message': f'registro con id {dom_id} no encontrado'
+            },
+            status=status.HTTP_404_NOT_FOUND
+        )
+        

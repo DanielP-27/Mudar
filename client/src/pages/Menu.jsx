@@ -22,7 +22,7 @@ export function Menu() {
                 </Link>
 
                 {/* Botón Editar */}
-                <Link to="/doms/editar" className="flex-1 min-w-[200px] max-w-[250px]">
+                <Link to="/doms/buscar" className="flex-1 min-w-[200px] max-w-[250px]">
                     <button className="w-full flex items-center justify-center gap-2 bg-[#2C7EC9] hover:bg-[#136EBF] text-white font-bold py-3 px-6 rounded-lg shadow-lg transform hover:scale-105 transition duration-300">
                         Editar un Dom
                         <FiEdit size={20} />
@@ -30,7 +30,7 @@ export function Menu() {
                 </Link>
 
                 {/* Botón Buscar */}
-                <Link to="/search" className="flex-1 min-w-[200px] max-w-[250px]">
+                <Link to="/doms/editar" className="flex-1 min-w-[200px] max-w-[250px]">
                     <button className="w-full flex items-center justify-center gap-2 bg-[#2C7EC9] hover:bg-[#136EBF] text-white font-bold py-3 px-6 rounded-lg shadow-lg transform hover:scale-105 transition duration-300">
                         Buscar un Dom
                         <FaSearch size={20} />

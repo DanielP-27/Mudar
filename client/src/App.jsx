@@ -5,7 +5,9 @@ import { HomePage } from "./pages/HomePage";
 import { Register } from "./pages/Register";
 import { Login } from "./pages/Login";
 import { Menu } from "./pages/Menu";
-import Doms from "./pages/Doms"
+import Doms from "./pages/Doms";
+import DomsBuscar from "./pages/DomsBuscar";
+import DomsEditar from "./pages/DomsEditar";
 
 function App() {
   return (
@@ -19,6 +21,8 @@ function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/menu" element={<Menu/>}/>
           <Route path="/doms" element={<Doms/>} />
+          <Route path="/doms/buscar" element={<DomsBuscar/>} />
+          <Route path="/doms/editar/:id" element={<DomsEditar/>}/>
         </Routes>
       </div>
     </BrowserRouter>

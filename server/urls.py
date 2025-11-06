@@ -25,7 +25,11 @@ urlpatterns = [
     re_path('login', views.login),
     re_path('register', views.register),
     re_path('profile', views.profile),
-    re_path('doms', views.crear_dom)
+    
+    #Rutas relacionadas con el manejos de los registros Dom
+    re_path('doms$', views.crear_dom),
+    re_path('doms/buscar$', views.buscar_doms),
+    re_path(r'^doms/(?P<dom_id>[0-9]+)$', views.dom_detail)
 ]
 
 
