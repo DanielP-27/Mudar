@@ -52,7 +52,7 @@ export function Register() {
         <form className="flex flex-col gap-5" onSubmit={onSubmit}>
           {/* Usuario */}
           <div>
-            <label className="block text-green-200 font-semibold mb-1">
+            <label className="block text-[#2C7EC9] font-semibold mb-1">
               Usuario
             </label>
             <input
@@ -65,7 +65,7 @@ export function Register() {
           </div>
           {/* Contraseña */}
           <div>
-            <label className="block text-green-200 font-semibold mb-1">
+            <label className="block text-[#2C7EC9] font-semibold mb-1">
               Contraseña
             </label>
             <input
@@ -79,7 +79,7 @@ export function Register() {
           {/* Boton */}
           <button
             type="submit"
-            className="bg-green-800 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            className="bg-[#2C7EC9] hover:bg-[#76AEDE] text-white font-bold py-2 px-4 rounded-md flex items-center justify-center gap-2 transition-colors cursor-pointer"
           >
             <IoSaveSharp />
             Guardar

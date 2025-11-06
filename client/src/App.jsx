@@ -5,6 +5,7 @@ import { HomePage } from "./pages/HomePage";
 import { Register } from "./pages/Register";
 import { Login } from "./pages/Login";
 import { Menu } from "./pages/Menu";
+import Doms from "./pages/Doms"
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/menu" element={<Menu/>}/>
+          <Route path="/doms" element={<Doms/>} />
         </Routes>
       </div>
     </BrowserRouter>

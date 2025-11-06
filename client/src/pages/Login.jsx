@@ -38,7 +38,7 @@ export function Login() {
         <form className="flex flex-col gap-5" onSubmit={onSubmit}>
           {/* Usuario */}
           <div>
-            <label className="block text-green-200 font-semibold mb-1">
+            <label className="block text-[#2C7EC9] font-semibold mb-1">
               Usuario
             </label>
             <input
@@ -51,7 +51,7 @@ export function Login() {
           </div>
           {/* Contraseña */}
           <div>
-            <label className="block text-green-200 font-semibold mb-1">
+            <label className="block text-[#2C7EC9] font-semibold mb-1">
               Contraseña
             </label>
             <input
@@ -65,7 +65,7 @@ export function Login() {
           {/* Botón */}
           <button
             type="submit"
-            className="flex items-center justify-center gap-2 bg-green-700 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg transform hover:scale-105 transition duration-300"
+            className="flex items-center justify-center gap-2 bg-[#2C7EC9] hover:bg-[#76AEDE] text-white font-bold py-3 px-6 rounded-lg shadow-lg transform hover:scale-105 transition duration-300"
           >
             <MdOutlineLogin size={20} />
             Iniciar Sesión
@@ -76,7 +76,7 @@ export function Login() {
         <p className="text-center text-sm text-gray-300 mt-6">
           ¿No tienes cuenta?{" "}
           <span
-            className="text-green-400 hover:underline cursor-pointer"
+            className="text-[#2C7EC9] hover:underline cursor-pointer"
             onClick={() => navigate("/register")}
           >
             Regístrate aquí
