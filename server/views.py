@@ -119,7 +119,7 @@ def obtener_dom(request, dom_id):
             status=status.HTTP_404_NOT_FOUND
         )
     
-@api_view(['GET', 'PUT', 'PATCH'])
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 def dom_detail(request, dom_id):
     try:
         dom = Dom.objects.get(dom_id=dom_id)
@@ -137,6 +137,15 @@ def dom_detail(request, dom_id):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    elif request.method == 'DELETE':
+        dom_id_eliminado = dom.dom_id
+        nombre_cliente = dom.nombre_cliente
+        dom.delete()
+        return Response({
+            'success': True,
+            'message': f'DOM-{dom_id_eliminado} de {nombre_cliente} eliminado exitosamente'
+        }, status=status.HTTP_200_OK)
+        
 # Metodo para obtener DOM en barra de busqueda funcionalidad editat DOMS se admitirá busqueda x id o por nombre
 @api_view(['GET'])
 def buscar_doms(resquet):
@@ -204,4 +213,6 @@ def actualizar_dom(request, dom_id):
             },
             status=status.HTTP_404_NOT_FOUND
         )
+    
+
         

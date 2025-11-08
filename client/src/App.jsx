@@ -7,7 +7,8 @@ import { Login } from "./pages/Login";
 import { Menu } from "./pages/Menu";
 import Doms from "./pages/Doms";
 import DomsBuscar from "./pages/DomsBuscar";
-import DomsEditar from "./pages/DomsEditar";
+//import DomsEditar from "./pages/DomsEditar";
+import DomsEliminar from "./pages/DomsEliminar";
 
 function App() {
   return (
@@ -22,7 +23,7 @@ function App() {
           <Route path="/menu" element={<Menu/>}/>
           <Route path="/doms" element={<Doms/>} />
           <Route path="/doms/buscar" element={<DomsBuscar/>} />
-          <Route path="/doms/editar/:id" element={<DomsEditar/>}/>
+          <Route path="/doms/editar" element={<DomsEliminar/>}/>
         </Routes>
       </div>
     </BrowserRouter>
