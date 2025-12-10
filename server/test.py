@@ -98,6 +98,9 @@ class DomAPITest(TestCase):
         """Prueba la funcionalidad de búsqueda"""
         Dom.objects.create(nombre_cliente="Pharmetique")
         Dom.objects.create(nombre_cliente="Flowserve")
-        response = self.client.get('/doms/buscar?q=Pharme')
+
+        response = self.client.get('/doms/buscar?search=Pharme')
+        
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data['results']), 1)
+        
+        self.assertEqual(len(response.data['data']), 1)
