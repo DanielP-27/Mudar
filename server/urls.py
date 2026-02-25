@@ -21,10 +21,12 @@ from django.conf import settings
 from . import views
 
 urlpatterns = [
+
     path('admin/', admin.site.urls),
-    re_path('login', views.login),
-    re_path('register', views.register),
-    re_path('profile', views.profile),
+
+    re_path(r'^login/$', views.login, name='login'),
+    re_path(r'^register/$', views.register, name='register'),
+    re_path(r'^profile/$', views.profile, name='profile'),
     
     #Rutas relacionadas con el manejos de los registros Dom
     re_path('doms$', views.crear_dom),
