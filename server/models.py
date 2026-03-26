@@ -12,6 +12,7 @@ class Cliente (models.Model):
 
     cliente_id = models.AutoField(primary_key=True, verbose_name='Codigo cliente')
     nombre_cliente = models.CharField(max_length=200, verbose_name='Nombre cliente')
+    nit = models.CharField(max_length=20, unique=True, null=True, blank=True, verbose_name='NIT')
     activo = models.BooleanField(default=True, db_index=True, verbose_name='Cliente activo')
 
     # Auditoria 
@@ -30,6 +31,28 @@ class Cliente (models.Model):
         return self.nombre_cliente
 
 
+# Tabla Listado familia de productos - necesaria por que cada producto pertenece a una familia, importante para buen diseño Front
+
+class FamiliaProducto(models.Model):
+    familia_id = models.AutoField(primary_key=True, verbose_name='Código familia') 
+    nombre_familia = models.CharField(max_length=100, verbose_name='Nombre familia')
+    activo = models.BooleanField(default=True, db_index=True, verbose_name='Familia activa')
+
+    # Auditoria 
+    creado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='familia_creada_por')
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_modificacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'familias_producto'
+        verbose_name = 'Familia de Producto'
+        verbose_name_plural = 'Familias de Producto'
+        ordering = ['nombre_familia']
+    
+    def __str__(self):
+        return self.nombre_familia
+
+
 # Tabla Listado de productos
 class Productos(models.Model):
 
@@ -37,6 +60,7 @@ class Productos(models.Model):
 
     producto_id = models.AutoField(primary_key=True, verbose_name='Código de producto')
     nombre_producto = models.CharField (max_length=200, verbose_name='Nombre del producto')
+    familia_producto = models.ForeignKey(FamiliaProducto, on_delete=models.RESTRICT, related_name='productos', verbose_name='Familia de Producto', null=True, blank=True)
     tiempo_produccion_unitario= models.IntegerField(verbose_name='Tiempo de producción de una unidad en minutos')
     activo=models.BooleanField(default=True, db_index=True, verbose_name='Producto_activo')
 
@@ -108,7 +132,7 @@ class ListaPredefinida(models.Model):
     ]
      
      lista_id=models.AutoField(primary_key=True, verbose_name='codigo del listado')
-     tipo = models.CharField(max_length=50, choices=TIPO_CHOICES, verbose_name='Tipo de Listado', db_index=True, unique=True)
+     tipo = models.CharField(max_length=50, choices=TIPO_CHOICES, verbose_name='Tipo de Listado', db_index=True)
      nombre = models.CharField(max_length=200, verbose_name='Nombre',help_text='Texto que ve el usuario')
      activo = models.BooleanField(default=True, verbose_name='Activo', db_index=True)
 
@@ -506,7 +530,7 @@ class RegistroTiempoProduccion(models.Model):
 
     # Calculo de minutos en pausa del cronometro y de los minutos totales una vez se selecciona la opción FINALIZADO
 
-    total_minutos_pausados = models.IntegerField(default=0, verbose_name='Total minutos pausados')
+    total_segundos_pausados = models.IntegerField(default=0, verbose_name='Total segundos pausados')
     minutos_totales = models.IntegerField(blank=True, null=True, verbose_name='Minutos totales', help_text='calculo se obtiene al darle finalizado a la producción')
 
     # auditoria 
@@ -532,7 +556,7 @@ class RegistroTiempoProduccion(models.Model):
         if self.fin:
             delta = self.fin - self.inicio
             minutos_brutos = int(delta.total_seconds() / 60)
-            return minutos_brutos - self.total_minutos_pausados
+            return minutos_brutos - int(self.total_segundos_pausados / 60)
         return None
     
     def save(self, *args, **kwargs):
@@ -557,7 +581,7 @@ class PausaTiempoProduccion(models.Model):
 
     fin_pausa = models.DateTimeField(blank=True, null=True, verbose_name='Fin pausa', help_text='resultado se obtiene al momento de finalizar la pausa')
 
-    minutos_pausados = models.IntegerField(blank=True, null=True, verbose_name='Minutos de Pausa')
+    segundos_pausados = models.IntegerField(blank=True, null=True, verbose_name='Segundos de Pausa')
 
     class Meta:
         db_table = 'pausas_tiempo_produccion'
@@ -566,14 +590,14 @@ class PausaTiempoProduccion(models.Model):
         ordering = ['inicio_pausa']
 
     def __str__(self):
-        return f"Pausa: {self.minutos_pausados or '?'} min"
+        return f"Pausa: {self.segundos_pausados or '?'} min"
     
     def save(self, *args, **kwargs):
         # Calculo automatico de minutos en pausa una vez se finaliza la misma
 
         if self.fin_pausa and self.inicio_pausa:
             delta = self.fin_pausa - self.inicio_pausa
-            self.minutos_pausados = int(delta.total_seconds() / 60)
+            self.segundos_pausados = int(delta.total_seconds())
         super().save(*args, **kwargs)
 
 # Clase correspondiente al manejo de datos de tratamiento termico
@@ -727,4 +751,4 @@ class AuditoriaDom(models.Model):
     def __str__(self):
         return f"DOM #{self.dom.dom_id} - {self.accion} - {self.timestamp}"
 
-# FIN
+# FIN ARCHIVO MODELS
