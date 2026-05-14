@@ -2,8 +2,9 @@ from django.contrib import admin
 from .models import(
     Cliente,
     FamiliaProducto,
-    Productos, 
-    Turno, 
+    Productos,
+    Turno,
+    RegistroTurnoDia,
     ListaPredefinida,
     Dom,
     ProductosDom,
@@ -21,6 +22,7 @@ admin.site.register(Cliente)
 admin.site.register(FamiliaProducto)
 admin.site.register(Productos)
 admin.site.register(Turno)
+admin.site.register(RegistroTurnoDia)
 admin.site.register(ListaPredefinida)
 admin.site.register(Dom)
 admin.site.register(ProductosDom)
