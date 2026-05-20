@@ -29,6 +29,8 @@ from server.views import(
     # Módulo 2 - Catálogos
     ClienteListView,
     ClienteDetalleView,
+    FamiliaProductoListView,
+    FamiliaProductoDetalleView,
     ProductoListView,
     ProductoDetalleView,
     TurnoListView,
@@ -49,6 +51,8 @@ from server.views import(
     RegistroProduccionDetalleView,
     RegistroTratamientoListView,
     RegistroTratamientoDetalleView,
+    RegistroTurnoDiaListView,
+    RegistroTurnoDiaDetalleView,
 
     # Modulo 5 - Cronometro 
     CronometroIniciarView,
@@ -80,6 +84,8 @@ urlpatterns = [
     # Módulo 2 - catálogos
     path('api/clientes/', ClienteListView.as_view(), name='clientes'),
     path('api/clientes/<int:cliente_id>/', ClienteDetalleView.as_view(), name='cliente-detalle'),
+    path('api/familias/', FamiliaProductoListView.as_view(), name='familias'),
+    path('api/familias/<int:familia_id>/', FamiliaProductoDetalleView.as_view(), name='familia-detalle'),
     path('api/productos/', ProductoListView.as_view(), name='productos'),
     path('api/productos/<int:producto_id>/', ProductoDetalleView.as_view(), name='producto-detalle'),
     path('api/turnos/', TurnoListView.as_view(), name='turnos'),
@@ -100,6 +106,8 @@ urlpatterns = [
     path('api/produccion/<int:registro_id>/', RegistroProduccionDetalleView.as_view(), name='produccion-detalle'),
     path('api/tratamiento/', RegistroTratamientoListView.as_view(), name='tratamiento'),
     path('api/tratamiento/<int:registro_id>/', RegistroTratamientoDetalleView.as_view(), name='tratamiento-detalle'),
+    path('api/turnos-dia/', RegistroTurnoDiaListView.as_view(), name='turnos-dia'),
+    path('api/turnos-dia/<int:registro_id>/', RegistroTurnoDiaDetalleView.as_view(), name='turno-dia-detalle'),
 
     # Módulo 5 - cronometro
     path('api/cronometro/iniciar/', CronometroIniciarView.as_view(), name='cronometro-iniciar'),

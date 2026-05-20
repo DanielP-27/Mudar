@@ -5,6 +5,8 @@ from django.utils import timezone
 from django.db.models.options import Options
 from django.db.models import Sum
 
+# Esta consante maneja la logica de +120 minutos si en el campo horas extras en planeación es marcado como TRUE
+MINUTOS_HORAS_EXTRAS = 120
 
 # Tabla listado de clientes
 class Cliente (models.Model):
@@ -115,7 +117,27 @@ class Turno(models.Model):
 
         if self.minutos_totales <= 0: 
             raise ValidationError ({'los minutos del turno deben ser mayores a 0'})
+        
+# Clase donde se valida numero de operarios por turno y si se trabajan horas extras (+120 minutos en turno)
 
+class RegistroTurnoDia(models.Model):
+    turno = models.ForeignKey(Turno, on_delete=models.RESTRICT, related_name='registros_diarios', verbose_name='Turno')
+    fecha = models.DateField(verbose_name='Fecha del turno',help_text='Fecha en que se registran los operarios para este turno')
+    numero_operarios = models.IntegerField(verbose_name='Número de operarios', help_text='Total de operarios disponibles en este turno para esta fecha')
+    horas_extras = models.BooleanField(default=False, verbose_name='Horas extras', help_text='se agregan 120 minutos adicionales a la capacidad del turno')
+    registrado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='turnos_dia_registrados')
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'registros_turno_dia'
+        verbose_name = 'Registro de turno del día'
+        verbose_name_plural = 'Registros de turno del día'
+        unique_together = ('turno', 'fecha')
+        ordering = ['-fecha', 'turno']
+
+    def __str__(self):
+        extras = ' + horas extras' if self.horas_extras else ''
+        return f'{self.turno.nombre_turno} — {self.fecha} — {self.numero_operarios} operarios{extras}'
 
 # Tabla para el manejo de los listados predefinidos que se encuentran dentro del formato. A diferencia de Clientes, productos y turnos, No necesitan una tabla por separado para su manejo.
 
@@ -174,7 +196,7 @@ class Dom(models.Model):
 
 
     # Etapa 0: creación del DOM 
-    fecha_asignacion_dom=models.DateField(verbose_name= 'Fecha asignacion DOM')
+    fecha_asignacion_dom = models.DateField(auto_now_add=True, verbose_name='Fecha asignación DOM')
     nombre_cliente=models.ForeignKey(Cliente, on_delete=models.RESTRICT, related_name='doms', verbose_name='Cliente')
     descripcion=models.TextField(blank=True, null=True, verbose_name='Descripción')
     tipo_estado_dom = models.CharField(max_length=100, verbose_name='Tipo o Estado del DOM', db_index=True, help_text='Referencia a ListaPredifinida tipo=TIPO:ESTADO:DOM')
@@ -243,7 +265,7 @@ class Dom(models.Model):
             return pedido - self.cantidad_elaborada_total
         return None
     
-    def etapa_1_bloqueda(self):
+    def etapa_1_bloqueada(self):
         return self.dom_relacionado_produccion
     
     def etapa_6_bloqueada(self):
@@ -329,6 +351,19 @@ class RegistroPlaneacion(models.Model):
     # Propiedades calculadas 
 
     @property
+    def capacidad_turno_dia(self):
+        if not self.turno or not self.fecha_planeacion:
+            return None
+        registro = RegistroTurnoDia.objects.filter(
+            turno=self.turno,
+            fecha=self.fecha_planeacion
+        ).first()
+        if not registro:
+            return None
+        minutos_extras = MINUTOS_HORAS_EXTRAS if registro.horas_extras else 0
+        return (self.turno.minutos_totales + minutos_extras) * registro.numero_operarios
+
+    @property
     def tiempo_proyectado(self):
         if self.cantidad_pedido and self.dom_producto:
             return self.cantidad_pedido * self.dom_producto.tipo_producto.tiempo_produccion_unitario
@@ -340,20 +375,24 @@ class RegistroPlaneacion(models.Model):
             return None
         planeaciones = RegistroPlaneacion.objects.filter(
             fecha_planeacion=self.fecha_planeacion,
-            turno = self.turno, 
-            cantidad_pedido__isnull=False,  
+            turno=self.turno,
+            cantidad_pedido__isnull=False,
             dom_producto__isnull=False
         ).select_related('dom_producto__tipo_producto')
-        total = 0 
+        total = 0
         for p in planeaciones:
-            total += p.cantidad_pedido * p.dom_producto.tipo_producto.tiempo_produccion_unitario
+            tiempo_proyectado = p.cantidad_pedido * p.dom_producto.tipo_producto.tiempo_produccion_unitario
+            operarios = p.numero_operarios_turno or 1
+            total += tiempo_proyectado * operarios
         return total
     
     @property
     def tiempo_restante_dia(self):
-        if self.turno and self.sumatoria_tiempo_asignado_turnos is not None:
-            return self.turno.minutos_totales - self.sumatoria_tiempo_asignado_turnos
-        return None
+        capacidad = self.capacidad_turno_dia
+        sumatoria = self.sumatoria_tiempo_asignado_turnos
+        if capacidad is None or sumatoria is None:
+            return None
+        return capacidad - sumatoria
     
     @property
     def cantidad_elaborada(self):
@@ -366,6 +405,53 @@ class RegistroPlaneacion(models.Model):
         if self.cantidad_pedido:
             return self.cantidad_pedido - self.cantidad_elaborada
         return None
+    
+    
+    def tiempo_disponible_turno(self, tiempo_nuevo, excluir_registro_id=None):
+        # Función diseñada para validar que nuestros registros dentro de un mismo turno y fecha respeten el máximo de tiempo disponible para el turno
+        # disponible_actual: minutos disponibles antes del nuevo registro
+        # Disponible actual - tiempo nuevo: si el nuevo registro de planeación supera tiempo disponible en el turno, la vista notifica de está situación al planeadornb9
+        capacidad = self.capacidad_turno_dia
+        if capacidad is None:
+            return None, None
+        planeaciones = RegistroPlaneacion.objects.filter(
+            fecha_planeacion=self.fecha_planeacion,
+            turno=self.turno,
+            cantidad_pedido__isnull=False,
+            dom_producto__isnull=False
+        ).select_related('dom_producto__tipo_producto')
+        if excluir_registro_id:
+            planeaciones = planeaciones.exclude(id=excluir_registro_id)
+        sumatoria = sum(
+            p.cantidad_pedido * p.dom_producto.tipo_producto.tiempo_produccion_unitario
+            for p in planeaciones
+        )
+        disponible_actual = capacidad - sumatoria
+        return disponible_actual, disponible_actual - tiempo_nuevo
+
+    def cantidad_disponible_produccion(self, cantidad_nueva, excluir_registro_id=None):
+        # Función diseñada para impedir que al incluir nuevos registros de planeación la cantidad elaborada supere la cantidad total del producto, en caso que se presente está situación el sistema debe estar en capacidad de informarle a los usuarios respecto de esta situación. 
+        planeaciones_dom = RegistroPlaneacion.objects.filter(
+            dom=self.dom,
+            dom_producto=self.dom_producto
+        )
+        registros = RegistroProduccion.objects.filter(
+            registro_planeacion__in=planeaciones_dom
+        )
+        if excluir_registro_id:
+            registros = registros.exclude(id=excluir_registro_id)
+        elaborada = registros.aggregate(total=Sum('cantidad_elaborada'))['total'] or 0
+        return self.dom_producto.cantidad_pedido - elaborada - cantidad_nueva
+
+    @property
+    def numero_operarios_turno(self):
+        if not self.turno or not self.fecha_planeacion:
+            return None
+        registro = RegistroTurnoDia.objects.filter(
+            turno=self.turno,
+            fecha=self.fecha_planeacion
+        ).first()
+        return registro.numero_operarios if registro else None
     
     # Bloqueo etapa
     def etapa2_bloqueada(self):
@@ -555,8 +641,7 @@ class RegistroTiempoProduccion(models.Model):
         # Calculo de minutos excluyendo pausas
         if self.fin:
             delta = self.fin - self.inicio
-            minutos_brutos = int(delta.total_seconds() / 60)
-            return minutos_brutos - int(self.total_segundos_pausados / 60)
+            return int((delta.total_seconds() - self.total_segundos_pausados) / 60)
         return None
     
     def save(self, *args, **kwargs):
@@ -590,7 +675,7 @@ class PausaTiempoProduccion(models.Model):
         ordering = ['inicio_pausa']
 
     def __str__(self):
-        return f"Pausa: {self.segundos_pausados or '?'} min"
+        return f"Pausa: {self.segundos_pausados or '?'} seg"
     
     def save(self, *args, **kwargs):
         # Calculo automatico de minutos en pausa una vez se finaliza la misma
@@ -737,7 +822,7 @@ class AuditoriaDom(models.Model):
         blank=True, 
         null=True,
         verbose_name='Campos Modificados',
-        help_text='JSON: {"campo": {"antes": "valor_anterior", "despues": "valor_nuevo"}}'
+        help_text='JSON: {"campo": {"antes": "valor_anterior", "despues": "valor_nuevo"}'
     )
 
     timestamp = models.DateTimeField(auto_now_add=True, verbose_name='Fecha/Hora')

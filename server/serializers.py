@@ -12,6 +12,7 @@ from .models import (
     RegistroAlmacen,
     RegistroProduccion,
     RegistroTiempoProduccion,
+    RegistroTurnoDia,
     PausaTiempoProduccion,
     RegistroTratamiento,
     PerfilUsuario,
@@ -82,6 +83,24 @@ class TurnoSerializer(serializers.ModelSerializer):
                 'Los minutos del turno deben ser mayores a 0'
             )
         return value
+    
+class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
+    turno_nombre = serializers.CharField(
+        source='turno.nombre_turno',
+        read_only=True
+    )
+
+    class Meta:
+        model = RegistroTurnoDia
+        fields = ['id', 'turno', 'turno_nombre', 'fecha', 'numero_operarios', 'horas_extras', 'registrado_por', 'fecha_creacion']
+        read_only_fields = ['registrado_por', 'fecha_creacion']
+
+    def validate_numero_operarios(self, value):
+        if value <= 0:
+            raise serializers.ValidationError(
+                'El número de operarios debe ser mayor a 0'
+            )
+        return value
 
 # Serializer Listas Predefinidas
 # Uso: dropdowns de las listas predefinidas, solo se manejan campos necesarios para poblar las vistas de Front
@@ -98,8 +117,7 @@ class ProductosDomSerializer(serializers.ModelSerializer):
     # variable para devolver a front objeto con nombre y tiempo de produccion unitario del producto
     tipo_producto_detalle = ProductosSerializer(source='tipo_producto', read_only=True)
     # variable para leer datos de tipo de producto con primary key
-    tipo_producto = serializers.PrimaryKeyRelatedField(queryset=Productos.objects.all()
-    )
+    tipo_producto = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta: 
         model = ProductosDom
@@ -113,7 +131,9 @@ class ProductosDomSerializer(serializers.ModelSerializer):
 # Serializer : DomListSerializer
 # Uso: necesario para manejo de consultad de DOMS especificos, es decir, información que se despliega cuando se hace consulta de DOM especificos
 class DomListSerializer(serializers.ModelSerializer):
-    # nombre cliente como FK
+    # Se obtiene id del nombre del cliente como PK
+    nombre_cliente = serializers.PrimaryKeyRelatedField(read_only=True)
+    # Detalle del nombre del cliente
     nombre_cliente_detalle = serializers.CharField(
         source='nombre_cliente.nombre_cliente', read_only=True
     )
@@ -205,7 +225,7 @@ class DomDetalleSerializer(serializers.ModelSerializer):
             'cantidad_pendiente_total',
             'cantidad_elaborada_total',
         ]
-        read_only_fields = ['dom_id']
+        read_only_fields = ['dom_id', 'fecha_asignacion_dom']
 
 # Serializer: RegistroAlmacen
 # Uso: manejo información etapa 3 - almacen
@@ -222,6 +242,7 @@ class RegistroAlmacenSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'registro_planeacion',
+            'numero_registro',
             'materias_primas',
             'novedad_cumplimiento_almacen',
             'dom_realizado_planeacion',
@@ -229,6 +250,14 @@ class RegistroAlmacenSerializer(serializers.ModelSerializer):
             'tarea_planeacion',     # heredada de planeacion 
             'etapa_3_bloqueada',
         ]
+        # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
+        extra_kwargs = {
+            'novedad_cumplimiento_almacen': {
+                'allow_null': True,
+                'allow_blank': True,
+                'required': False
+            }
+        }
 
 # Serializer: PausaTiempoProduccion
 # Uso: pausas individuales del cronometro
@@ -307,6 +336,19 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
         ]
         
         read_only_fields = ['numero_registro']
+        # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
+        extra_kwargs = {
+            'novedad_cumplimiento_produccion': {
+                'allow_null': True,
+                'allow_blank': True,
+                'required': False
+            },
+            'produccion_no_completada': {
+                'allow_null': True,
+                'allow_blank': True,
+                'required': False
+            }
+        }
 
 # Serializer: RegistroTratamiento
 # Uso: manejo datos etapa 5 - tratamiento fitosanitario
@@ -332,6 +374,14 @@ class RegistroTratamientoSerializer(serializers.ModelSerializer):
             'tarea_asignada_planeacion',
             'etapa_5_bloqueada',
         ]
+        # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
+        extra_kwargs = {
+            'novedad_cumplimiento_tratamiento': {
+                'allow_null': True,
+                'allow_blank': True,
+                'required': False
+            }
+        }
 
 # Serializer: RegistroPlaneacion
 # Uso: gestion etapa 2 - planeación de la produccion
@@ -354,7 +404,9 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
     registros_tratamiento = RegistroTratamientoSerializer(many=True, read_only= True)
 
     # Propiedades calculadas del modelo
+    numero_operarios_turno = serializers.ReadOnlyField()
     tiempo_proyectado = serializers.ReadOnlyField()
+    capacidad_turno_dia = serializers.ReadOnlyField()
     sumatoria_tiempo_asignado_turnos = serializers.ReadOnlyField()
     tiempo_restante_dia = serializers.ReadOnlyField()
     cantidad_elaborada = serializers.ReadOnlyField()
@@ -370,6 +422,8 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
             'id',
             'dom',
             'numero_registro',
+            'fecha_planeacion',
+            'cantidad_pedido',
 
             # turno
             'turno',
@@ -400,10 +454,12 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
 
             # propiedades calculadas
             'tiempo_proyectado',
+            'capacidad_turno_dia',
             'sumatoria_tiempo_asignado_turnos',
             'tiempo_restante_dia',
             'cantidad_elaborada',
             'cantidad_pendiente',
+            'numero_operarios_turno',
 
             # Hijos anidados
             'registros_almacen',
@@ -702,11 +758,22 @@ class DomReporteSerializer(serializers.ModelSerializer):
             # productos y totales 
             'productos',
             'cantidad_pedida_total',
-            'diferencia_tiempo',
-            'cumplimiento_tiempo',
+            'cantidad_elaborada_total',
+            'cantidad_pendiente_total',
+
+            # Manejo de lógica tiempo_estimado vs tiempo_real
+            "tiempo_proyectado_total",
+            "tiempo_real_total",
+            "diferencia_tiempo",
+            "cumplimiento_tiempo",
 
             # registros de las etapas 3 a 5 
             'registro_planeacion',
+            "cumplimiento_almacen",
+            "cumplimiento_produccion",
+            "cumplimiento_tratamiento",
+            "cumplimiento_despacho",
+            "cumplimiento_consolidado_dom",
         ]
 
         # serializer de PDF solo lectura - objetivo es generación de reporte

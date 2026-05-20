@@ -7,9 +7,12 @@ from rest_framework.authtoken.models import Token
 
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.utils import timezone
+from datetime import timedelta
 
 from .models import (
     Cliente,
+    FamiliaProducto,
     Productos,
     Turno,
     ListaPredefinida,
@@ -21,15 +24,17 @@ from .models import (
     RegistroTiempoProduccion,
     PausaTiempoProduccion,
     RegistroTratamiento, 
+    RegistroTurnoDia,
     PerfilUsuario,
     AuditoriaDom,
+
 )
 
 from .serializers import (
     UserSerializer,
     PerfilUsuarioSerializer,
     ClienteSerializer,
-    FamiliaProductoSerializer,             # viaja dentro de ProductosSerializer
+    FamiliaProductoSerializer,             # vistas propias + anidado en ProductosSerializer
     ProductosSerializer,
     TurnoSerializer, 
     ListaPredefinidaSerializer, 
@@ -38,6 +43,7 @@ from .serializers import (
     DomDetalleSerializer,
     EditarUsuarioSerializer,
     RegistroAlmacenSerializer,
+    RegistroTurnoDiaSerializer,
     PausaTiempoProduccionSerializer,
     RegistroTiempoProduccionSerializer,
     RegistroProduccionSerializer,
@@ -81,7 +87,7 @@ def verificar_rol(request, roles_permitidos):
 
 def calcular_cumplimiento(registros_ok, total_registros):
     if total_registros == 0:
-        return 'SIN DATOS'
+        return 'SIN_DATOS'
     if registros_ok == total_registros:
         return 'CUMPLIÓ'
     elif registros_ok == 0:
@@ -99,6 +105,18 @@ def registrar_auditoria(dom, usuario, accion, etapa=None, campos_modificados=Non
         etapa = etapa,
         campos_modificados = campos_modificados
     )
+
+def calcular_campos_modificados(objeto_antes, request_data, objeto_despues):
+    campos = {}
+    for field in request_data.keys():
+        if field == 'etapa':
+            continue
+        if hasattr(objeto_despues, field):
+            antes = str(getattr(objeto_antes, field, None))
+            despues = str(getattr(objeto_despues, field, None))
+            if antes != despues:
+                campos[field] = {'antes': antes, 'despues': despues}
+    return campos if campos else None
 
 # FIN HELPERS
 
@@ -152,8 +170,11 @@ class LoginView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Evita duplicados de token
-        token, _ = Token.objects.get_or_create(user=user)
+        # Reutiliza token vigente; regenera si está expirado
+        token, created = Token.objects.get_or_create(user=user)
+        if not created and (timezone.now() - token.created) > timedelta(minutes=25):
+            token.delete()
+            token = Token.objects.create(user=user)
 
         return Response(
             {
@@ -198,7 +219,7 @@ class PerfilView(APIView):
             serializer = PerfilUsuarioSerializer(perfil)
             return Response (
                 {
-                    'mensaje' : 'login de usuario exitoso',
+                    'mensaje' : 'Perfil obtenido correctamente',
                     'perfil': serializer.data
                 },
                 status=status.HTTP_200_OK
@@ -541,6 +562,28 @@ class ClienteDetalleView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def get(self, request, cliente_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            cliente = Cliente.objects.get(cliente_id=cliente_id)
+        except Cliente.DoesNotExist:
+            return Response(
+                {'error': 'Cliente no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = ClienteSerializer(cliente)
+        return Response(
+            {
+                'mensaje': 'Cliente obtenido correctamente',
+                'cliente': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
     def put(self, request, cliente_id):
         if not verificar_rol(request, ['ADMIN']):
             return Response(
@@ -600,6 +643,161 @@ class ClienteDetalleView(APIView):
             status = status.HTTP_200_OK
         )
 
+# Catálogo No. 1b - Familias de producto
+# GET lista: todos los usuarios autenticados (dropdown productos)
+# POST / PUT / DELETE: solo ADMIN
+
+class FamiliaProductoListView(APIView):
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        familias = FamiliaProducto.objects.all()
+
+        activo = request.query_params.get('activo', None)
+        if activo is not None:
+            familias = familias.filter(activo=activo.lower() == 'true')
+
+        nombre = request.query_params.get('nombre', None)
+        if nombre is not None:
+            familias = familias.filter(nombre_familia__icontains=nombre)
+
+        serializer = FamiliaProductoSerializer(familias, many=True)
+        return Response(
+            {
+                'mensaje': 'Familias obtenidas correctamente',
+                'total': familias.count(),
+                'familias': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tiene permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = FamiliaProductoSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'error': 'Datos inválidos',
+                    'detalle': serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        familia = serializer.save(creado_por=request.user)
+
+        return Response(
+            {
+                'mensaje': f'Familia {familia.nombre_familia} creada correctamente',
+                'familia': FamiliaProductoSerializer(familia).data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+class FamiliaProductoDetalleView(APIView):
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, familia_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            familia = FamiliaProducto.objects.get(familia_id=familia_id)
+        except FamiliaProducto.DoesNotExist:
+            return Response(
+                {'error': 'Familia no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = FamiliaProductoSerializer(familia)
+        return Response(
+            {
+                'mensaje': 'Familia obtenida correctamente',
+                'familia': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def put(self, request, familia_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes los permisos necesarios para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            familia = FamiliaProducto.objects.get(familia_id=familia_id)
+        except FamiliaProducto.DoesNotExist:
+            return Response(
+                {'error': 'Familia no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = FamiliaProductoSerializer(familia, data=request.data, partial=True)
+
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'error': 'Datos inválidos',
+                    'detalle': serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        familia = serializer.save()
+
+        return Response(
+            {
+                'mensaje': f'Familia {familia.nombre_familia} actualizada correctamente',
+                'familia': FamiliaProductoSerializer(familia).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def delete(self, request, familia_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes los permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            familia = FamiliaProducto.objects.get(familia_id=familia_id)
+        except FamiliaProducto.DoesNotExist:
+            return Response(
+                {'error': 'Familia no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        productos_activos = Productos.objects.filter(
+            familia_producto=familia, activo=True
+        ).count()
+        if productos_activos > 0:
+            return Response(
+                {
+                    'error': f'No se puede desactivar. La familia tiene {productos_activos} producto(s) activo(s) asociado(s)'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        familia.activo = False
+        familia.save()
+
+        return Response(
+            {'mensaje': f'Familia {familia.nombre_familia} desactivada correctamente'},
+            status=status.HTTP_200_OK
+        )
+
+
 # Catalogo No. 2 - productos
 # para consulta (GET) todos los usuarios cuentan con acceso 
 # creación nuevos productos (POST) solo ADMIN
@@ -628,9 +826,10 @@ class ProductoListView(APIView):
     def post(self, request):
         if not verificar_rol(request, ['ADMIN']):
             return Response(
-                {'error': 'No tienes los permisos para realizar esta acción'}
+                {'error': 'No tienes los permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
             )
-        
+
         serializer = ProductosSerializer(data=request.data)
 
         if not serializer.is_valid():
@@ -659,6 +858,28 @@ class ProductoDetalleView(APIView):
 
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get(self, request, producto_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            producto = Productos.objects.select_related('familia_producto').get(producto_id=producto_id)
+        except Productos.DoesNotExist:
+            return Response(
+                {'error': 'Producto no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = ProductosSerializer(producto)
+        return Response(
+            {
+                'mensaje': 'Producto obtenido correctamente',
+                'producto': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
 
     def put (self, request, producto_id):
         if not verificar_rol(request, ['ADMIN']):
@@ -700,7 +921,7 @@ class ProductoDetalleView(APIView):
         if not verificar_rol(request, ['ADMIN']):
             return Response(
                 {'error': 'No tienes permisos para realizar esta acción'},
-                statis=status.HTTP_403_FORBIDDEN            
+                status=status.HTTP_403_FORBIDDEN            
             )
         
         try:
@@ -779,13 +1000,35 @@ class TurnoDetalleView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def get(self, request, turno_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            turno = Turno.objects.get(turno_id=turno_id)
+        except Turno.DoesNotExist:
+            return Response(
+                {'error': 'Turno no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = TurnoSerializer(turno)
+        return Response(
+            {
+                'mensaje': 'Turno obtenido correctamente',
+                'turno': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
     def put(self, request, turno_id):
         if not verificar_rol(request, ['ADMIN']):
             return Response(
                 {'error': 'No tienes permisos para realizar esta acción'},
                 status = status.HTTP_403_FORBIDDEN
             )
-    
+
         try:
             turno = Turno.objects.get(turno_id=turno_id)
             
@@ -919,6 +1162,28 @@ class ListaPredefinidaDetalleView(APIView):
 
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get(self, request, lista_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            lista = ListaPredefinida.objects.get(lista_id=lista_id)
+        except ListaPredefinida.DoesNotExist:
+            return Response(
+                {'error': 'Lista no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = ListaPredefinidaSerializer(lista)
+        return Response(
+            {
+                'mensaje': 'Lista obtenida correctamente',
+                'lista': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
 
     def put(self, request, lista_id):
         if not verificar_rol(request, ['ADMIN']):
@@ -1078,7 +1343,8 @@ class DomListView(APIView):
                     dom=dom,
                     usuario=request.user,
                     accion='CREACION',
-                    etapa='etapa_0'
+                    etapa='etapa_0',
+                    campos_modificados={k: str(v) for k, v in request.data.items()}
                 )
         except Exception as e:
             return Response(
@@ -1173,7 +1439,7 @@ class DomDetalleView(APIView):
 
         # Verifica bloqueo de etapa antes de aplicar cambios
         bloqueos = {
-            'etapa_1': dom.etapa_1_bloqueda,     # nota: nombre con typo en models.py(linea 246), no corregir sin actualizar ambos
+            'etapa_1': dom.etapa_1_bloqueada,
             'etapa_6': dom.etapa_6_bloqueada,
         }
         if etapa in bloqueos and bloqueos[etapa]():
@@ -1193,6 +1459,8 @@ class DomDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        campos_antes = {k: getattr(dom, k, None) for k in request.data.keys() if k != 'etapa'}
+
         dom = serializer.save()
 
         # Registros de auditoria, primero se verifica que la etapa no esté bloqueada 
@@ -1202,7 +1470,8 @@ class DomDetalleView(APIView):
             dom=dom,
             usuario=request.user,
             accion=accion,
-            etapa=etapa
+            etapa=etapa,
+            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, dom)
         )
 
         return Response(
@@ -1275,6 +1544,62 @@ class RegistroPlaneacionListView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        # Verifica si ya existe RegistroTurnoDia para este turno y fecha. Si no existe, exige numero_operarios y horas_extras para crearlo
+        turno_id = request.data.get('turno', None)
+        fecha_planeacion = request.data.get('fecha_planeacion', None)
+
+        if turno_id and fecha_planeacion:
+            try:
+                turno_obj = Turno.objects.get(turno_id=turno_id)
+            except Turno.DoesNotExist:
+                return Response(
+                    {'error': 'Turno no encontrado'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            registro_turno_dia = RegistroTurnoDia.objects.filter(
+                turno=turno_obj,
+                fecha=fecha_planeacion
+            ).first()
+
+            if registro_turno_dia is None:
+                numero_operarios = request.data.get('numero_operarios', None)
+                if numero_operarios is None:
+                    return Response(
+                        {
+                            'error': 'Es el primer registro para este turno y fecha. Por favor indique el número de operarios disponibles.',
+                            'requiere_operarios': True
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                horas_extras = request.data.get('horas_extras', False)
+                RegistroTurnoDia.objects.create(
+                    turno=turno_obj,
+                    fecha=fecha_planeacion,
+                    numero_operarios=numero_operarios,
+                    horas_extras=horas_extras,
+                    registrado_por=request.user
+                )
+
+            # Valida capacidad del turno - una nueva planeación excede el tiempo de turno y fecha - no permite generar nuevo registro
+            dom_producto_id = request.data.get('dom_producto', None)
+            cantidad_pedido = request.data.get('cantidad_pedido', None)
+            if dom_producto_id and cantidad_pedido:
+                try:
+                    dom_producto_obj = ProductosDom.objects.select_related('tipo_producto').get(id=dom_producto_id)
+                    tiempo_nuevo = int(cantidad_pedido) * dom_producto_obj.tipo_producto.tiempo_produccion_unitario
+                    planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_planeacion, dom_producto=dom_producto_obj)
+                    disponible_actual, resultado = planeacion_temp.tiempo_disponible_turno(tiempo_nuevo)
+                    if resultado is not None and resultado < 0:
+                        return Response(
+                            {'error': 'El turno no tiene capacidad suficiente.', 'tiempo_disponible': disponible_actual, 'tiempo_requerido': tiempo_nuevo},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                except ProductosDom.DoesNotExist:
+                    return Response(
+                        {'error': 'Producto del DOM no encontrado'},
+                        status=status.HTTP_404_NOT_FOUND
+                        )
         # Asigna numero de registro (recordar se permiten N registros) - correlativo por DOM
         ultimo_registro = RegistroPlaneacion.objects.filter(dom=dom).order_by('-numero_registro').first()
         numero_registro = (ultimo_registro.numero_registro + 1) if ultimo_registro else 1 
@@ -1300,7 +1625,8 @@ class RegistroPlaneacionListView(APIView):
             dom=dom, 
             usuario=request.user,
             accion='CREACION',
-            etapa='etapa_2'
+            etapa='etapa_2',
+            campos_modificados={k: str(v) for k, v in request.data.items()}
         )
 
         # Refresca el objeto con relaciones cargadas
@@ -1359,6 +1685,20 @@ class RegistroPlaneacionDetalleView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        cantidad_pedido_nueva = request.data.get('cantidad_pedido', None)
+        if cantidad_pedido_nueva is not None and registro.turno and registro.fecha_planeacion and registro.dom_producto:
+            tiempo_nuevo = int(cantidad_pedido_nueva) * registro.dom_producto.tipo_producto.tiempo_produccion_unitario
+            disponible_actual, resultado = registro.tiempo_disponible_turno(tiempo_nuevo, excluir_registro_id=registro_id)
+            if resultado is not None and resultado < 0:
+                return Response(
+                    {
+                        'error': 'El turno no tiene capacidad suficiente para esta modificación.',
+                        'tiempo_disponible': disponible_actual,
+                        'tiempo_requerido': tiempo_nuevo
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         # Verificación de bloqueo de etapa
         if registro.etapa2_bloqueada():
             return Response(
@@ -1377,6 +1717,8 @@ class RegistroPlaneacionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+
         registro = serializer.save()
 
         accion = 'BLOQUEO_ETAPA' if registro.etapa2_bloqueada() else 'EDICION'
@@ -1384,9 +1726,10 @@ class RegistroPlaneacionDetalleView(APIView):
         registrar_auditoria(
             dom=registro.dom,
             usuario=request.user,
-            accion=accion, 
-            etapa='etapa_2'
-        )
+            accion=accion,
+            etapa='etapa_2',
+            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
+    )
         
         # Refresca el objeto con relaciones cargadas
         registro = RegistroPlaneacion.objects.select_related(
@@ -1480,7 +1823,8 @@ class RegistroAlmacenListView(APIView):
             dom=planeacion.dom,
             usuario=request.user,
             accion='CREACION',
-            etapa='etapa_3'
+            etapa='etapa_3',
+            campos_modificados={k: str(v) for k, v in request.data.items()}
         )
 
         return Response(
@@ -1551,6 +1895,8 @@ class RegistroAlmacenDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+
         registro = serializer.save()
 
         accion = 'BLOQUEO_ETAPA' if registro.etapa_3_bloqueada() else 'EDICION'
@@ -1559,7 +1905,8 @@ class RegistroAlmacenDetalleView(APIView):
             dom = registro.registro_planeacion.dom,
             usuario=request.user,
             accion=accion,
-            etapa='etapa_3'
+            etapa='etapa_3',
+            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
         )
 
         return Response(
@@ -1621,6 +1968,18 @@ class RegistroProduccionListView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada', None)
+        if cantidad_elaborada_nueva is not None and planeacion.cantidad_pedido is not None:
+            if planeacion.cantidad_disponible_produccion(int(cantidad_elaborada_nueva)) < 0:
+                return Response(
+                    {
+                        'error': 'La cantidad elaborada supera la cantidad pedida.',
+                        'cantidad_disponible': planeacion.cantidad_disponible_produccion(0),
+                        'cantidad_requerida': int(cantidad_elaborada_nueva)
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         # Asigna numero_registro automaticamente. recordar se permiten N registros
         ultimo = RegistroProduccion.objects.filter(registro_planeacion=planeacion).order_by('-numero_registro').first()
         numero_registro = (ultimo.numero_registro + 1) if ultimo else 1
@@ -1645,7 +2004,8 @@ class RegistroProduccionListView(APIView):
             dom=planeacion.dom,
             usuario=request.user,
             accion='CREACION',
-            etapa='etapa_4'
+            etapa='etapa_4',
+            campos_modificados={k: str(v) for k, v in request.data.items()}
         )
 
         return Response(
@@ -1697,6 +2057,20 @@ class RegistroProduccionDetalleView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        # Lógica para validar que en la creanción de N registros de producción la cantidad elaborada supere la cantidad del pedido
+        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada', None)
+        planeacion = registro.registro_planeacion
+        if cantidad_elaborada_nueva is not None and planeacion.cantidad_pedido is not None:
+            if planeacion.cantidad_disponible_produccion(int(cantidad_elaborada_nueva), excluir_registro_id=registro_id) < 0:
+                return Response(
+                    {
+                        'error': 'La cantidad elaborada supera la cantidad pedida.',
+                        'cantidad_disponible': planeacion.cantidad_disponible_produccion(0, excluir_registro_id=registro_id),
+                        'cantidad_requerida': int(cantidad_elaborada_nueva)
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         # Verificación bloqueo etapa
         if registro.etapa_4_bloqueada():
             return Response(
@@ -1715,6 +2089,8 @@ class RegistroProduccionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+
         registro = serializer.save()
 
         accion = 'BLOQUEO_ETAPA' if registro.etapa_4_bloqueada() else 'EDICION'
@@ -1723,7 +2099,8 @@ class RegistroProduccionDetalleView(APIView):
             dom=registro.registro_planeacion.dom,
             usuario=request.user,
             accion=accion,
-            etapa='etapa_4'
+            etapa='etapa_4',
+            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
         )
 
         return Response(
@@ -1813,7 +2190,8 @@ class RegistroTratamientoListView(APIView):
             dom=planeacion.dom,
             usuario=request.user,
             accion='CREACION',
-            etapa='etapa_5'
+            etapa='etapa_5',
+            campos_modificados={k: str(v) for k, v in request.data.items()}
         )
 
         return Response(
@@ -1887,6 +2265,8 @@ class RegistroTratamientoDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+
         registro = serializer.save()
 
         accion = 'BLOQUEO_ETAPA' if registro.etapa_5_bloqueada() else 'EDICION'
@@ -1895,13 +2275,92 @@ class RegistroTratamientoDetalleView(APIView):
             dom=registro.registro_planeacion.dom,
             usuario=request.user,
             accion=accion,
-            etapa='etapa_5'
+            etapa='etapa_5',
+            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
         )
 
         return Response(
             {
                 'mensaje': f'Registro de tratamiento #{registro.numero_registro} actualizado correctamente',
                 'registro': RegistroTratamientoSerializer(registro).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+# Vista para consultar y corregir el registro de operarios de un turno/fecha
+# Solo ADMIN puede modificar este dato una vez registrado
+
+class RegistroTurnoDiaListView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        registros = RegistroTurnoDia.objects.select_related('turno').all()
+        turno_id = request.query_params.get('turno', None)
+        fecha = request.query_params.get('fecha', None)
+        if turno_id:
+            registros = registros.filter(turno__turno_id=turno_id)
+        if fecha:
+            registros = registros.filter(fecha=fecha)
+        serializer = RegistroTurnoDiaSerializer(registros, many=True)
+        return Response(
+            {
+                'mensaje': 'Registros de turno del día obtenidos correctamente',
+                'total': registros.count(),
+                'registros': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class RegistroTurnoDiaDetalleView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, registro_id):
+        try:
+            registro = RegistroTurnoDia.objects.select_related('turno').get(id=registro_id)
+        except RegistroTurnoDia.DoesNotExist:
+            return Response(
+                {'error': 'Registro de turno del día no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = RegistroTurnoDiaSerializer(registro)
+        return Response(
+            {
+                'mensaje': 'Registro de turno del día obtenido correctamente',
+                'registro': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def put(self, request, registro_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'Solo el administrador puede modificar los operarios de un turno'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            registro = RegistroTurnoDia.objects.get(id=registro_id)
+        except RegistroTurnoDia.DoesNotExist:
+            return Response(
+                {'error': 'Registro de turno del día no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = RegistroTurnoDiaSerializer(registro, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'error': 'Datos inválidos',
+                    'detalle': serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        registro = serializer.save()
+        return Response(
+            {
+                'mensaje': f'Registro de turno del día actualizado correctamente',
+                'registro': RegistroTurnoDiaSerializer(registro).data
             },
             status=status.HTTP_200_OK
         )
@@ -2127,7 +2586,7 @@ class CronometroFinalizarView(APIView):
 
         if cronometro.estado != 'EN_CURSO':
             return Response(
-                {'error': f'No se puede finalizar un cronometro en estado {cronometro.estado}. Reanude el cronómetro antes de finalizar'},
+                {'error': f'No se puede finalizar un cronometro en estado {cronometro.estado}.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -2305,16 +2764,16 @@ class DashboardView(APIView):
             for rp in dom.registro_planeacion.all():
                 total_planeaciones_activas += 1
                 almacenes = rp.registros_almacen.all()
-                producciones = rp.registros_porduccion.all()
+                producciones = rp.registros_produccion.all()
                 tratamientos = rp.registros_tratamiento.all()
             
-            if almacenes.exist() and all(a.dom_realizado_planeacion for a in almacenes):
+            if almacenes.exists() and all(a.dom_realizado_planeacion for a in almacenes):
                 almacen_ok_count += 1
        
-            if producciones.exist() and all(p.segun_planeacion for p in producciones):
+            if producciones.exists() and all(p.segun_planeacion for p in producciones):
                 produccion_ok_count += 1
 
-            if tratamientos.exist() and all(t.tratamiento_segun_planeacion for t in tratamientos):
+            if tratamientos.exists() and all(t.tratamiento_segun_planeacion for t in tratamientos):
                 tratamiento_ok_count += 1
             
             # Nivel 2 cumplimiento por tipo de etapa 
@@ -2358,11 +2817,10 @@ class DashboardView(APIView):
             'cumplimiento_consolidado': cumplimiento_consolidado,
         }
 
-        serializer = DashboardSerializer(data)
         return Response(
             {
                 'mensaje': 'Dashboard obtenido correctamente',
-                'dashboard': serializer.data
+                'dashboard': data
             },
             status=status.HTTP_200_OK
         )
@@ -2504,7 +2962,7 @@ class InformeCumplimientoPlaneacion(APIView):
         return Response(
             {
                 'mensaje': 'Informe de cumplimiento de planeación generado correctamente',
-                'informe': serializer.data
+                'informe': data
             },
             status=status.HTTP_200_OK
         )
@@ -2588,7 +3046,7 @@ class InformeDespachoView(APIView):
         return Response(
             {
                 'mensaje': 'Informe de auditoría generado correctamente',
-                'informe': serializer.data
+                'informe': data
             },
             status=status.HTTP_200_OK
         )
@@ -2613,6 +3071,7 @@ class DomReporteView(APIView):
                 'registro_planeacion__dom_producto__tipo_producto',
                 'registro_planeacion__registros_almacen',
                 'registro_planeacion__registros_produccion__registros_tiempo',
+                'registro_planeacion__registros_produccion__registros_tiempo__pausas',
                 'registro_planeacion__registros_tratamiento',
             ).get(dom_id=dom_id)
         except Dom.DoesNotExist:
@@ -2695,7 +3154,7 @@ class DomReporteView(APIView):
         serializer = DomReporteSerializer(dom)
 
         # Construye respuesta agregando campos calculados
-        data = serializer.data
+        data = dict(serializer.data)
         data['tiempo_proyectado_total'] = tiempo_proyectado_total
         data['tiempo_real_total'] = tiempo_real_total
         data['diferencia_tiempo'] = diferencia_tiempo
@@ -2742,7 +3201,7 @@ class InformeAuditoriaView(APIView):
         # Filtro base: la consulta para auditoria este es el filtro base
         acciones = AuditoriaDom.objects.filter(
             timestamp__date__range=[fecha_inicio, fecha_fin]
-        ).select_related('dom', 'dom_nombre_cliente', 'usuario').order_by('-timestamp')
+        ).select_related('dom__nombre_cliente', 'usuario').order_by('-timestamp')
 
         # Filtro opcional por DOM especifico 
         dom_id = request.query_params.get('dom_id', None)
@@ -2778,14 +3237,14 @@ class InformeAuditoriaView(APIView):
             'total_ediciones': totales['total_ediciones'],
             'total_bloqueos': totales['total_bloqueos'],
             'total_eliminaciones': totales['total_eliminaciones'],
-            'acciones': AuditoriaDomSerializer(acciones, many=True)
+            'acciones': AuditoriaDomSerializer(acciones, many=True).data
         }
 
         serializer = InformeAuditoriaSerializer(data)
         return Response(
             {
                 'mensaje': 'Informe de auditoria generado correctamente',
-                'informe': serializer.data
+                'informe': data
             },
             status=status.HTTP_200_OK
         )
