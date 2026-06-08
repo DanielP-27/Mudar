@@ -79,3 +79,15 @@ export const actualizarTurnoDia = (registroId, datos) =>
 // Retorna el reporte consolidado de un DOM en formato PDF
 export const obtenerReporteDom = (domId) =>
   api.get(`/api/reportes/dom/${domId}/`, { responseType: 'blob' })
+
+// Agrega un producto a un registro de planeación existente
+export const crearProductoPlaneacion = (datos) =>
+  api.post('/api/productos-planeacion/', datos)
+
+// Actualiza la cantidad proyectada de un ProductoPlaneacion
+export const actualizarProductoPlaneacion = (productoId, datos) =>
+  api.put(`/api/productos-planeacion/${productoId}/`, datos)
+
+// Elimina un producto de una planeación (reservado para uso futuro en frontend)
+export const eliminarProductoPlaneacion = (productoId) =>
+  api.delete(`/api/productos-planeacion/${productoId}/`)

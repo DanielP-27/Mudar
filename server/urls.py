@@ -45,6 +45,8 @@ from server.views import(
     # Módulo 4 - Etapas
     RegistroPlaneacionListView,
     RegistroPlaneacionDetalleView,
+    ProductoPlaneacionListView,
+    ProductoPlaneacionDetalleView,
     RegistroAlmacenListView,
     RegistroAlmacenDetalleView,
     RegistroProduccionListView,
@@ -100,6 +102,8 @@ urlpatterns = [
     # Módulo 4 - Etapas 2, 3, 4, 5 (etapas 1 y 6 traen directamente su información de DOM, no es necesario crear rutas especificas)
     path('api/planeacion/', RegistroPlaneacionListView.as_view(), name='planeacion'),
     path('api/planeacion/<int:registro_id>/', RegistroPlaneacionDetalleView.as_view(), name='planeacion-detalle'),
+    path('api/productos-planeacion/', ProductoPlaneacionListView.as_view(), name='productos-planeacion'),
+    path('api/productos-planeacion/<int:producto_id>/', ProductoPlaneacionDetalleView.as_view(), name='producto-planeacion-detalle'),
     path('api/almacen/', RegistroAlmacenListView.as_view(), name='almacen'),
     path('api/almacen/<int:registro_id>/', RegistroAlmacenDetalleView.as_view(), name='almacen-detalle'),
     path('api/produccion/', RegistroProduccionListView.as_view(), name='produccion'),

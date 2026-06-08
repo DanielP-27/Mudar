@@ -50,6 +50,7 @@ from .serializers import (
     RegistroProduccionSerializer,
     RegistroTratamientoSerializer,
     RegistroPlaneacionSerializer,
+    ProductoPlaneacionSerializer,
     AuditoriaDomSerializer,                 # viaja dentro de InformeAuditoriaSerializer
     LoginSerializer, 
     CambioPasswordSerializer,
@@ -1857,6 +1858,132 @@ class RegistroPlaneacionDetalleView(APIView):
 # Inicio etapa 3 - almacen 
 
 
+# ── Endpoints ProductoPlaneacion ──────────────────────────────────────────────
+
+class ProductoPlaneacionListView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes     = [IsAuthenticated]
+
+    def post(self, request):
+        if not verificar_rol(request, ['ADMIN', 'PLANEADOR']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        planeacion_id = request.data.get('registro_planeacion')
+        if not planeacion_id:
+            return Response(
+                {'error': 'Debe indicar el registro de planeación'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            planeacion = RegistroPlaneacion.objects.get(id=planeacion_id)
+        except RegistroPlaneacion.DoesNotExist:
+            return Response(
+                {'error': 'Registro de planeación no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if planeacion.etapa2_bloqueada():
+            return Response(
+                {'error': 'La planeación está bloqueada y no permite modificaciones'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = ProductoPlaneacionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'error': 'Datos inválidos', 'detalle': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        producto_planeacion = serializer.save(registro_planeacion=planeacion)
+
+        return Response(
+            {
+                'mensaje': 'Producto agregado a la planeación correctamente',
+                'producto': ProductoPlaneacionSerializer(producto_planeacion).data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+class ProductoPlaneacionDetalleView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes     = [IsAuthenticated]
+
+    def put(self, request, producto_id):
+        if not verificar_rol(request, ['ADMIN', 'PLANEADOR']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            producto = ProductoPlaneacion.objects.select_related(
+                'registro_planeacion', 'dom_producto__tipo_producto'
+            ).get(id=producto_id)
+        except ProductoPlaneacion.DoesNotExist:
+            return Response(
+                {'error': 'Producto de planeación no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if producto.registro_planeacion.etapa2_bloqueada():
+            return Response(
+                {'error': 'La planeación está bloqueada y no permite modificaciones'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = ProductoPlaneacionSerializer(producto, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {'error': 'Datos inválidos', 'detalle': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        producto = serializer.save()
+
+        return Response(
+            {
+                'mensaje': 'Producto de planeación actualizado correctamente',
+                'producto': ProductoPlaneacionSerializer(producto).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def delete(self, request, producto_id):
+        if not verificar_rol(request, ['ADMIN', 'PLANEADOR']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            producto = ProductoPlaneacion.objects.select_related(
+                'registro_planeacion'
+            ).get(id=producto_id)
+        except ProductoPlaneacion.DoesNotExist:
+            return Response(
+                {'error': 'Producto de planeación no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if producto.registro_planeacion.etapa2_bloqueada():
+            return Response(
+                {'error': 'La planeación está bloqueada y no permite modificaciones'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        producto.delete()
+        return Response(
+            {'mensaje': 'Producto eliminado de la planeación correctamente'},
+            status=status.HTTP_200_OK
+        )
+
+
 # clase para obtener todos los registros de almacen para consulta, todos los roles pueden acceder para lectura (GET)
 # La clase permite igualmente creación de nuevo registro almacen solo ADMIN Y LIDER_PLANTA
 
@@ -2078,16 +2205,22 @@ class RegistroProduccionListView(APIView):
             )
         
         cantidad_elaborada_nueva = request.data.get('cantidad_elaborada', None)
-        if cantidad_elaborada_nueva is not None and planeacion.cantidad_pedido is not None:
-            if planeacion.cantidad_disponible_produccion(int(cantidad_elaborada_nueva)) < 0:
-                return Response(
-                    {
-                        'error': 'La cantidad elaborada supera la cantidad pedida.',
-                        'cantidad_disponible': planeacion.cantidad_disponible_produccion(0),
-                        'cantidad_requerida': int(cantidad_elaborada_nueva)
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        producto_planeacion_id   = request.data.get('producto_planeacion', None)
+        if cantidad_elaborada_nueva is not None and producto_planeacion_id:
+            try:
+                pp = ProductoPlaneacion.objects.get(id=producto_planeacion_id)
+                disponible = planeacion.cantidad_disponible_produccion(pp, int(cantidad_elaborada_nueva))
+                if disponible < 0:
+                    return Response(
+                        {
+                            'error': 'La cantidad elaborada supera la cantidad pedida.',
+                            'cantidad_disponible': planeacion.cantidad_disponible_produccion(pp, 0),
+                            'cantidad_requerida': int(cantidad_elaborada_nueva)
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except ProductoPlaneacion.DoesNotExist:
+                pass
 
         # Asigna numero_registro automaticamente. recordar se permiten N registros
         ultimo = RegistroProduccion.objects.filter(registro_planeacion=planeacion).order_by('-numero_registro').first()
@@ -2169,12 +2302,19 @@ class RegistroProduccionDetalleView(APIView):
         # Lógica para validar que en la creanción de N registros de producción la cantidad elaborada supere la cantidad del pedido
         cantidad_elaborada_nueva = request.data.get('cantidad_elaborada', None)
         planeacion = registro.registro_planeacion
-        if cantidad_elaborada_nueva is not None and planeacion.cantidad_pedido is not None:
-            if planeacion.cantidad_disponible_produccion(int(cantidad_elaborada_nueva), excluir_registro_id=registro_id) < 0:
+        if cantidad_elaborada_nueva is not None and registro.producto_planeacion:
+            disponible = planeacion.cantidad_disponible_produccion(
+                registro.producto_planeacion,
+                int(cantidad_elaborada_nueva),
+                excluir_registro_id=registro_id
+            )
+            if disponible < 0:
                 return Response(
                     {
                         'error': 'La cantidad elaborada supera la cantidad pedida.',
-                        'cantidad_disponible': planeacion.cantidad_disponible_produccion(0, excluir_registro_id=registro_id),
+                        'cantidad_disponible': planeacion.cantidad_disponible_produccion(
+                            registro.producto_planeacion, 0, excluir_registro_id=registro_id
+                        ),
                         'cantidad_requerida': int(cantidad_elaborada_nueva)
                     },
                     status=status.HTTP_400_BAD_REQUEST

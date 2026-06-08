@@ -88,3 +88,7 @@ export const obtenerLista = (listaId) =>
 // Retorna listas predefinidas filtradas por tipo — usado en dropdowns del sistema
 export const obtenerListasPorTipo = (tipo) =>
   api.get('/api/listas/', { params: { tipo, activo: true } })
+
+// Consulta si existe un RegistroTurnoDia para un turno y fecha dados
+export const consultarTurnoDia = (turnoId, fecha) =>
+  api.get('/api/turnos-dia/', { params: { turno: turnoId, fecha } })
