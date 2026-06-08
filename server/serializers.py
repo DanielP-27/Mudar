@@ -93,7 +93,7 @@ class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = RegistroTurnoDia
-        fields = ['id', 'turno', 'turno_nombre', 'fecha', 'numero_operarios', 'horas_extras', 'registrado_por', 'fecha_creacion']
+        fields = ['id', 'turno', 'turno_nombre', 'fecha', 'numero_operarios', 'minutos_totales', 'registrado_por', 'fecha_creacion']
         read_only_fields = ['registrado_por', 'fecha_creacion']
 
     def validate_numero_operarios(self, value):

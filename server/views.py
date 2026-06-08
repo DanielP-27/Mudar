@@ -1635,20 +1635,20 @@ class RegistroPlaneacionListView(APIView):
 
             if registro_turno_dia is None:
                 numero_operarios = request.data.get('numero_operarios', None)
-                if numero_operarios is None:
+                minutos_totales  = request.data.get('minutos_totales', None)
+                if not numero_operarios or not minutos_totales:
                     return Response(
                         {
-                            'error': 'Es el primer registro para este turno y fecha. Por favor indique el número de operarios disponibles.',
-                            'requiere_operarios': True
+                            'error': 'Es el primer registro para este turno y fecha. Indique el número de operarios y la duración del turno.',
+                            'requiere_turno_dia': True
                         },
                         status=status.HTTP_400_BAD_REQUEST
                     )
-                horas_extras = request.data.get('horas_extras', False)
                 RegistroTurnoDia.objects.create(
                     turno=turno_obj,
                     fecha=fecha_planeacion,
                     numero_operarios=numero_operarios,
-                    horas_extras=horas_extras,
+                    minutos_totales=minutos_totales,
                     registrado_por=request.user
                 )
 

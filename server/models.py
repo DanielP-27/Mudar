@@ -121,10 +121,12 @@ class Turno(models.Model):
 # Clase donde se valida numero de operarios por turno y si se trabajan horas extras (+120 minutos en turno)
 
 class RegistroTurnoDia(models.Model):
+    OPCIONES_MINUTOS = [(480, '8 horas (480 min)'), (600, '10 horas (600 min)')]
+
     turno = models.ForeignKey(Turno, on_delete=models.RESTRICT, related_name='registros_diarios', verbose_name='Turno')
-    fecha = models.DateField(verbose_name='Fecha del turno',help_text='Fecha en que se registran los operarios para este turno')
+    fecha = models.DateField(verbose_name='Fecha del turno', help_text='Fecha en que se registran los operarios para este turno')
     numero_operarios = models.IntegerField(verbose_name='Número de operarios', help_text='Total de operarios disponibles en este turno para esta fecha')
-    horas_extras = models.BooleanField(default=False, verbose_name='Horas extras', help_text='se agregan 120 minutos adicionales a la capacidad del turno')
+    minutos_totales = models.IntegerField(choices=OPCIONES_MINUTOS, default=480, verbose_name='Duración del turno', help_text='Duración total del turno en minutos')
     registrado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='turnos_dia_registrados')
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
@@ -136,8 +138,7 @@ class RegistroTurnoDia(models.Model):
         ordering = ['-fecha', 'turno']
 
     def __str__(self):
-        extras = ' + horas extras' if self.horas_extras else ''
-        return f'{self.turno.nombre_turno} — {self.fecha} — {self.numero_operarios} operarios{extras}'
+        return f'{self.turno.nombre_turno} — {self.fecha} — {self.numero_operarios} operarios — {self.minutos_totales} min'
 
 # Tabla para el manejo de los listados predefinidos que se encuentran dentro del formato. A diferencia de Clientes, productos y turnos, No necesitan una tabla por separado para su manejo.
 
@@ -304,7 +305,7 @@ class RegistroPlaneacion(models.Model):
 
     # campos correspondientes a la etapa 2
 
-    fecha_planeacion = models.DateField(blank=True, null= True, verbose_name='Fecha planeada para esta producción')
+    fecha_planeacion = models.DateField(blank=True, null=True, verbose_name='Fecha planeada para esta producción')
     materia_prima_disponible = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Matería Prima Disponible')
     orden_produccion = models.IntegerField(blank=True, null=True, verbose_name='Orden de producción en fecha planeada')
     lider_produccion=models.CharField(max_length=50, blank=True, null=True, verbose_name='Lider de Producción')
@@ -357,8 +358,7 @@ class RegistroPlaneacion(models.Model):
         ).first()
         if not registro:
             return None
-        minutos_extras = MINUTOS_HORAS_EXTRAS if registro.horas_extras else 0
-        return (self.turno.minutos_totales + minutos_extras) * registro.numero_operarios
+        return registro.minutos_totales * registro.numero_operarios
 
     @property
     def tiempo_proyectado(self):
@@ -443,7 +443,7 @@ class RegistroPlaneacion(models.Model):
             fecha=self.fecha_planeacion
         ).first()
         return registro.numero_operarios if registro else None
-    
+
     # Bloqueo etapa
     def etapa2_bloqueada(self):
         return self.planeacion_completa
