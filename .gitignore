@@ -14,3 +14,7 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+
+# Build frontend
+client/dist
+client/node_modules

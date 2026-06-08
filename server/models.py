@@ -207,7 +207,7 @@ class Dom(models.Model):
     orden_compra=models.CharField(max_length=50, blank=True, null=True, verbose_name='Número orden de compra')
     tiempo_salida_almacen=models.IntegerField(blank=True, null=True, verbose_name='Tiempo de salida de almacen (minutos)')
     rentabilidad=models.IntegerField(blank=True, null=True, verbose_name='Rentabilidad (%)', help_text='Porcentaje de rentabilidad')
-    campana_venta = models.BooleanField(default=False, verbose_name='DOM generado en campaña de venta')
+    campana_venta = models.BooleanField(null=True, blank=True, default=None, verbose_name='DOM generado en campaña de venta')
     numero_cotizacion=models.CharField(max_length=50, blank=True, null=True, verbose_name='Numero de Cotización')
     numero_factura=models.IntegerField(blank=True, null=True, verbose_name='Número Factura de venta')
     # Bloqueo etapa
@@ -226,7 +226,7 @@ class Dom(models.Model):
     orden_entrega = models.CharField(max_length=100, blank=True, null=True, verbose_name='Orden de entrega')
     notas = models.TextField(blank=True, null=True, verbose_name = 'Información relevante para el despacho', help_text='Incluya en este apartado información relevante respescto de este DOM Enchargados de servicios externos, notas o comentarios relevantes para el despacho, etc.')
     novedades_cumplimiento = models.TextField(blank=True, null=True, verbose_name='Novedades en el cumplimiento del despacho', help_text='Incluya en este campo información relevante respecto de cualquier novedad o incidencia que se ha presentando en el despacho de los productos')
-    dom_entregado_ok = models.BooleanField(default=False, verbose_name='¿DOM entregado según planeación?')
+    dom_entregado_ok = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿DOM entregado según planeación?')
     # Bloqueo Etapa 
     dom_liberado_cierre = models.BooleanField(default=False, verbose_name='¿DOM liberado para cierre', help_text='Marque esta casilla unicamente si el DOM ya ha sido despacho y entregado. Una vez marcada la opción SI, no se podrán realziar cambios')
 
@@ -308,21 +308,21 @@ class RegistroPlaneacion(models.Model):
 
     fecha_planeacion = models.DateField(blank=True, null= True, verbose_name='Fecha planeada para esta producción')
     cantidad_pedido = models.IntegerField(blank=True, null=True, verbose_name='Cantidad del pedido planeado para producción')
-    materia_prima_disponible = models.BooleanField(default=False, verbose_name='¿Matería Prima Disponible')
+    materia_prima_disponible = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Matería Prima Disponible')
     orden_produccion = models.IntegerField(blank=True, null=True, verbose_name='Orden de producción en fecha planeada')
     lider_produccion=models.CharField(max_length=50, blank=True, null=True, verbose_name='Lider de Producción')
     objetivo_planeacion = models.CharField(max_length=50, blank=True, null=True, verbose_name="objetivo de planeación inicial")
     tablilla_madera = models.CharField(max_length=50, blank=True, null=True, verbose_name='¿Producto con madera o tablilla larga?')
-    encartonar = models.BooleanField(default=False, verbose_name='¿Encartonar?')
-    grafado_fundas = models.BooleanField(default=False, verbose_name='¿Productos requieren grafado y/o elaboración fundas?')
-    control_tiempo=models.BooleanField(default=False, verbose_name='¿Producto lleva control de tiempo de corte y ensamble en armadora?')
+    encartonar = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Encartonar?')
+    grafado_fundas = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Productos requieren grafado y/o elaboración fundas?')
+    control_tiempo = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Producto lleva control de tiempo de corte y ensamble en armadora?')
     orden_tratamiento=models.IntegerField(default=1, verbose_name='Orden Tratamiento')
     lider_almacen = models.CharField(max_length=50, blank=True, null=True, verbose_name='Lider de almacén')
-    cliente_recoge = models.BooleanField(default=False, verbose_name='¿Cliente recoge productos?')
-    mudar_entrega = models.BooleanField(default=True, verbose_name='¿Mudar de Colombia entrega productos?')
-    tratamiento_termico = models.BooleanField(default=False, verbose_name='¿Tratamiento térmico realizado?')
-    sello_ica = models.BooleanField(default=False, verbose_name='¿Productos cuentan ya con sello ICA?')
-    peso = models.BooleanField(default=False, verbose_name='¿Productos requieren ser pesados?')
+    cliente_recoge = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Cliente recoge productos?')
+    mudar_entrega = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Mudar de Colombia entrega productos?')
+    tratamiento_termico = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Tratamiento térmico realizado?')
+    sello_ica = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Productos cuentan ya con sello ICA?')
+    peso = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Productos requieren ser pesados?')
     
     # condicional bloqueo etapa 
     planeacion_completa = models.BooleanField(default=False, verbose_name='¿Planeación completada?', help_text='En el evento en que seleccione si, no se permitirá más modificaciones a esta etapa')
@@ -465,11 +465,11 @@ class RegistroAlmacen(models.Model):
 
     registro_planeacion = models.ForeignKey(RegistroPlaneacion, on_delete=models.CASCADE, related_name='registros_almacen',verbose_name='Registro Planeacion')
     
-    numero_registro = models.IntegerField(default=1, verbose_name='Número de Registro')
+    numero_registro = models.IntegerField(verbose_name='Número de Registro')
 
-    # campos de formulario correspondiente a la etapa 3 
+    # campos de formulario correspondiente a la etapa 3
 
-    materias_primas = models.BooleanField(default=False, verbose_name='Materias Primas Internas Procesadas')
+    materias_primas = models.BooleanField(null=True, blank=True, default=None, verbose_name='Materias Primas Internas Procesadas')
 
     novedad_cumplimiento_almacen = models.TextField(blank=True, null=True, verbose_name='Novedad cumplimiento almacen', help_text='Registre aquí cualquier novedad relevante respecto de las actividades desarrolladas en dentro de las labores de almacen para este DOM')
     dom_realizado_planeacion = models.BooleanField(default=False, verbose_name= '¿Actividades de almacen realizadas según planeacion de la producción?')
@@ -527,7 +527,7 @@ class RegistroProduccion(models.Model):
     minutos_asignados = models.IntegerField(blank=True, null=True, verbose_name='Minutos asignados DOM', help_text='Este campo se comoleta automaticamente al momento de darle finalizar al cronometro')
     numero_personas_asignadas = models.IntegerField(blank=True, null=True, verbose_name='Número de personas asignadas a la producción de este DOM')
     novedad_cumplimiento_produccion = models.TextField(blank=True, null=True, verbose_name='Novedad Cumplimiento Producción', help_text='Registre aquí cualquier novedad relevante respecto de las actividades desarrolladas en dentro de las labores de produccion para este DOM')
-    segun_planeacion = models.BooleanField(default=False, verbose_name='¿Actividades de producción realizadas según planeación de este DOM?')
+    segun_planeacion = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Actividades de producción realizadas según planeación de este DOM?')
     produccion_no_completada = models.TextField(blank = True, null = True, verbose_name='Razones por la cuales la producción no ha podido ser realizada según planeación', help_text='Incluya en este toda la información relevante respecto del por que la producción no ha podido ser finalizada según planeación realizada, si la producción ha sido realizada según planeación, ignore este campo' )
 
     # Bloqueo etapa 4 
@@ -699,16 +699,15 @@ class RegistroTratamiento(models.Model):
     )
 
     numero_registro = models.IntegerField(
-        default=1,
         verbose_name='Numero de Registro'
     )
 
     # atributos correspondientes a los campos de la etapa de tratamiento fitosanitario 
 
-    dom_con_tratamiento = models.BooleanField( default=False, verbose_name='¿Tratamiento Fitosanitario realizado respecto de este DOM?')
+    dom_con_tratamiento = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Tratamiento Fitosanitario realizado respecto de este DOM?')
     numero_tratamiento = models.IntegerField(blank=True, null=True, verbose_name='Número de tratamiento termico fitosanitario asignado a este DOM')
     novedad_cumplimiento_tratamiento = models.TextField(blank=True, null=True, verbose_name='Novedades en la realización o cumplimiento del tratamiento termico', help_text='Incluya en este campo cualquier novedad o hecho relevante relativo al cumplimiento del tratamiento fitosanitario respecto de este DOM')
-    tratamiento_segun_planeacion = models.BooleanField(default=False, verbose_name='¿Tratamiento termico realizado según planeación para este DOM?')
+    tratamiento_segun_planeacion = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Tratamiento termico realizado según planeación para este DOM?')
 
     # bloque etapa 5 
     tratamiento_completado = models.BooleanField(default=False, verbose_name='¿Tratamiento termico realizado respecto de todos los productos de este DOM?', help_text='Si selecciona la opción si, este campo ya no podrá realizar ningún cambio respecto de esta etapa')
@@ -786,7 +785,7 @@ class AuditoriaDom(models.Model):
     ACTION_CHOICES = [
         ('CREACION', 'Creación'),
         ('EDICION', 'Edicion'),
-        ('BLOQUE_ETAPA', 'Bloque de Etapa'),
+        ('BLOQUEO_ETAPA', 'Bloqueo de Etapa'),
         ('DESBLOQUEO_ETAPA','Desbloqueo de Etapa'),
         ('ELIMINACION', 'Eliminación'),
     ]

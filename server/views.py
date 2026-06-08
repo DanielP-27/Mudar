@@ -812,6 +812,12 @@ class ProductoListView(APIView):
 
         if activo is not None:
             productos = productos.filter(activo = activo.lower() == 'true')
+        
+        # Filtro adicional para aceptar busqueda estilo typehead (autocompletado)
+        nombre = request.query_params.get('nombre', None)
+
+        if nombre is not None:
+            productos = productos.filter(nombre_producto__icontains=nombre)
 
         serializer = ProductosSerializer(productos, many= True)
         return Response (
@@ -1267,25 +1273,72 @@ class DomListView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get (self, request):
+    def get(self, request):
         doms = Dom.objects.select_related('nombre_cliente').prefetch_related('productos')
 
-        # Filtro opcional por cliente - para dashboard y facilitar búsqueda por filtros especificos
-
+        # Filtros existentes
         cliente_id = request.query_params.get('cliente', None)
         if cliente_id is not None:
             doms = doms.filter(nombre_cliente__cliente_id=cliente_id)
 
-        # Filtro opcional por estado del dom 
         estado = request.query_params.get('estado', None)
         if estado is not None:
             doms = doms.filter(tipo_estado_dom=estado.upper())
-        
-        serializer = DomListSerializer(doms, many=True)
+
+        # Filtros nuevos
+        responsable = request.query_params.get('responsable', None)
+        if responsable is not None:
+            doms = doms.filter(responsable__icontains=responsable)
+
+        dom_liberado_raw = request.query_params.get('dom_liberado_cierre', 'false')
+        dom_liberado = dom_liberado_raw.lower() == 'true'
+        doms = doms.filter(dom_liberado_cierre=dom_liberado)
+
+        fecha_inicio = request.query_params.get('fecha_inicio', None)
+        if fecha_inicio is not None:
+            doms = doms.filter(fecha_entrega_pactada__gte=fecha_inicio)
+
+        fecha_fin = request.query_params.get('fecha_fin', None)
+        if fecha_fin is not None:
+            doms = doms.filter(fecha_entrega_pactada__lte=fecha_fin)
+
+        # Ordenamiento: vencidos primero, luego fecha_entrega_pactada ascendente
+        hoy = timezone.now().date()
+        doms = doms.annotate(
+            vencido=Case(
+                When(fecha_entrega_pactada__lt=hoy, then=0),
+                default=1,
+                output_field=IntegerField()
+            )
+        ).order_by('vencido', 'fecha_entrega_pactada')
+
+        # Paginación
+        total = doms.count()
+
+        try:
+            page = max(1, int(request.query_params.get('page', 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        try:
+            page_size = min(100, max(1, int(request.query_params.get('page_size', 20))))
+        except (ValueError, TypeError):
+            page_size = 20
+
+        total_pages = max(1, -(-total // page_size))
+        page = min(page, total_pages)
+        offset = (page - 1) * page_size
+
+        doms_page = doms[offset:offset + page_size]
+        serializer = DomListSerializer(doms_page, many=True)
+
         return Response(
             {
                 'mensaje': 'DOMs obtenidos correctamente',
-                'total': doms.count(),
+                'total': total,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': total_pages,
                 'doms': serializer.data
             },
             status=status.HTTP_200_OK
@@ -1298,10 +1351,13 @@ class DomListView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-    # Variable extrae productos del body - deben enviarse como listado
-        productos_data = request.data.get('productos', [])
+        # Variable extrae productos del body - deben enviarse como listado
+        tipo_estado_dom = request.data.get('tipo_estado_dom', '')
+        TIPOS_SIN_PRODUCTOS = ['ADP', 'Documentos']
 
-        if not productos_data:
+        productos_data = request.data.get('productos', [])
+        # ADP y Documentos son tipos administrativos que no requieren productos de fabricación
+        if tipo_estado_dom not in TIPOS_SIN_PRODUCTOS and not productos_data:
             return Response(
                 {'error': 'El nuevo registro DOM debe contener al menos un producto'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -1435,6 +1491,18 @@ class DomDetalleView(APIView):
                 return Response(
                     {'error': f'No tienes permisos para cambiar el estado del DOM'},
                     status=status.HTTP_403_FORBIDDEN
+                )
+
+        # ADP y Documentos son tipos administrativos; no pueden mezclarse con tipos productivos
+        TIPOS_SIN_PRODUCTOS = ['ADP', 'Documentos']
+        tipo_actual = dom.tipo_estado_dom
+        tipo_nuevo = request.data.get('tipo_estado_dom', tipo_actual)
+
+        if tipo_actual != tipo_nuevo:
+            if tipo_actual in TIPOS_SIN_PRODUCTOS or tipo_nuevo in TIPOS_SIN_PRODUCTOS:
+                return Response(
+                    {'error': 'No es posible cambiar el tipo de DOM entre administrativo y productivo'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
 
         # Verifica bloqueo de etapa antes de aplicar cambios
@@ -2627,7 +2695,7 @@ class CronometroFinalizarView(APIView):
 #       del sistema — cruza RegistroPlaneacion con sus tres registros hijo
 #       (almacen, produccion, tratamiento) y calcula métricas de cumplimiento.
 
-from django.db.models import Sum, Count, Q
+from django.db.models import Sum, Count, Q, Case, When, IntegerField
 
 # Clase DashboardView
 # Retorna métricas globales del sistema para la página de inicio.
@@ -2760,43 +2828,50 @@ class DashboardView(APIView):
         tratamiento_ok_count = 0
         total_planeaciones_activas = 0
 
+        # Inicialización previa — evita NameError si doms_activos está vacío
+        cumplimiento_almacen = 'SIN_DATOS'
+        cumplimiento_produccion = 'SIN_DATOS'
+        cumplimiento_tratamiento = 'SIN_DATOS'
+        cumplimiento_despacho = 'SIN_DATOS'
+        cumplimiento_consolidado = 'SIN_DATOS'
+
+        # count() fuera del loop — un único hit a BD
+        total_doms_activos_count = doms_activos.count()
+        doms_entregados_ok = doms_activos.filter(dom_entregado_ok=True).count()
+
         for dom in doms_activos:
             for rp in dom.registro_planeacion.all():
                 total_planeaciones_activas += 1
                 almacenes = rp.registros_almacen.all()
                 producciones = rp.registros_produccion.all()
                 tratamientos = rp.registros_tratamiento.all()
-            
-            if almacenes.exists() and all(a.dom_realizado_planeacion for a in almacenes):
-                almacen_ok_count += 1
-       
-            if producciones.exists() and all(p.segun_planeacion for p in producciones):
-                produccion_ok_count += 1
 
-            if tratamientos.exists() and all(t.tratamiento_segun_planeacion for t in tratamientos):
-                tratamiento_ok_count += 1
-            
-            # Nivel 2 cumplimiento por tipo de etapa 
-            cumplimiento_almacen = calcular_cumplimiento(almacen_ok_count, total_planeaciones_activas)
+                # Evaluación dentro del loop interno — cubre todos los rp del DOM
+                if almacenes.exists() and all(a.dom_realizado_planeacion for a in almacenes):
+                    almacen_ok_count += 1
 
-            cumplimiento_produccion = calcular_cumplimiento(produccion_ok_count, total_planeaciones_activas)
+                if producciones.exists() and all(p.segun_planeacion for p in producciones):
+                    produccion_ok_count += 1
 
-            cumplimiento_tratamiento = calcular_cumplimiento(tratamiento_ok_count, total_planeaciones_activas)
+                if tratamientos.exists() and all(t.tratamiento_segun_planeacion for t in tratamientos):
+                    tratamiento_ok_count += 1
 
-            # Nivel 2 - cumplimiento etapa 6 despachos
-            total_doms_activos_count = doms_activos.count()
-            doms_entregados_ok = doms_activos.filter(dom_entregado_ok = True).count()
-            cumplimiento_despacho = calcular_cumplimiento(doms_entregados_ok, total_doms_activos_count)
+        # Nivel 2 — fuera de ambos loops, con totales finales
+        cumplimiento_almacen = calcular_cumplimiento(almacen_ok_count, total_planeaciones_activas)
+        cumplimiento_produccion = calcular_cumplimiento(produccion_ok_count, total_planeaciones_activas)
+        cumplimiento_tratamiento = calcular_cumplimiento(tratamiento_ok_count, total_planeaciones_activas)
+        cumplimiento_despacho = calcular_cumplimiento(doms_entregados_ok, total_doms_activos_count)
 
-            # Nivel 3 consolidado global - medición cuatro etapas
-
-            niveles = [cumplimiento_almacen, cumplimiento_produccion, cumplimiento_tratamiento, cumplimiento_despacho]
-            if all (n == 'CUMPLIÓ' for n in niveles):
-                cumplimiento_consolidado = 'CUMPLIÓ'
-            elif all(n == 'NO_CUMPLIÓ' for n in niveles):
-                cumplimiento_consolidado = 'NO_CUMPLIÓ'
-            else:
-                cumplimiento_consolidado = 'PARCIAL'
+        # Nivel 3 consolidado global - medición cuatro etapas
+        niveles = [cumplimiento_almacen, cumplimiento_produccion, cumplimiento_tratamiento, cumplimiento_despacho]
+        if all(n == 'CUMPLIÓ' for n in niveles):
+            cumplimiento_consolidado = 'CUMPLIÓ'
+        elif all(n == 'NO_CUMPLIÓ' for n in niveles):
+            cumplimiento_consolidado = 'NO_CUMPLIÓ'
+        elif all(n == 'SIN_DATOS' for n in niveles):
+            cumplimiento_consolidado = 'SIN_DATOS'
+        else:
+            cumplimiento_consolidado = 'PARCIAL'
 
         data = {
             'total_doms': total_doms,
@@ -2836,11 +2911,17 @@ class InformeCumplimientoPlaneacion(APIView):
 
         if not fecha_inicio or not fecha_fin:
             return Response(
-                {'error': 'Debe indicae fecha_inicio y fecha_fin para generar el informe'},
+                {'error': 'Debe indicar fecha_inicio y fecha_fin para generar el informe'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Obtiene registro de planeacion en el rango de fechas 
+
+        if fecha_inicio > fecha_fin:
+            return Response(
+                {'error': 'fecha_inicio no puede ser mayor que fecha_fin'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Obtiene registro de planeacion en el rango de fechas
         registros = RegistroPlaneacion.objects.filter(
             fecha_planeacion__range=[fecha_inicio, fecha_fin]
         ).select_related(
@@ -2937,6 +3018,8 @@ class InformeCumplimientoPlaneacion(APIView):
             cumplimiento_consolidado = 'CUMPLIÓ'
         elif all(n == 'NO_CUMPLIÓ' for n in niveles):
             cumplimiento_consolidado = 'NO_CUMPLIÓ'
+        elif all(n == 'SIN_DATOS' for n in niveles):
+            cumplimiento_consolidado = 'SIN_DATOS'
         else:
             cumplimiento_consolidado = 'PARCIAL'
 
@@ -2962,7 +3045,7 @@ class InformeCumplimientoPlaneacion(APIView):
         return Response(
             {
                 'mensaje': 'Informe de cumplimiento de planeación generado correctamente',
-                'informe': data
+                'informe': serializer.data
             },
             status=status.HTTP_200_OK
         )
@@ -2983,7 +3066,13 @@ class InformeDespachoView(APIView):
                 {'error': 'Debe indicar fecha_inicio y fecha_fin para generar el informe'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        if fecha_inicio > fecha_fin:
+            return Response(
+                {'error': 'fecha_inicio no puede ser mayor que fecha_fin'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         doms = Dom.objects.filter(
             fecha_entrega_pactada__range=[fecha_inicio, fecha_fin]
         ).select_related('nombre_cliente').prefetch_related('productos')
@@ -3022,10 +3111,13 @@ class InformeDespachoView(APIView):
         cumplimiento_despacho = calcular_cumplimiento(total_entregados_ok, total_doms)
 
         # Nivel 3 - consolidado del informe
-        if cumplimiento_despacho == 'CUMPLIÓ':
+        niveles = [cumplimiento_despacho]
+        if all(n == 'CUMPLIÓ' for n in niveles):
             cumplimiento_consolidado = 'CUMPLIÓ'
-        elif cumplimiento_despacho == 'NO_CUMPLIÓ':
+        elif all(n == 'NO_CUMPLIÓ' for n in niveles):
             cumplimiento_consolidado = 'NO_CUMPLIÓ'
+        elif all(n == 'SIN_DATOS' for n in niveles):
+            cumplimiento_consolidado = 'SIN_DATOS'
         else:
             cumplimiento_consolidado = 'PARCIAL'
         
@@ -3045,8 +3137,8 @@ class InformeDespachoView(APIView):
         serializer = InformeDespachoSerializer(data)
         return Response(
             {
-                'mensaje': 'Informe de auditoría generado correctamente',
-                'informe': data
+                'mensaje': 'Informe de despacho generado correctamente',
+                'informe': serializer.data
             },
             status=status.HTTP_200_OK
         )
@@ -3146,6 +3238,8 @@ class DomReporteView(APIView):
             cumplimiento_consolidado_dom = 'CUMPLIÓ'
         elif all(n == 'NO_CUMPLIÓ' for n in niveles):
             cumplimiento_consolidado_dom = 'NO_CUMPLIÓ'
+        elif all(n == 'SIN_DATOS' for n in niveles):
+            cumplimiento_consolidado_dom = 'SIN_DATOS'
         else:
             cumplimiento_consolidado_dom = 'PARCIAL'
 
@@ -3197,7 +3291,13 @@ class InformeAuditoriaView(APIView):
                 {'error': 'Debes indicar fecha_inicio y fecha_fin para generar el informe'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        if fecha_inicio > fecha_fin:
+            return Response(
+                {'error': 'fecha_inicio no puede ser mayor que fecha_fin'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Filtro base: la consulta para auditoria este es el filtro base
         acciones = AuditoriaDom.objects.filter(
             timestamp__date__range=[fecha_inicio, fecha_fin]
@@ -3216,15 +3316,15 @@ class InformeAuditoriaView(APIView):
         # Filtro opcional por cliente 
         cliente_id = request.query_params.get('cliente_id', None)
         if cliente_id is not None:
-            acciones = acciones.filter(dom__nombre_cliente__cliente_=cliente_id)
+            acciones = acciones.filter(dom__nombre_cliente__cliente_id=cliente_id)
         
         # Totales por tipo de acción 
         totales = acciones.aggregate(
             total_acciones=Count('id'),
-            total_creaciones=Count('id', filter=Q(accion='CREACIÓN')),
+            total_creaciones=Count('id', filter=Q(accion='CREACION')),
             total_ediciones=Count('id', filter=Q(accion='EDICION')),
             total_bloqueos=Count('id', filter=Q(accion='BLOQUEO_ETAPA')),
-            total_eliminaciones=Count('id', filter=Q(accion='ELIMINACIÓN'))
+            total_eliminaciones=Count('id', filter=Q(accion='ELIMINACION'))
         )
 
         data = {
@@ -3244,7 +3344,7 @@ class InformeAuditoriaView(APIView):
         return Response(
             {
                 'mensaje': 'Informe de auditoria generado correctamente',
-                'informe': data
+                'informe': serializer.data
             },
             status=status.HTTP_200_OK
         )

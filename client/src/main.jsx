@@ -1,10 +1,23 @@
+// src/main.jsx
 import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
+import ReactDOM from 'react-dom/client'
+import { ProveedorAutenticacion } from './context/AuthContext'
+import App from './App'
 import './index.css'
-import App from './App.jsx'
 
-createRoot(document.getElementById('root')).render(
+// Monta toda la app en el <div id="root"> del index.html
+ReactDOM.createRoot(document.getElementById('root')).render(
+
+  // Detecta problemas en desarrollo — sin efecto en producción
   <StrictMode>
-    <App />
-  </StrictMode>,
+
+    {/* Provee el estado de autenticación a toda la app */}
+    <ProveedorAutenticacion>
+
+      {/* Punto de entrada de la aplicación — contiene el router y las rutas */}
+      <App />
+
+    </ProveedorAutenticacion>
+
+  </StrictMode>
 )

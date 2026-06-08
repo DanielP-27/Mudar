@@ -117,7 +117,9 @@ class ProductosDomSerializer(serializers.ModelSerializer):
     # variable para devolver a front objeto con nombre y tiempo de produccion unitario del producto
     tipo_producto_detalle = ProductosSerializer(source='tipo_producto', read_only=True)
     # variable para leer datos de tipo de producto con primary key
-    tipo_producto = serializers.PrimaryKeyRelatedField(read_only=True)
+    tipo_producto = serializers.PrimaryKeyRelatedField(
+    queryset=Productos.objects.all()
+    )
 
     class Meta: 
         model = ProductosDom
@@ -226,12 +228,16 @@ class DomDetalleSerializer(serializers.ModelSerializer):
             'cantidad_elaborada_total',
         ]
         read_only_fields = ['dom_id', 'fecha_asignacion_dom']
+        extra_kwargs = {
+            'campana_venta':   {'allow_null': True, 'required': False},
+            'dom_entregado_ok': {'allow_null': True, 'required': False},
+        }
 
 # Serializer: RegistroAlmacen
 # Uso: manejo información etapa 3 - almacen
 class RegistroAlmacenSerializer(serializers.ModelSerializer):
     # Propiedad herada para mostrar objetivo establecido en planeacion
-    tarea_planeacion = serializers.ReadOnlyField()
+    tarea_asignada_planeacion = serializers.ReadOnlyField(source='tarea_planeacion')
     etapa_3_bloqueada = serializers.SerializerMethodField()
 
     def get_etapa_3_bloqueada(self, obj):
@@ -246,17 +252,19 @@ class RegistroAlmacenSerializer(serializers.ModelSerializer):
             'materias_primas',
             'novedad_cumplimiento_almacen',
             'dom_realizado_planeacion',
-            'materias_liberadas',   # Bloqueo etapa 3
-            'tarea_planeacion',     # heredada de planeacion 
+            'materias_liberadas',        # Bloqueo etapa 3
+            'tarea_asignada_planeacion', # heredada de planeacion
             'etapa_3_bloqueada',
         ]
         # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
+        read_only_fields = ['numero_registro']
         extra_kwargs = {
             'novedad_cumplimiento_almacen': {
                 'allow_null': True,
                 'allow_blank': True,
                 'required': False
-            }
+            },
+            'materias_primas': {'allow_null': True, 'required': False},
         }
 
 # Serializer: PausaTiempoProduccion
@@ -347,7 +355,8 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
                 'allow_null': True,
                 'allow_blank': True,
                 'required': False
-            }
+            },
+            'segun_planeacion': {'allow_null': True, 'required': False},
         }
 
 # Serializer: RegistroTratamiento
@@ -375,12 +384,15 @@ class RegistroTratamientoSerializer(serializers.ModelSerializer):
             'etapa_5_bloqueada',
         ]
         # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
+        read_only_fields = ['numero_registro']
         extra_kwargs = {
             'novedad_cumplimiento_tratamiento': {
                 'allow_null': True,
                 'allow_blank': True,
                 'required': False
-            }
+            },
+            'dom_con_tratamiento':       {'allow_null': True, 'required': False},
+            'tratamiento_segun_planeacion': {'allow_null': True, 'required': False},
         }
 
 # Serializer: RegistroPlaneacion
@@ -390,12 +402,18 @@ class RegistroTratamientoSerializer(serializers.ModelSerializer):
 class RegistroPlaneacionSerializer(serializers.ModelSerializer):
     # Lectura turno con nombre y minutos totales para calculo en FrontEnd - campo obligatorio al momento de registrar datos etapa 2
     turno_detalle = TurnoSerializer(source='turno', read_only=True)
-    turno = serializers.PrimaryKeyRelatedField(queryset = Turno.objects.all())
+    turno = serializers.PrimaryKeyRelatedField(
+        queryset=Turno.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     #Lectura del serializer de ProductosDom para poder mostrar listado de productos - campo obligatorio para gestión etapa 2
     dom_producto_detalle = ProductosDomSerializer(source='dom_producto', read_only=True)
     dom_producto = serializers.PrimaryKeyRelatedField(
-        queryset = ProductosDom.objects.all()
+        queryset=ProductosDom.objects.all(),
+        required=False,
+        allow_null=True
     )
 
     # Registro hijos anidados
@@ -468,6 +486,17 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = ['numero_registro', 'dom']
+        extra_kwargs = {
+            'materia_prima_disponible': {'allow_null': True, 'required': False},
+            'encartonar':               {'allow_null': True, 'required': False},
+            'grafado_fundas':           {'allow_null': True, 'required': False},
+            'control_tiempo':           {'allow_null': True, 'required': False},
+            'cliente_recoge':           {'allow_null': True, 'required': False},
+            'mudar_entrega':            {'allow_null': True, 'required': False},
+            'tratamiento_termico':      {'allow_null': True, 'required': False},
+            'sello_ica':                {'allow_null': True, 'required': False},
+            'peso':                     {'allow_null': True, 'required': False},
+        }
 
 # Serializer: AuditoriaDom
 # Uso: trazabilidad y consulta de cambios - solo lectura y EXCLUSIVO ADMINISTRADOR sin embargo, dicha configuracion está en views.py 
@@ -877,7 +906,7 @@ class InformeCumplimientoPlaneacionSerializer(serializers.Serializer):
         help_text = 'Porcentaje de DOMs que cumplieron con planeación establecida para produccion, almacen, tratamiento termico'
     )
 
-    # cumplimiento_almacen = serializers.CharField(read_only=True)
+    cumplimiento_almacen = serializers.CharField(read_only=True)
     cumplimiento_produccion = serializers.CharField(read_only=True)
     cumplimiento_tratamiento = serializers.CharField(read_only=True)
     cumplimiento_despacho = serializers.CharField(read_only=True)

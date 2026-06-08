@@ -1,7 +1,7 @@
 # Mudar de Colombia S.A.S. — Contexto del Proyecto
 
 ## Descripción General
-Aplicación web para la gestión de DOMs (Documentos Origen de Madera) que rastrea el ciclo de vida completo de producción: planeación, producción, tratamiento térmico, despachos y entregas.
+Aplicación web para la gestión de DOMs (Documentos Origen Mudar) que rastrea el ciclo de vida completo de producción: planeación, producción, tratamiento térmico, despachos y entregas.
 
 ## Stack Tecnológico
 
