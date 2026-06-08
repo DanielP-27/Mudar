@@ -2,13 +2,14 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import (
     Cliente,
-    FamiliaProducto, 
+    FamiliaProducto,
     Productos,
     Turno,
     ListaPredefinida,
     Dom,
     ProductosDom,
     RegistroPlaneacion,
+    ProductoPlaneacion,
     RegistroAlmacen,
     RegistroProduccion,
     RegistroTiempoProduccion,
@@ -312,27 +313,27 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
     #Propiedades calculadas Models.py etapa produccion
     tiempo_elaboracion_produccion = serializers.ReadOnlyField()
     minutos_hombre_produccion_dom = serializers.ReadOnlyField()
-    minutos_restantes_dom = serializers.ReadOnlyField()
-    tarea_asignada_planeacion = serializers.ReadOnlyField()
-    etapa_4_bloqueada = serializers.SerializerMethodField()
+    minutos_restantes_dom         = serializers.ReadOnlyField()
+    tarea_asignada_planeacion     = serializers.ReadOnlyField()
+    etapa_4_bloqueada             = serializers.SerializerMethodField()
 
-    # Referencia a bloqueo etapa 4
     def get_etapa_4_bloqueada(self, obj):
         return obj.etapa_4_bloqueada()
-    
-    class Meta: 
+
+    class Meta:
         model = RegistroProduccion
         fields = [
             'id',
             'registro_planeacion',
+            'producto_planeacion',
             'numero_registro',
             'cantidad_elaborada',
-            'minutos_asignados',    # propiedad para finalizar cronometro
+            'minutos_asignados',
             'numero_personas_asignadas',
             'novedad_cumplimiento_produccion',
             'segun_planeacion',
             'produccion_no_completada',
-            'cierre_produccion',     #bloqueo de la etapa 4 calculado
+            'cierre_produccion',
             # propiedades calculadas
             'tarea_asignada_planeacion',
             'tiempo_elaboracion_produccion',
@@ -395,12 +396,34 @@ class RegistroTratamientoSerializer(serializers.ModelSerializer):
             'tratamiento_segun_planeacion': {'allow_null': True, 'required': False},
         }
 
+# Serializer: ProductoPlaneacion
+# Uso: productos asociados a un registro de planeación, con cantidad proyectada y propiedades calculadas por producto
+
+class ProductoPlaneacionSerializer(serializers.ModelSerializer):
+    dom_producto_detalle = ProductosDomSerializer(source='dom_producto', read_only=True)
+    dom_producto = serializers.PrimaryKeyRelatedField(queryset=ProductosDom.objects.all())
+    cantidad_elaborada = serializers.ReadOnlyField()
+    cantidad_pendiente = serializers.ReadOnlyField()
+
+    class Meta:
+        model = ProductoPlaneacion
+        fields = [
+            'id',
+            'registro_planeacion',
+            'dom_producto',
+            'dom_producto_detalle',
+            'cantidad_proyectada',
+            'cantidad_elaborada',
+            'cantidad_pendiente',
+        ]
+        read_only_fields = ['registro_planeacion']
+
+
 # Serializer: RegistroPlaneacion
 # Uso: gestion etapa 2 - planeación de la produccion
 # Importante: teniendo en cuenta diseño del sistema (nuevo registro planeacion genera nuevos registros produccion, almacen y tratamiento) a demas de la presentacion informes N+1 este serializer anida produccion, almacen y tratamiento.
 
 class RegistroPlaneacionSerializer(serializers.ModelSerializer):
-    # Lectura turno con nombre y minutos totales para calculo en FrontEnd - campo obligatorio al momento de registrar datos etapa 2
     turno_detalle = TurnoSerializer(source='turno', read_only=True)
     turno = serializers.PrimaryKeyRelatedField(
         queryset=Turno.objects.all(),
@@ -408,32 +431,27 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
         allow_null=True
     )
 
-    #Lectura del serializer de ProductosDom para poder mostrar listado de productos - campo obligatorio para gestión etapa 2
-    dom_producto_detalle = ProductosDomSerializer(source='dom_producto', read_only=True)
-    dom_producto = serializers.PrimaryKeyRelatedField(
-        queryset=ProductosDom.objects.all(),
-        required=False,
-        allow_null=True
-    )
+    # Productos de la planeación — reemplaza dom_producto y cantidad_pedido anteriores
+    productos_planeacion = ProductoPlaneacionSerializer(many=True, read_only=True)
 
-    # Registro hijos anidados
-    registros_almacen = RegistroAlmacenSerializer(many=True, read_only=True)
+    # Registros hijos anidados
+    registros_almacen    = RegistroAlmacenSerializer(many=True, read_only=True)
     registros_produccion = RegistroProduccionSerializer(many=True, read_only=True)
-    registros_tratamiento = RegistroTratamientoSerializer(many=True, read_only= True)
+    registros_tratamiento = RegistroTratamientoSerializer(many=True, read_only=True)
 
     # Propiedades calculadas del modelo
-    numero_operarios_turno = serializers.ReadOnlyField()
-    tiempo_proyectado = serializers.ReadOnlyField()
-    capacidad_turno_dia = serializers.ReadOnlyField()
+    numero_operarios_turno           = serializers.ReadOnlyField()
+    tiempo_proyectado                = serializers.ReadOnlyField()
+    capacidad_turno_dia              = serializers.ReadOnlyField()
     sumatoria_tiempo_asignado_turnos = serializers.ReadOnlyField()
-    tiempo_restante_dia = serializers.ReadOnlyField()
-    cantidad_elaborada = serializers.ReadOnlyField()
-    cantidad_pendiente = serializers.ReadOnlyField()
-    etapa2_bloqueada = serializers.SerializerMethodField()
+    tiempo_restante_dia              = serializers.ReadOnlyField()
+    cantidad_elaborada               = serializers.ReadOnlyField()
+    cantidad_pendiente               = serializers.ReadOnlyField()
+    etapa2_bloqueada                 = serializers.SerializerMethodField()
 
     def get_etapa2_bloqueada(self, obj):
         return obj.etapa2_bloqueada()
-    
+
     class Meta:
         model = RegistroPlaneacion
         fields = [
@@ -441,15 +459,15 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
             'dom',
             'numero_registro',
             'fecha_planeacion',
-            'cantidad_pedido',
 
             # turno
             'turno',
             'turno_detalle',
-            
-            # producto del DOM 
-            'dom_producto',
-            'dom_producto_detalle',
+
+            # productos de la planeación
+            'productos_planeacion',
+
+            # campos de planeación
             'materia_prima_disponible',
             'orden_produccion',
             'lider_produccion',
@@ -479,10 +497,10 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
             'cantidad_pendiente',
             'numero_operarios_turno',
 
-            # Hijos anidados
+            # hijos anidados
             'registros_almacen',
             'registros_produccion',
-            'registros_tratamiento'
+            'registros_tratamiento',
         ]
 
         read_only_fields = ['numero_registro', 'dom']

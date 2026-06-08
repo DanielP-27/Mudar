@@ -302,12 +302,9 @@ class RegistroPlaneacion(models.Model):
 
     turno = models.ForeignKey(Turno, on_delete=models.RESTRICT, related_name='planeaciones', blank=True, null=True, verbose_name='Turno')
 
-    dom_producto = models.ForeignKey(ProductosDom, on_delete=models.CASCADE, related_name='Registros_planeacion', blank=True, null=True, verbose_name='Producto del DOM', help_text='Producto especifico que se planea producir en este regitro')
-
     # campos correspondientes a la etapa 2
 
     fecha_planeacion = models.DateField(blank=True, null= True, verbose_name='Fecha planeada para esta producción')
-    cantidad_pedido = models.IntegerField(blank=True, null=True, verbose_name='Cantidad del pedido planeado para producción')
     materia_prima_disponible = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Matería Prima Disponible')
     orden_produccion = models.IntegerField(blank=True, null=True, verbose_name='Orden de producción en fecha planeada')
     lider_produccion=models.CharField(max_length=50, blank=True, null=True, verbose_name='Lider de Producción')
@@ -365,9 +362,11 @@ class RegistroPlaneacion(models.Model):
 
     @property
     def tiempo_proyectado(self):
-        if self.cantidad_pedido and self.dom_producto:
-            return self.cantidad_pedido * self.dom_producto.tipo_producto.tiempo_produccion_unitario
-        return None
+        total = 0
+        for pp in self.productos_planeacion.select_related('dom_producto__tipo_producto').all():
+            if pp.cantidad_proyectada and pp.dom_producto:
+                total += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+        return total or None
     
     @property
     def sumatoria_tiempo_asignado_turnos(self):
@@ -376,14 +375,13 @@ class RegistroPlaneacion(models.Model):
         planeaciones = RegistroPlaneacion.objects.filter(
             fecha_planeacion=self.fecha_planeacion,
             turno=self.turno,
-            cantidad_pedido__isnull=False,
-            dom_producto__isnull=False
-        ).select_related('dom_producto__tipo_producto')
+        ).prefetch_related('productos_planeacion__dom_producto__tipo_producto')
         total = 0
         for p in planeaciones:
-            tiempo_proyectado = p.cantidad_pedido * p.dom_producto.tipo_producto.tiempo_produccion_unitario
             operarios = p.numero_operarios_turno or 1
-            total += tiempo_proyectado * operarios
+            for pp in p.productos_planeacion.all():
+                if pp.cantidad_proyectada and pp.dom_producto:
+                    total += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario * operarios
         return total
     
     @property
@@ -402,46 +400,39 @@ class RegistroPlaneacion(models.Model):
     
     @property
     def cantidad_pendiente(self):
-        if self.cantidad_pedido:
-            return self.cantidad_pedido - self.cantidad_elaborada
-        return None
+        total = sum(
+            pp.cantidad_pendiente for pp in self.productos_planeacion.all()
+            if pp.cantidad_pendiente is not None
+        )
+        return total or None
     
     
     def tiempo_disponible_turno(self, tiempo_nuevo, excluir_registro_id=None):
-        # Función diseñada para validar que nuestros registros dentro de un mismo turno y fecha respeten el máximo de tiempo disponible para el turno
-        # disponible_actual: minutos disponibles antes del nuevo registro
-        # Disponible actual - tiempo nuevo: si el nuevo registro de planeación supera tiempo disponible en el turno, la vista notifica de está situación al planeadornb9
         capacidad = self.capacidad_turno_dia
         if capacidad is None:
             return None, None
         planeaciones = RegistroPlaneacion.objects.filter(
             fecha_planeacion=self.fecha_planeacion,
             turno=self.turno,
-            cantidad_pedido__isnull=False,
-            dom_producto__isnull=False
-        ).select_related('dom_producto__tipo_producto')
+        ).prefetch_related('productos_planeacion__dom_producto__tipo_producto')
         if excluir_registro_id:
             planeaciones = planeaciones.exclude(id=excluir_registro_id)
-        sumatoria = sum(
-            p.cantidad_pedido * p.dom_producto.tipo_producto.tiempo_produccion_unitario
-            for p in planeaciones
-        )
+        sumatoria = 0
+        for p in planeaciones:
+            for pp in p.productos_planeacion.all():
+                if pp.cantidad_proyectada and pp.dom_producto:
+                    sumatoria += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
         disponible_actual = capacidad - sumatoria
         return disponible_actual, disponible_actual - tiempo_nuevo
 
-    def cantidad_disponible_produccion(self, cantidad_nueva, excluir_registro_id=None):
-        # Función diseñada para impedir que al incluir nuevos registros de planeación la cantidad elaborada supere la cantidad total del producto, en caso que se presente está situación el sistema debe estar en capacidad de informarle a los usuarios respecto de esta situación. 
-        planeaciones_dom = RegistroPlaneacion.objects.filter(
-            dom=self.dom,
-            dom_producto=self.dom_producto
-        )
+    def cantidad_disponible_produccion(self, producto_planeacion, cantidad_nueva, excluir_registro_id=None):
         registros = RegistroProduccion.objects.filter(
-            registro_planeacion__in=planeaciones_dom
+            producto_planeacion=producto_planeacion
         )
         if excluir_registro_id:
             registros = registros.exclude(id=excluir_registro_id)
         elaborada = registros.aggregate(total=Sum('cantidad_elaborada'))['total'] or 0
-        return self.dom_producto.cantidad_pedido - elaborada - cantidad_nueva
+        return producto_planeacion.dom_producto.cantidad_pedido - elaborada - cantidad_nueva
 
     @property
     def numero_operarios_turno(self):
@@ -456,6 +447,48 @@ class RegistroPlaneacion(models.Model):
     # Bloqueo etapa
     def etapa2_bloqueada(self):
         return self.planeacion_completa
+
+
+class ProductoPlaneacion(models.Model):
+
+    registro_planeacion = models.ForeignKey(
+        RegistroPlaneacion,
+        on_delete=models.CASCADE,
+        related_name='productos_planeacion',
+        verbose_name='Registro de Planeación'
+    )
+    dom_producto = models.ForeignKey(
+        ProductosDom,
+        on_delete=models.RESTRICT,
+        related_name='productos_planeacion',
+        verbose_name='Producto del DOM'
+    )
+    cantidad_proyectada = models.IntegerField(
+        blank=True, null=True,
+        verbose_name='Cantidad proyectada a elaborar'
+    )
+
+    class Meta:
+        db_table = 'productos_planeacion'
+        verbose_name = 'Producto de Planeación'
+        verbose_name_plural = 'Productos de Planeación'
+        unique_together = ('registro_planeacion', 'dom_producto')
+
+    def __str__(self):
+        return f"Planeación #{self.registro_planeacion.numero_registro} - {self.dom_producto.tipo_producto.nombre_producto} x {self.cantidad_proyectada}"
+
+    @property
+    def cantidad_elaborada(self):
+        return self.registros_produccion.aggregate(
+            total=Sum('cantidad_elaborada')
+        )['total'] or 0
+
+    @property
+    def cantidad_pendiente(self):
+        if self.cantidad_proyectada:
+            return self.cantidad_proyectada - self.cantidad_elaborada
+        return None
+
 
 # Clase correspondiente a la etapa 3 - almacen
 
@@ -515,8 +548,15 @@ class RegistroProduccion(models.Model):
     registro_planeacion = models.ForeignKey(
         RegistroPlaneacion,
         on_delete=models.CASCADE,
-        related_name='registros_produccion', 
+        related_name='registros_produccion',
         verbose_name='Registro Planeacion'
+    )
+    producto_planeacion = models.ForeignKey(
+        ProductoPlaneacion,
+        on_delete=models.RESTRICT,
+        related_name='registros_produccion',
+        verbose_name='Producto de Planeación',
+        blank=True, null=True
     )
 
     numero_registro = models.IntegerField(verbose_name='Numero de Registro')
@@ -564,9 +604,8 @@ class RegistroProduccion(models.Model):
     
     @property
     def tiempo_elaboracion_produccion(self):
-        # calcula cantidad_elaborada x tiempo_produccion_unitario de cada producto
-        if self.cantidad_elaborada and self.registro_planeacion.dom_producto:
-            return self.cantidad_elaborada * self.registro_planeacion.dom_producto.tipo_producto.tiempo_produccion_unitario
+        if self.cantidad_elaborada and self.producto_planeacion:
+            return self.cantidad_elaborada * self.producto_planeacion.dom_producto.tipo_producto.tiempo_produccion_unitario
         return None
     
     @property

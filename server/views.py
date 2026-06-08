@@ -19,7 +19,8 @@ from .models import (
     Dom,
     ProductosDom,
     RegistroPlaneacion,
-    RegistroAlmacen, 
+    ProductoPlaneacion,
+    RegistroAlmacen,
     RegistroProduccion,
     RegistroTiempoProduccion,
     PausaTiempoProduccion,
@@ -1570,10 +1571,12 @@ class RegistroPlaneacionListView(APIView):
 
     def get(self, request):
         registros = RegistroPlaneacion.objects.select_related(
-            'dom', 'turno', 'dom_producto__tipo_producto'
+            'dom', 'turno'
+        ).prefetch_related(
+            'productos_planeacion__dom_producto__tipo_producto'
         ).all()
 
-    # Filtro necesario para que traiga registro de planeación de un DOM especifico, no N registros 
+        # Filtro necesario para que traiga registro de planeación de un DOM especifico, no N registros
         dom_id = request.query_params.get('dom_id', None)
         if dom_id is not None:
             registros = registros.filter(dom__dom_id=dom_id)
@@ -1649,25 +1652,27 @@ class RegistroPlaneacionListView(APIView):
                     registrado_por=request.user
                 )
 
-            # Valida capacidad del turno - una nueva planeación excede el tiempo de turno y fecha - no permite generar nuevo registro
-            dom_producto_id = request.data.get('dom_producto', None)
-            cantidad_pedido = request.data.get('cantidad_pedido', None)
-            if dom_producto_id and cantidad_pedido:
-                try:
-                    dom_producto_obj = ProductosDom.objects.select_related('tipo_producto').get(id=dom_producto_id)
-                    tiempo_nuevo = int(cantidad_pedido) * dom_producto_obj.tipo_producto.tiempo_produccion_unitario
-                    planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_planeacion, dom_producto=dom_producto_obj)
-                    disponible_actual, resultado = planeacion_temp.tiempo_disponible_turno(tiempo_nuevo)
-                    if resultado is not None and resultado < 0:
+            # Valida capacidad del turno sumando el tiempo proyectado de todos los productos enviados
+            productos = request.data.get('productos', [])
+            if productos:
+                tiempo_nuevo = 0
+                for item in productos:
+                    try:
+                        dom_producto_obj = ProductosDom.objects.select_related('tipo_producto').get(id=item.get('dom_producto'))
+                        cantidad = item.get('cantidad_proyectada', 0) or 0
+                        tiempo_nuevo += int(cantidad) * dom_producto_obj.tipo_producto.tiempo_produccion_unitario
+                    except ProductosDom.DoesNotExist:
                         return Response(
-                            {'error': 'El turno no tiene capacidad suficiente.', 'tiempo_disponible': disponible_actual, 'tiempo_requerido': tiempo_nuevo},
-                            status=status.HTTP_400_BAD_REQUEST
+                            {'error': f'Producto del DOM no encontrado: {item.get("dom_producto")}'},
+                            status=status.HTTP_404_NOT_FOUND
                         )
-                except ProductosDom.DoesNotExist:
+                planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_planeacion)
+                disponible_actual, resultado = planeacion_temp.tiempo_disponible_turno(tiempo_nuevo)
+                if resultado is not None and resultado < 0:
                     return Response(
-                        {'error': 'Producto del DOM no encontrado'},
-                        status=status.HTTP_404_NOT_FOUND
-                        )
+                        {'error': 'El turno no tiene capacidad suficiente.', 'tiempo_disponible': disponible_actual, 'tiempo_requerido': tiempo_nuevo},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
         # Asigna numero de registro (recordar se permiten N registros) - correlativo por DOM
         ultimo_registro = RegistroPlaneacion.objects.filter(dom=dom).order_by('-numero_registro').first()
         numero_registro = (ultimo_registro.numero_registro + 1) if ultimo_registro else 1 
@@ -1689,17 +1694,32 @@ class RegistroPlaneacionListView(APIView):
             dom=dom
         )
 
+        # Crea los ProductoPlaneacion asociados
+        productos = request.data.get('productos', [])
+        for item in productos:
+            try:
+                dom_producto_obj = ProductosDom.objects.get(id=item.get('dom_producto'))
+                ProductoPlaneacion.objects.create(
+                    registro_planeacion=registro,
+                    dom_producto=dom_producto_obj,
+                    cantidad_proyectada=item.get('cantidad_proyectada')
+                )
+            except ProductosDom.DoesNotExist:
+                pass
+
         registrar_auditoria(
-            dom=dom, 
+            dom=dom,
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_2',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados={k: str(v) for k, v in request.data.items() if k != 'productos'}
         )
 
         # Refresca el objeto con relaciones cargadas
         registro = RegistroPlaneacion.objects.select_related(
-            'dom', 'turno', 'dom_producto__tipo_producto'
+            'dom', 'turno'
+        ).prefetch_related(
+            'productos_planeacion__dom_producto__tipo_producto'
         ).get(id=registro.id)
 
         return Response(
@@ -1721,16 +1741,18 @@ class RegistroPlaneacionDetalleView(APIView):
     def get(self, request, registro_id):
         try:
             registro = RegistroPlaneacion.objects.select_related(
-                'dom', 'turno', 'dom_producto__tipo_producto'
+                'dom', 'turno'
+            ).prefetch_related(
+                'productos_planeacion__dom_producto__tipo_producto'
             ).get(id=registro_id)
         except RegistroPlaneacion.DoesNotExist:
             return Response(
                 {'error': 'Registro de planeación no encontrado'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         serializer = RegistroPlaneacionSerializer(registro)
-        return Response (
+        return Response(
             {
                 'mensaje': 'Registro de planeación obtenido correctamente',
                 'registro': serializer.data
@@ -1753,19 +1775,38 @@ class RegistroPlaneacionDetalleView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        cantidad_pedido_nueva = request.data.get('cantidad_pedido', None)
-        if cantidad_pedido_nueva is not None and registro.turno and registro.fecha_planeacion and registro.dom_producto:
-            tiempo_nuevo = int(cantidad_pedido_nueva) * registro.dom_producto.tipo_producto.tiempo_produccion_unitario
-            disponible_actual, resultado = registro.tiempo_disponible_turno(tiempo_nuevo, excluir_registro_id=registro_id)
-            if resultado is not None and resultado < 0:
-                return Response(
-                    {
-                        'error': 'El turno no tiene capacidad suficiente para esta modificación.',
-                        'tiempo_disponible': disponible_actual,
-                        'tiempo_requerido': tiempo_nuevo
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
+        # Valida capacidad si cambia turno o fecha_planeacion
+        turno_nuevo = request.data.get('turno', None)
+        fecha_nueva = request.data.get('fecha_planeacion', None)
+        if turno_nuevo or fecha_nueva:
+            turno_eval = turno_nuevo or (registro.turno.turno_id if registro.turno else None)
+            fecha_eval  = fecha_nueva or registro.fecha_planeacion
+            if turno_eval and fecha_eval:
+                try:
+                    turno_obj = Turno.objects.get(turno_id=turno_eval)
+                except Turno.DoesNotExist:
+                    return Response(
+                        {'error': 'Turno no encontrado'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_eval)
+                tiempo_total = sum(
+                    pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                    for pp in registro.productos_planeacion.select_related('dom_producto__tipo_producto').all()
+                    if pp.cantidad_proyectada and pp.dom_producto
                 )
+                disponible_actual, resultado = planeacion_temp.tiempo_disponible_turno(
+                    tiempo_total, excluir_registro_id=registro.id
+                )
+                if resultado is not None and resultado < 0:
+                    return Response(
+                        {
+                            'error': 'El turno no tiene capacidad suficiente para esta modificación.',
+                            'tiempo_disponible': disponible_actual,
+                            'tiempo_requerido': tiempo_total
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
 
         # Verificación de bloqueo de etapa
         if registro.etapa2_bloqueada():
