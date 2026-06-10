@@ -91,3 +91,15 @@ export const actualizarProductoPlaneacion = (productoId, datos) =>
 // Elimina un producto de una planeación (reservado para uso futuro en frontend)
 export const eliminarProductoPlaneacion = (productoId) =>
   api.delete(`/api/productos-planeacion/${productoId}/`)
+
+// Crea un registro de cantidad elaborada por producto en etapa de producción
+export const crearProductoProduccion = (datos) =>
+  api.post('/api/productos-produccion/', datos)
+
+// Actualiza la cantidad elaborada de un ProductoProduccion
+export const actualizarProductoProduccion = (productoId, datos) =>
+  api.put(`/api/productos-produccion/${productoId}/`, datos)
+
+// Elimina un registro de cantidad elaborada por producto
+export const eliminarProductoProduccion = (productoId) =>
+  api.delete(`/api/productos-produccion/${productoId}/`)

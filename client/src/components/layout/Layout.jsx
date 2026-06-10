@@ -8,7 +8,7 @@ import Spinner from '../ui/Spinner'
 // Iconos de react-icons
 import { MdDashboard, MdMenu } from 'react-icons/md'
 import { BsFileEarmarkText, BsPlusCircle, BsPencil, BsXCircle } from 'react-icons/bs'
-import { FiUsers, FiBox, FiClock, FiBarChart2, FiChevronDown, FiChevronUp } from 'react-icons/fi'
+import { FiUsers, FiBox, FiBarChart2, FiChevronDown, FiChevronUp } from 'react-icons/fi'
 
 // Importación logo Mudar
 import logo_mudar from '../../assets/logo_mudar.png'
@@ -163,121 +163,29 @@ function Layout({ modoLogin = false }) {
             {/* Catálogos — solo ADMIN y GERENCIA */}
             {ROLES_CATALOGOS.includes(usuario?.rol) && (
               <>
-                {/* Clientes */}
-                <div>
-                  <button
-                    onClick={() => expandido && toggleMenu('clientes')}
-                    className="w-full flex items-center gap-3 px-2 py-2 rounded text-sm
-                               hover:bg-white/10"
-                  >
-                    <FiUsers size={18} className="flex-shrink-0" />
-                    {expandido && (
-                      <>
-                        <span className="flex-1 text-left">Clientes</span>
-                        {menuAbierto['clientes']
-                          ? <FiChevronUp size={14} />
-                          : <FiChevronDown size={14} />
-                        }
-                      </>
-                    )}
-                  </button>
-                  {expandido && menuAbierto['clientes'] && (
-                    <div className="ml-7 mt-1 space-y-1">
-                      <NavLink to="/clientes?accion=crear"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsPlusCircle size={13} /><span>Crear cliente</span>
-                      </NavLink>
-                      <NavLink to="/clientes?accion=editar"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsPencil size={13} /><span>Editar cliente</span>
-                      </NavLink>
-                      <NavLink to="/clientes?accion=desactivar"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsXCircle size={13} /><span>Desactivar cliente</span>
-                      </NavLink>
-                    </div>
-                  )}
-                </div>
+                {/* Clientes — sin submenú */}
+                <NavLink
+                  to="/clientes"
+                  className={({ isActive }) => `
+                    flex items-center gap-3 px-2 py-2 rounded text-sm
+                    ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}
+                  `}
+                >
+                  <FiUsers size={18} className="flex-shrink-0" />
+                  {expandido && <span>Clientes</span>}
+                </NavLink>
 
-                {/* Productos */}
-                <div>
-                  <button
-                    onClick={() => expandido && toggleMenu('productos')}
-                    className="w-full flex items-center gap-3 px-2 py-2 rounded text-sm
-                               hover:bg-white/10"
-                  >
-                    <FiBox size={18} className="flex-shrink-0" />
-                    {expandido && (
-                      <>
-                        <span className="flex-1 text-left">Productos</span>
-                        {menuAbierto['productos']
-                          ? <FiChevronUp size={14} />
-                          : <FiChevronDown size={14} />
-                        }
-                      </>
-                    )}
-                  </button>
-                  {expandido && menuAbierto['productos'] && (
-                    <div className="ml-7 mt-1 space-y-1">
-                      <NavLink to="/familias?accion=crear"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsPlusCircle size={13} /><span>Crear familia</span>
-                      </NavLink>
-                      <NavLink to="/familias?accion=desactivar"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsXCircle size={13} /><span>Desactivar familia</span>
-                      </NavLink>
-                      <NavLink to="/productos?accion=crear"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsPlusCircle size={13} /><span>Crear producto</span>
-                      </NavLink>
-                      <NavLink to="/productos?accion=editar"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsPencil size={13} /><span>Editar producto</span>
-                      </NavLink>
-                      <NavLink to="/productos?accion=desactivar"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsXCircle size={13} /><span>Desactivar producto</span>
-                      </NavLink>
-                    </div>
-                  )}
-                </div>
-
-                {/* Turnos */}
-                <div>
-                  <button
-                    onClick={() => expandido && toggleMenu('turnos')}
-                    className="w-full flex items-center gap-3 px-2 py-2 rounded text-sm
-                               hover:bg-white/10"
-                  >
-                    <FiClock size={18} className="flex-shrink-0" />
-                    {expandido && (
-                      <>
-                        <span className="flex-1 text-left">Turnos</span>
-                        {menuAbierto['turnos']
-                          ? <FiChevronUp size={14} />
-                          : <FiChevronDown size={14} />
-                        }
-                      </>
-                    )}
-                  </button>
-                  {expandido && menuAbierto['turnos'] && (
-                    <div className="ml-7 mt-1 space-y-1">
-                      <NavLink to="/turnos?accion=crear"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsPlusCircle size={13} /><span>Crear turno</span>
-                      </NavLink>
-                      <NavLink to="/turnos?accion=editar"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsPencil size={13} /><span>Editar turno</span>
-                      </NavLink>
-                      <NavLink to="/turnos?accion=desactivar"
-                        className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
-                        <BsXCircle size={13} /><span>Desactivar turno</span>
-                      </NavLink>
-                    </div>
-                  )}
-                </div>
+                {/* Productos — sin submenú */}
+                <NavLink
+                  to="/productos"
+                  className={({ isActive }) => `
+                    flex items-center gap-3 px-2 py-2 rounded text-sm
+                    ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}
+                  `}
+                >
+                  <FiBox size={18} className="flex-shrink-0" />
+                  {expandido && <span>Productos</span>}
+                </NavLink>
               </>
             )}
 

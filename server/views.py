@@ -22,6 +22,7 @@ from .models import (
     ProductoPlaneacion,
     RegistroAlmacen,
     RegistroProduccion,
+    ProductoProduccion,
     RegistroTiempoProduccion,
     PausaTiempoProduccion,
     RegistroTratamiento, 
@@ -51,6 +52,7 @@ from .serializers import (
     RegistroTratamientoSerializer,
     RegistroPlaneacionSerializer,
     ProductoPlaneacionSerializer,
+    ProductoProduccionSerializer,
     AuditoriaDomSerializer,                 # viaja dentro de InformeAuditoriaSerializer
     LoginSerializer, 
     CambioPasswordSerializer,
@@ -1843,7 +1845,9 @@ class RegistroPlaneacionDetalleView(APIView):
         
         # Refresca el objeto con relaciones cargadas
         registro = RegistroPlaneacion.objects.select_related(
-        'dom', 'turno', 'dom_producto__tipo_producto'
+            'dom', 'turno'
+        ).prefetch_related(
+            'productos_planeacion__dom_producto__tipo_producto'
         ).get(id=registro.id)
 
         return Response(
@@ -1892,6 +1896,35 @@ class ProductoPlaneacionListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        dom_producto_id = request.data.get('dom_producto')
+        cantidad_proyectada_nueva = request.data.get('cantidad_proyectada')
+
+        if dom_producto_id and cantidad_proyectada_nueva is not None:
+            try:
+                dom_producto = ProductosDom.objects.get(id=dom_producto_id)
+            except ProductosDom.DoesNotExist:
+                return Response(
+                    {'error': 'Producto del DOM no encontrado'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            ya_proyectado = ProductoPlaneacion.objects.filter(
+                dom_producto=dom_producto,
+                registro_planeacion__dom=planeacion.dom
+            ).aggregate(total=Sum('cantidad_proyectada'))['total'] or 0
+
+            if ya_proyectado + cantidad_proyectada_nueva > dom_producto.cantidad_pedido:
+                return Response(
+                    {
+                        'error': 'La cantidad proyectada supera la cantidad pedida del producto',
+                        'cantidad_pedida': dom_producto.cantidad_pedido,
+                        'cantidad_ya_proyectada': ya_proyectado,
+                        'cantidad_solicitada': cantidad_proyectada_nueva,
+                        'disponible': dom_producto.cantidad_pedido - ya_proyectado
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         serializer = ProductoPlaneacionSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -1900,6 +1933,14 @@ class ProductoPlaneacionListView(APIView):
             )
 
         producto_planeacion = serializer.save(registro_planeacion=planeacion)
+
+        registrar_auditoria(
+            dom=planeacion.dom,
+            usuario=request.user,
+            accion='CREACION',
+            etapa='etapa_2',
+            campos_modificados={'dom_producto_id': str(request.data.get('dom_producto')), 'cantidad_proyectada': str(cantidad_proyectada_nueva)}
+        )
 
         return Response(
             {
@@ -1937,6 +1978,25 @@ class ProductoPlaneacionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        cantidad_proyectada_nueva = request.data.get('cantidad_proyectada')
+        if cantidad_proyectada_nueva is not None:
+            ya_proyectado = ProductoPlaneacion.objects.filter(
+                dom_producto=producto.dom_producto,
+                registro_planeacion__dom=producto.registro_planeacion.dom
+            ).exclude(id=producto_id).aggregate(total=Sum('cantidad_proyectada'))['total'] or 0
+
+            if ya_proyectado + cantidad_proyectada_nueva > producto.dom_producto.cantidad_pedido:
+                return Response(
+                    {
+                        'error': 'La cantidad proyectada supera la cantidad pedida del producto',
+                        'cantidad_pedida': producto.dom_producto.cantidad_pedido,
+                        'cantidad_ya_proyectada': ya_proyectado,
+                        'cantidad_solicitada': cantidad_proyectada_nueva,
+                        'disponible': producto.dom_producto.cantidad_pedido - ya_proyectado
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         serializer = ProductoPlaneacionSerializer(producto, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -1945,6 +2005,14 @@ class ProductoPlaneacionDetalleView(APIView):
             )
 
         producto = serializer.save()
+
+        registrar_auditoria(
+            dom=producto.registro_planeacion.dom,
+            usuario=request.user,
+            accion='ACTUALIZACION',
+            etapa='etapa_2',
+            campos_modificados={k: str(v) for k, v in request.data.items()}
+        )
 
         return Response(
             {
@@ -1977,9 +2045,221 @@ class ProductoPlaneacionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        dom = producto.registro_planeacion.dom
+
         producto.delete()
+
+        registrar_auditoria(
+            dom=dom,
+            usuario=request.user,
+            accion='ELIMINACION',
+            etapa='etapa_2',
+            campos_modificados={'dom_producto_id': str(producto.dom_producto.id)}
+        )
+
         return Response(
             {'mensaje': 'Producto eliminado de la planeación correctamente'},
+            status=status.HTTP_200_OK
+        )
+
+
+# ── Endpoint ProductoProduccion ───────────────────────────────────────────────
+
+class ProductoProduccionListView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes     = [IsAuthenticated]
+
+    def post(self, request):
+        if not verificar_rol(request, ['ADMIN', 'LIDER_PLANTA']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        registro_produccion_id = request.data.get('registro_produccion')
+        producto_planeacion_id = request.data.get('producto_planeacion')
+
+        if not registro_produccion_id or not producto_planeacion_id:
+            return Response(
+                {'error': 'Debe indicar registro_produccion y producto_planeacion'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            registro = RegistroProduccion.objects.get(id=registro_produccion_id)
+        except RegistroProduccion.DoesNotExist:
+            return Response(
+                {'error': 'Registro de producción no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if registro.etapa_4_bloqueada():
+            return Response(
+                {'error': 'El registro de producción está bloqueado'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            pp = ProductoPlaneacion.objects.get(id=producto_planeacion_id)
+        except ProductoPlaneacion.DoesNotExist:
+            return Response(
+                {'error': 'Producto de planeación no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada')
+        if cantidad_elaborada_nueva is not None:
+            disponible = registro.registro_planeacion.cantidad_disponible_produccion(
+                pp,
+                int(cantidad_elaborada_nueva)
+            )
+            if disponible < 0:
+                return Response(
+                    {
+                        'error': 'La cantidad elaborada supera la cantidad proyectada del producto',
+                        'cantidad_proyectada': pp.cantidad_proyectada,
+                        'cantidad_ya_elaborada': pp.cantidad_elaborada,
+                        'cantidad_solicitada': int(cantidad_elaborada_nueva),
+                        'disponible': max(0, pp.cantidad_proyectada - pp.cantidad_elaborada)
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        serializer = ProductoProduccionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'error': 'Datos inválidos', 'detalle': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        producto = serializer.save(registrado_por=request.user)
+
+        registrar_auditoria(
+            dom=registro.registro_planeacion.dom,
+            usuario=request.user,
+            accion='CREACION',
+            etapa='etapa_4',
+            campos_modificados={k: str(v) for k, v in request.data.items()}
+        )
+
+        return Response(
+            {
+                'mensaje': 'Cantidad elaborada registrada correctamente',
+                'producto': ProductoProduccionSerializer(producto).data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+class ProductoProduccionDetalleView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes     = [IsAuthenticated]
+
+    def put(self, request, producto_id):
+        if not verificar_rol(request, ['ADMIN', 'LIDER_PLANTA']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            producto = ProductoProduccion.objects.select_related(
+                'registro_produccion__registro_planeacion',
+                'producto_planeacion'
+            ).get(id=producto_id)
+        except ProductoProduccion.DoesNotExist:
+            return Response(
+                {'error': 'Producto de producción no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if producto.registro_produccion.etapa_4_bloqueada():
+            return Response(
+                {'error': 'El registro de producción está bloqueado'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada')
+        if cantidad_elaborada_nueva is not None:
+            disponible = producto.registro_produccion.registro_planeacion.cantidad_disponible_produccion(
+                producto.producto_planeacion,
+                int(cantidad_elaborada_nueva),
+                excluir_producto_produccion_id=producto_id
+            )
+            if disponible < 0:
+                return Response(
+                    {
+                        'error': 'La cantidad elaborada supera la cantidad proyectada del producto',
+                        'cantidad_proyectada': producto.producto_planeacion.cantidad_proyectada,
+                        'cantidad_ya_elaborada': producto.producto_planeacion.cantidad_elaborada - producto.cantidad_elaborada,
+                        'cantidad_solicitada': int(cantidad_elaborada_nueva),
+                        'disponible': max(0, producto.producto_planeacion.cantidad_proyectada - (producto.producto_planeacion.cantidad_elaborada - producto.cantidad_elaborada))
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        serializer = ProductoProduccionSerializer(producto, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {'error': 'Datos inválidos', 'detalle': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        producto = serializer.save()
+
+        registrar_auditoria(
+            dom=producto.registro_produccion.registro_planeacion.dom,
+            usuario=request.user,
+            accion='ACTUALIZACION',
+            etapa='etapa_4',
+            campos_modificados={k: str(v) for k, v in request.data.items()}
+        )
+
+        return Response(
+            {
+                'mensaje': 'Cantidad elaborada actualizada correctamente',
+                'producto': ProductoProduccionSerializer(producto).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def delete(self, request, producto_id):
+        if not verificar_rol(request, ['ADMIN', 'LIDER_PLANTA']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            producto = ProductoProduccion.objects.select_related(
+                'registro_produccion__registro_planeacion'
+            ).get(id=producto_id)
+        except ProductoProduccion.DoesNotExist:
+            return Response(
+                {'error': 'Producto de producción no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if producto.registro_produccion.etapa_4_bloqueada():
+            return Response(
+                {'error': 'El registro de producción está bloqueado'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        dom = producto.registro_produccion.registro_planeacion.dom
+
+        producto.delete()
+
+        registrar_auditoria(
+            dom=dom,
+            usuario=request.user,
+            accion='ELIMINACION',
+            etapa='etapa_4',
+            campos_modificados={'producto_planeacion_id': str(producto.producto_planeacion.id)}
+        )
+
+        return Response(
+            {'mensaje': 'Cantidad elaborada eliminada correctamente'},
             status=status.HTTP_200_OK
         )
 
@@ -2204,23 +2484,6 @@ class RegistroProduccionListView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada', None)
-        producto_planeacion_id   = request.data.get('producto_planeacion', None)
-        if cantidad_elaborada_nueva is not None and producto_planeacion_id:
-            try:
-                pp = ProductoPlaneacion.objects.get(id=producto_planeacion_id)
-                disponible = planeacion.cantidad_disponible_produccion(pp, int(cantidad_elaborada_nueva))
-                if disponible < 0:
-                    return Response(
-                        {
-                            'error': 'La cantidad elaborada supera la cantidad pedida.',
-                            'cantidad_disponible': planeacion.cantidad_disponible_produccion(pp, 0),
-                            'cantidad_requerida': int(cantidad_elaborada_nueva)
-                        },
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-            except ProductoPlaneacion.DoesNotExist:
-                pass
 
         # Asigna numero_registro automaticamente. recordar se permiten N registros
         ultimo = RegistroProduccion.objects.filter(registro_planeacion=planeacion).order_by('-numero_registro').first()
@@ -2299,27 +2562,6 @@ class RegistroProduccionDetalleView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Lógica para validar que en la creanción de N registros de producción la cantidad elaborada supere la cantidad del pedido
-        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada', None)
-        planeacion = registro.registro_planeacion
-        if cantidad_elaborada_nueva is not None and registro.producto_planeacion:
-            disponible = planeacion.cantidad_disponible_produccion(
-                registro.producto_planeacion,
-                int(cantidad_elaborada_nueva),
-                excluir_registro_id=registro_id
-            )
-            if disponible < 0:
-                return Response(
-                    {
-                        'error': 'La cantidad elaborada supera la cantidad pedida.',
-                        'cantidad_disponible': planeacion.cantidad_disponible_produccion(
-                            registro.producto_planeacion, 0, excluir_registro_id=registro_id
-                        ),
-                        'cantidad_requerida': int(cantidad_elaborada_nueva)
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
         # Verificación bloqueo etapa
         if registro.etapa_4_bloqueada():
             return Response(
@@ -2926,7 +3168,7 @@ class DashboardView(APIView):
         ]
 
         # Metricas de producción globales
-        cantidad_elaborada_total = RegistroProduccion.objects.aggregate(
+        cantidad_elaborada_total = ProductoProduccion.objects.aggregate(
             total=Sum('cantidad_elaborada')
         )['total'] or 0
 
@@ -2980,9 +3222,9 @@ class DashboardView(APIView):
                 tipo_producto_id=producto_id
             ).aggregate(total=Sum('cantidad_pedido'))['total'] or 0
 
-            cantidad_elaborada = RegistroProduccion.objects.filter(
-                registro_planeacion__dom__in=doms_con_producto,
-                registro_planeacion__dom_producto__tipo_producto_id=producto_id
+            cantidad_elaborada = ProductoProduccion.objects.filter(
+                producto_planeacion__registro_planeacion__dom__in=doms_con_producto,
+                producto_planeacion__dom_producto__tipo_producto_id=producto_id
             ).aggregate(total=Sum('cantidad_elaborada'))['total'] or 0
 
             cantidad_pendiente = cantidad_pedida - cantidad_elaborada

@@ -15,6 +15,7 @@ import {
   actualizarProduccion, crearProduccion,
   actualizarTratamiento, crearTratamiento,
   crearProductoPlaneacion, actualizarProductoPlaneacion,
+  crearProductoProduccion, actualizarProductoProduccion, eliminarProductoProduccion,
 } from '../../api/doms'
 import { obtenerClientes, obtenerListasPorTipo, obtenerTurnos, consultarTurnoDia } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
@@ -80,6 +81,10 @@ function PaginaEditarDom() {
   // Estado local para edición de cantidades por producto
   const [proyectadaLocal, setProyectadaLocal] = useState({})
   const [elaboradaLocal, setElaboradaLocal]   = useState({})
+
+  // Estado local para cálculos de capacidad (preview)
+  const [capacidadCalculo, setCapacidadCalculo] = useState(null)
+  const [tiempoRestantePreview, setTiempoRestantePreview] = useState(null)
 
   // Listas para dropdowns
   const [tiposEstadoDom, setTiposEstadoDom]       = useState([])
@@ -154,6 +159,19 @@ function PaginaEditarDom() {
     }
   }, [planeaciones, idxPlaneacion])
 
+  // Calcula capacidad en tiempo real (preview) cuando cambian operarios o duración
+  useEffect(() => {
+    if (datosTurnoDia.numero_operarios && datosTurnoDia.minutos_totales && !turnoDiaExistente) {
+      const capacidad = parseInt(datosTurnoDia.numero_operarios) * parseInt(datosTurnoDia.minutos_totales)
+      setCapacidadCalculo(capacidad)
+      // Opción B: mostrar capacidad disponible (sin otras planeaciones previas aún)
+      setTiempoRestantePreview(capacidad)
+    } else {
+      setCapacidadCalculo(null)
+      setTiempoRestantePreview(null)
+    }
+  }, [datosTurnoDia.numero_operarios, datosTurnoDia.minutos_totales, turnoDiaExistente])
+
   // ── Typeahead cliente ──────────────────────────────────────────────────────
   useEffect(() => {
     if (textoCliente.length < 2) return setSugerenciasCliente([])
@@ -188,10 +206,12 @@ function PaginaEditarDom() {
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   // Registro de producción de la planeación activa para un producto (via producto_planeacion FK)
-  const produccionDeProd = (productoDomId) => {
-    const pp = planActual?.productos_planeacion?.find(p => p.dom_producto === productoDomId)
-    if (!pp) return null
-    return (planActual?.registros_produccion ?? []).find(r => r.producto_planeacion === pp.id) ?? null
+  // Busca ProductoProduccion del producto en el RegistroProduccion activo
+  const productoProduccionActivo = (productoPlanificacionId) => {
+    if (!produccionActual) return null
+    return (produccionActual?.productos_produccion ?? []).find(
+      pp => pp.producto_planeacion === productoPlanificacionId
+    ) ?? null
   }
 
   // Suma cantidad_elaborada por ProductosDom a través de todas las planeaciones (via FK)
@@ -200,6 +220,13 @@ function PaginaEditarDom() {
       .flatMap(p => p.productos_planeacion ?? [])
       .filter(pp => pp.dom_producto === productoDomId)
       .reduce((sum, pp) => sum + (pp.cantidad_elaborada ?? 0), 0)
+
+  // Suma cantidad_proyectada por ProductosDom a través de todas las planeaciones
+  const proyectadaPorProducto = (productoDomId) =>
+    planeaciones
+      .flatMap(p => p.productos_planeacion ?? [])
+      .filter(pp => pp.dom_producto === productoDomId)
+      .reduce((sum, pp) => sum + (pp.cantidad_proyectada ?? 0), 0)
 
   // Consulta RegistroTurnoDia cuando cambia turno o fecha en etapa 3
   const consultarDisponibilidadTurno = async (turnoId, fecha) => {
@@ -224,17 +251,17 @@ function PaginaEditarDom() {
     setTimeout(() => setExito(null), 3000)
   }
 
-  // Crea un RegistroProduccion y guarda cantidad_elaborada en un solo paso
-  const crearYGuardarElaborada = async (ppId, localKey) => {
+  // Crea un ProductoProduccion (cantidad elaborada por producto)
+  const crearProductoElaborada = async (ppId, localKey) => {
     const valor = elaboradaLocal[localKey]
-    if (!planActual || !valor) return
+    if (!produccionActual || !valor) return
     setGuardando(true)
     setError(null)
     try {
-      await crearProduccion({
-        registro_planeacion: planActual.id,
+      await crearProductoProduccion({
+        registro_produccion: produccionActual.id,
         producto_planeacion: ppId,
-        cantidad_elaborada:  toInt(valor),
+        cantidad_elaborada: toInt(valor),
       })
       const res = await obtenerPlaneacion({ dom_id: domId })
       setPlaneaciones(res.data.registros ?? [])
@@ -247,14 +274,16 @@ function PaginaEditarDom() {
     }
   }
 
-  // Actualiza cantidad_elaborada de un RegistroProduccion existente
-  const guardarElaboradaPorProducto = async (registro, localKey) => {
+  // Actualiza ProductoProduccion existente
+  const actualizarProductoElaborada = async (productoProduccionId, localKey) => {
     const valor = elaboradaLocal[localKey]
-    if (!registro || valor === undefined) return
+    if (!productoProduccionId || valor === undefined) return
     setGuardando(true)
     setError(null)
     try {
-      await actualizarProduccion(registro.id, { ...registro, cantidad_elaborada: toInt(valor) })
+      await actualizarProductoProduccion(productoProduccionId, {
+        cantidad_elaborada: toInt(valor),
+      })
       const res = await obtenerPlaneacion({ dom_id: domId })
       setPlaneaciones(res.data.registros ?? [])
       setElaboradaLocal(prev => { const n = { ...prev }; delete n[localKey]; return n })
@@ -279,7 +308,18 @@ function PaginaEditarDom() {
         cantidad_proyectada: toInt(cantidad),
       })
       const res = await obtenerPlaneacion({ dom_id: domId })
-      setPlaneaciones(res.data.registros ?? [])
+      const nuevosRegistros = res.data.registros ?? []
+      setPlaneaciones(prev => prev.map((p, i) =>
+        i === idxPlaneacion
+          ? {
+              ...p,
+              productos_planeacion: nuevosRegistros[idxPlaneacion]?.productos_planeacion ?? p.productos_planeacion,
+              tiempo_proyectado:    nuevosRegistros[idxPlaneacion]?.tiempo_proyectado    ?? p.tiempo_proyectado,
+              tiempo_restante_dia:  nuevosRegistros[idxPlaneacion]?.tiempo_restante_dia  ?? p.tiempo_restante_dia,
+              sumatoria_tiempo_asignado_turnos: nuevosRegistros[idxPlaneacion]?.sumatoria_tiempo_asignado_turnos ?? p.sumatoria_tiempo_asignado_turnos,
+            }
+          : p
+      ))
       setProyectadaLocal(prev => { const n = { ...prev }; delete n[localKey]; return n })
       mostrarExito('Producto agregado a la planeación.')
     } catch (err) {
@@ -298,11 +338,22 @@ function PaginaEditarDom() {
     try {
       await actualizarProductoPlaneacion(productoPlaneacion.id, { cantidad_proyectada: toInt(valor) })
       const res = await obtenerPlaneacion({ dom_id: domId })
-      setPlaneaciones(res.data.registros ?? [])
+      const nuevosRegistros = res.data.registros ?? []
+      setPlaneaciones(prev => prev.map((p, i) =>
+        i === idxPlaneacion
+          ? {
+              ...p,
+              productos_planeacion: nuevosRegistros[idxPlaneacion]?.productos_planeacion ?? p.productos_planeacion,
+              tiempo_proyectado:    nuevosRegistros[idxPlaneacion]?.tiempo_proyectado    ?? p.tiempo_proyectado,
+              tiempo_restante_dia:  nuevosRegistros[idxPlaneacion]?.tiempo_restante_dia  ?? p.tiempo_restante_dia,
+              sumatoria_tiempo_asignado_turnos: nuevosRegistros[idxPlaneacion]?.sumatoria_tiempo_asignado_turnos ?? p.sumatoria_tiempo_asignado_turnos,
+            }
+          : p
+      ))
       setProyectadaLocal(prev => { const n = { ...prev }; delete n[productoPlaneacion.id]; return n })
       mostrarExito('Cantidad proyectada actualizada.')
-    } catch {
-      setError('Error al guardar la cantidad proyectada.')
+    } catch (err) {
+      setError(err.response?.data?.error ?? 'Error al guardar la cantidad proyectada.')
     } finally {
       setGuardando(false)
     }
@@ -380,6 +431,28 @@ function PaginaEditarDom() {
   const guardarPlaneacion = async () => {
     const plan = planeaciones[idxPlaneacion]
     if (!plan) return
+
+    // Validación 1: Verificar que turno, fecha, operarios y duración están completos
+    if (!plan.turno || !plan.fecha_planeacion || !datosTurnoDia.numero_operarios || !datosTurnoDia.minutos_totales) {
+      setError('Debe completar: Turno, Fecha, Número de operarios y Duración del turno.')
+      return
+    }
+
+    // Validación 2: Verificar capacidad disponible
+    if (turnoDiaExistente) {
+      // Segunda planeación — validar que hay capacidad en BD
+      if (plan.tiempo_restante_dia !== null && plan.tiempo_restante_dia < 0) {
+        setError(`No hay capacidad suficiente. Disponible: ${plan.tiempo_restante_dia} min (negativo = exceso).`)
+        return
+      }
+    } else {
+      // Primera planeación — validar capacidad local
+      if (capacidadCalculo && plan.tiempo_proyectado && capacidadCalculo < plan.tiempo_proyectado) {
+        setError(`No hay capacidad suficiente. Disponible: ${capacidadCalculo} min, Requerido: ${plan.tiempo_proyectado} min.`)
+        return
+      }
+    }
+
     setGuardando(true)
     setError(null)
     try {
@@ -557,6 +630,7 @@ function PaginaEditarDom() {
           productos={datosDom.productos}
           planeaciones={planeaciones}
           elaboradaPorProducto={elaboradaPorProducto}
+          proyectadaPorProducto={proyectadaPorProducto}
         />
       )}
 
@@ -877,6 +951,41 @@ function PaginaEditarDom() {
               )}
             </div>
           )}
+
+          {/* Tabla de cantidad proyectada por producto — siempre visible cuando hay planeación */}
+          {planActual && datosDom?.productos?.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                Cantidad proyectada por producto
+              </p>
+              <div className="overflow-x-auto border border-gray-200 rounded">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-100 border-b border-gray-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-700">Producto</th>
+                      <th className="px-3 py-2 text-right font-semibold text-gray-700">Cantidad proyectada</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {datosDom.productos.map(prod => {
+                      const pp = planActual.productos_planeacion?.find(p => p.dom_producto === prod.id)
+                      return (
+                        <tr key={prod.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 text-gray-800">
+                            {prod.tipo_producto_detalle?.nombre_producto ?? '—'}
+                          </td>
+                          <td className="px-3 py-2 text-right text-gray-700">
+                            {pp?.cantidad_proyectada ?? '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <FormEtapa
             titulo="Etapa 3 — Planeación"
             editable={esEditable('etapa_2') && !planActual?.planeacion_completa}
@@ -884,6 +993,7 @@ function PaginaEditarDom() {
             onGuardar={guardarPlaneacion}
             sinRegistro={!planActual}
           >
+            {/* BLOQUE 1: Campos de turno, fecha, operarios y duración */}
             {planActual && (
               <div className="grid grid-cols-2 gap-4">
                 <CampoFormulario label="Fecha planeación">
@@ -910,18 +1020,20 @@ function PaginaEditarDom() {
                   </select>
                 </CampoFormulario>
 
-                {/* Operarios y minutos — solo lectura si ya existe RegistroTurnoDia */}
+                {/* Operarios y minutos — habilitados para lectura/edición, pero con validación al guardar */}
                 <CampoFormulario label="Número de operarios">
                   <input type="number"
                     value={turnoDiaExistente
                       ? turnoDiaExistente.numero_operarios
                       : datosTurnoDia.numero_operarios}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, numero_operarios: e.target.value }))}
-                    disabled={!!turnoDiaExistente || !esEditable('etapa_2')}
+                    disabled={!esEditable('etapa_2')}
                     placeholder="Ingrese número de operarios"
                     className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
                   {turnoDiaExistente && (
-                    <p className="text-xs text-gray-400 mt-1">Definido para este turno y fecha</p>
+                    <p className="text-xs text-amber-600 mt-1">
+                      ⚠️ Ya existe un registro de turno para este turno y fecha. No se guardarán cambios en estos campos.
+                    </p>
                   )}
                 </CampoFormulario>
                 <CampoFormulario label="Duración del turno">
@@ -930,13 +1042,78 @@ function PaginaEditarDom() {
                       ? turnoDiaExistente.minutos_totales
                       : datosTurnoDia.minutos_totales}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, minutos_totales: e.target.value }))}
-                    disabled={!!turnoDiaExistente || !esEditable('etapa_2')}
+                    disabled={!esEditable('etapa_2')}
                     className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
                     {OPCIONES_MINUTOS.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
                 </CampoFormulario>
+                <CampoLectura
+                  label="Tiempo proyectado total (min)"
+                  valor={planActual?.tiempo_proyectado}
+                />
+              </div>
+            )}
+
+            {/* BLOQUE 2: Consolidado del turno */}
+            {planActual && (
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded space-y-3">
+                <p className="text-xs font-semibold text-blue-900 uppercase tracking-wide">Consolidado del turno</p>
+
+                <div className="grid grid-cols-4 gap-3">
+                  <div>
+                    <p className="text-xs text-gray-600">Capacidad total</p>
+                    <p className="text-lg font-bold text-blue-600">
+                      {turnoDiaExistente
+                        ? turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales
+                        : (capacidadCalculo ?? '—')} min
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-gray-600">Ya asignado</p>
+                    <p className="text-lg font-bold text-amber-600">
+                      {turnoDiaExistente
+                        ? ((planActual?.sumatoria_tiempo_asignado_turnos ?? 0) - (planActual?.tiempo_proyectado ?? 0))
+                        : '0'} min
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-gray-600">Tu planeación</p>
+                    <p className="text-lg font-bold text-gray-800">
+                      {planActual?.tiempo_proyectado ?? '—'} min
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-gray-600">Restante</p>
+                    <p className={`text-lg font-bold ${
+                      turnoDiaExistente
+                        ? (planActual?.tiempo_restante_dia ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
+                        : (tiempoRestantePreview ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
+                    }`}>
+                      {turnoDiaExistente
+                        ? planActual?.tiempo_restante_dia ?? '—'
+                        : tiempoRestantePreview ?? '—'} min
+                    </p>
+                  </div>
+                </div>
+
+                {/* Advertencia si no hay capacidad */}
+                {((turnoDiaExistente && (planActual?.tiempo_restante_dia ?? 0) < 0) ||
+                  (!turnoDiaExistente && (tiempoRestantePreview ?? 0) < 0)) && (
+                  <p className="text-xs text-red-600 font-semibold mt-2">
+                    ⚠️ No hay capacidad suficiente en este turno para esta planeación.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* BLOQUE 3: Resto de campos de planeación */}
+            {planActual && (
+              <div className="grid grid-cols-2 gap-4">
                 <CampoFormulario label="Orden producción dentro de turno y fecha">
                   <input type="text" value={planActual.orden_produccion ?? ''}
                     onChange={e => actualizarCampoPlaneacion('orden_produccion', e.target.value)}
@@ -1037,6 +1214,11 @@ function PaginaEditarDom() {
                     onChange={v => actualizarCampoPlaneacion('sello_ica', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActual?.planeacion_completa} />
                 </CampoFormulario>
+                <CampoFormulario label="¿Productos llevan marcas o símbolos del cliente?">
+                  <SelectSiNo value={boolToStr(planActual.marcado_cliente)}
+                    onChange={v => actualizarCampoPlaneacion('marcado_cliente', strToBool(v))}
+                    disabled={!esEditable('etapa_2')} />
+                </CampoFormulario>
               </div>
             )}
 
@@ -1094,16 +1276,20 @@ function PaginaEditarDom() {
                 })}
               </div>
             )}
+
+            {/* BLOQUE 4: Bloqueo de etapa */}
             {planActual && (
-              <CampoFormulario label="¿Registro de planeación completo y relacionado con producción?">
-                <SelectSiNo value={boolToStr(planActual.planeacion_completa)}
-                  onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
-                  disabled={!esEditable('etapa_2')} />
-                <p className="text-xs text-amber-600 mt-1">
-                  Importante: una vez marque Sí y guarde, no podrá realizar
-                  modificaciones posteriores a esta etapa.
-                </p>
-              </CampoFormulario>
+              <div className="grid grid-cols-2 gap-4">
+                <CampoFormulario label="¿Registro de planeación completo y relacionado con producción?">
+                  <SelectSiNo value={boolToStr(planActual.planeacion_completa)}
+                    onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
+                    disabled={!esEditable('etapa_2')} />
+                  <p className="text-xs text-amber-600 mt-1">
+                    Importante: una vez marque Sí y guarde, no podrá realizar
+                    modificaciones posteriores a esta etapa.
+                  </p>
+                </CampoFormulario>
+              </div>
             )}
           </FormEtapa>
           </>
@@ -1174,17 +1360,17 @@ function PaginaEditarDom() {
         {pestanaActiva === 'etapa4' && (
           <div className="space-y-4">
 
-            {/* Sección cantidad elaborada por producto */}
-            {planActual && datosDom.productos?.length > 0 && (
+            {/* Sección cantidad elaborada por producto — solo se muestra si hay RegistroProduccion activo */}
+            {produccionActual && datosDom.productos?.length > 0 && (
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
                   Cantidad elaborada por producto
                 </p>
                 {datosDom.productos.map(prod => {
-                  const pp        = planActual.productos_planeacion?.find(p => p.dom_producto === prod.id)
-                  const registro  = produccionDeProd(prod.id)
-                  const localKey  = pp?.id ?? `new_${prod.id}`
-                  const bloqueado = registro?.cierre_produccion === true
+                  const pp                   = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
+                  const productoProduccion   = pp ? productoProduccionActivo(pp.id) : null
+                  const localKey             = pp?.id ?? `new_${prod.id}`
+                  const bloqueado            = produccionActual?.cierre_produccion === true
                   return (
                     <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
                       <div>
@@ -1194,7 +1380,7 @@ function PaginaEditarDom() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-xs text-gray-500">Proyectado</p>
+                        <p className="text-xs text-gray-500">Cantidad proyectada</p>
                         <p className="text-sm text-gray-700">{pp?.cantidad_proyectada ?? '—'}</p>
                       </div>
                       <CampoFormulario label="Cantidad elaborada">
@@ -1205,7 +1391,7 @@ function PaginaEditarDom() {
                         ) : (
                           <div className="flex gap-2">
                             <input type="number"
-                              value={elaboradaLocal[localKey] ?? registro?.cantidad_elaborada ?? ''}
+                              value={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada ?? ''}
                               onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
                               disabled={!esEditable('etapa_4') || bloqueado}
                               placeholder="Ingrese cantidad"
@@ -1213,14 +1399,14 @@ function PaginaEditarDom() {
                             {esEditable('etapa_4') && !bloqueado &&
                               elaboradaLocal[localKey] !== undefined && (
                               <button
-                                onClick={() => registro
-                                  ? guardarElaboradaPorProducto(registro, localKey)
-                                  : crearYGuardarElaborada(pp.id, localKey)
+                                onClick={() => productoProduccion
+                                  ? actualizarProductoElaborada(productoProduccion.id, localKey)
+                                  : crearProductoElaborada(pp.id, localKey)
                                 }
                                 disabled={guardando}
                                 className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
                                            hover:bg-[#134080] disabled:opacity-60">
-                                {registro ? 'Guardar' : 'Agregar'}
+                                {productoProduccion ? 'Guardar' : 'Agregar'}
                               </button>
                             )}
                           </div>
@@ -1240,7 +1426,7 @@ function PaginaEditarDom() {
               etiqueta="Producción"
               campoCierre="cierre_produccion"
               ultimoCerrado={ultimaProduccionCerrada}
-              puedeCrear={esEditable('etapa_4')}
+              puedeCrear={esEditable('etapa_4') && (produccionesActuales.length === 0 || ultimaProduccionCerrada)}
               onNuevo={() => crearNuevoHijo('produccion', crearProduccion, setIdxProduccion)}
               guardando={guardando}
             />
@@ -1249,7 +1435,6 @@ function PaginaEditarDom() {
               editable={esEditable('etapa_4') && !produccionActual?.cierre_produccion}
               guardando={guardando}
               onGuardar={() => guardarHijo('produccion', idxProduccion, actualizarProduccion, {
-                cantidad_elaborada:        toInt(produccionActual?.cantidad_elaborada),
                 minutos_asignados:         toInt(produccionActual?.minutos_asignados),
                 numero_personas_asignadas: toInt(produccionActual?.numero_personas_asignadas),
               })}
@@ -1261,12 +1446,6 @@ function PaginaEditarDom() {
                     label="Tiempo proyectado total (min)"
                     valor={planActual?.tiempo_proyectado}
                   />
-                  <CampoFormulario label="Cantidad elaborada">
-                    <input type="number" value={produccionActual.cantidad_elaborada ?? ''}
-                      onChange={e => actualizarCampoHijo('produccion', 'cantidad_elaborada', e.target.value, idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion}
-                      className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
-                  </CampoFormulario>
                   <CampoFormulario label="Minutos asignados">
                     <input type="number" value={produccionActual.minutos_asignados ?? ''}
                       onChange={e => actualizarCampoHijo('produccion', 'minutos_asignados', e.target.value, idxProduccion)}
@@ -1439,11 +1618,10 @@ function PaginaEditarDom() {
                   ))}
                 </select>
               </CampoFormulario>
-              <CampoFormulario label="Materiales externos">
-                <input type="text" value={datosDom.materiales_externos ?? ''}
-                  onChange={e => actualizarCampoDom('materiales_externos', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+              <CampoFormulario label="¿Este DOM requiere materiales externos?">
+                <SelectSiNo value={boolToStr(datosDom.materiales_externos)}
+                  onChange={v => actualizarCampoDom('materiales_externos', strToBool(v))}
+                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre} />
               </CampoFormulario>
               <CampoFormulario label="Vehículo">
                 <input type="text" value={datosDom.vehiculo ?? ''}
@@ -1620,7 +1798,7 @@ function CampoConsolidado({ label, valor }) {
 }
 
 // Tabla consolidada de productos — visible en todas las pestañas
-function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProducto }) {
+function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProducto, proyectadaPorProducto }) {
   return (
     <div className="mb-4 border border-gray-200 rounded overflow-hidden">
       <table className="w-full text-sm">
@@ -1629,14 +1807,18 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
             <th className="text-left px-3 py-2 font-medium">Producto</th>
             <th className="text-center px-3 py-2 font-medium">Tiempo unit. (min)</th>
             <th className="text-center px-3 py-2 font-medium">Cant. pedido</th>
+            <th className="text-center px-3 py-2 font-medium">Cant. proyectada</th>
+            <th className="text-center px-3 py-2 font-medium">Pendiente por planear</th>
             <th className="text-center px-3 py-2 font-medium">Cant. elaborada</th>
-            <th className="text-center px-3 py-2 font-medium">Cant. pendiente</th>
+            <th className="text-center px-3 py-2 font-medium">Pendiente por producir</th>
           </tr>
         </thead>
         <tbody>
           {productos.map((p, i) => {
+            const proyectada = proyectadaPorProducto(p.id)
             const elaborada  = elaboradaPorProducto(p.id)
-            const pendiente  = (p.cantidad_pedido ?? 0) - elaborada
+            const pendientePorProyectar = (p.cantidad_pedido ?? 0) - (proyectada ?? 0)
+            const proyectadaPendiente = (proyectada ?? 0) - elaborada
             return (
               <tr key={p.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                 <td className="px-3 py-2 text-gray-800">
@@ -1646,9 +1828,13 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
                   {p.tipo_producto_detalle?.tiempo_produccion_unitario ?? '—'}
                 </td>
                 <td className="px-3 py-2 text-center text-gray-600">{p.cantidad_pedido ?? '—'}</td>
+                <td className="px-3 py-2 text-center text-gray-600">{proyectada || '—'}</td>
+                <td className={`px-3 py-2 text-center font-medium ${pendientePorProyectar > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                  {pendientePorProyectar > 0 ? pendientePorProyectar : '—'}
+                </td>
                 <td className="px-3 py-2 text-center text-gray-600">{elaborada}</td>
-                <td className={`px-3 py-2 text-center font-medium ${pendiente > 0 ? 'text-amber-600' : 'text-green-600'}`}>
-                  {pendiente}
+                <td className={`px-3 py-2 text-center font-medium ${proyectadaPendiente > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                  {proyectadaPendiente > 0 ? proyectadaPendiente : '—'}
                 </td>
               </tr>
             )

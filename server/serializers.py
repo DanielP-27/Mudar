@@ -12,6 +12,7 @@ from .models import (
     ProductoPlaneacion,
     RegistroAlmacen,
     RegistroProduccion,
+    ProductoProduccion,
     RegistroTiempoProduccion,
     RegistroTurnoDia,
     PausaTiempoProduccion,
@@ -56,13 +57,17 @@ class FamiliaProductoSerializer(serializers.ModelSerializer):
 # Serializer Productos
 # Uso: Dropdowns listado productos y referencia para calculo de tiempo, se expone tiempo_produccion_unitario para propiedad calculada tiempo_proyectado
 class ProductosSerializer(serializers.ModelSerializer):
-    
+
     # Como cada producto pertenece a una familia, necesita referenciar dicho serializer
     familia_detalle = FamiliaProductoSerializer(source='familia_producto', read_only=True)
+    familia_producto = serializers.PrimaryKeyRelatedField(
+        queryset=FamiliaProducto.objects.all(),
+        required=False, allow_null=True
+    )
 
     class Meta:
         model = Productos
-        fields = ['producto_id', 'nombre_producto', 'familia_detalle', 'tiempo_produccion_unitario', 'activo']
+        fields = ['producto_id', 'nombre_producto', 'familia_producto', 'familia_detalle', 'tiempo_produccion_unitario', 'activo']
 
     def validate_tiempo_produccion_unitario(self, value):
         if value <= 0:
@@ -100,6 +105,14 @@ class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError(
                 'El número de operarios debe ser mayor a 0'
+            )
+        return value
+
+    def validate_minutos_totales(self, value):
+        opciones_validas = [480, 600]
+        if value not in opciones_validas:
+            raise serializers.ValidationError(
+                f'Los minutos totales deben ser 480 (8 horas) o 600 (10 horas), recibido: {value}'
             )
         return value
 
@@ -304,13 +317,41 @@ class RegistroTiempoProduccionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['minutos_totales', 'total_segundos_pausados']
 
+# Serializer: ProductoProduccion
+# Uso: registro de cantidades parciales elaboradas por producto dentro de un RegistroProduccion
+
+class ProductoProduccionSerializer(serializers.ModelSerializer):
+    nombre_producto = serializers.CharField(
+        source='producto_planeacion.dom_producto.tipo_producto.nombre_producto',
+        read_only=True
+    )
+    cantidad_proyectada = serializers.IntegerField(
+        source='producto_planeacion.cantidad_proyectada',
+        read_only=True
+    )
+
+    class Meta:
+        model = ProductoProduccion
+        fields = [
+            'id',
+            'registro_produccion',
+            'producto_planeacion',
+            'cantidad_elaborada',
+            'nombre_producto',
+            'cantidad_proyectada',
+            'fecha_registro',
+        ]
+        read_only_fields = ['fecha_registro', 'registrado_por']
+
+
 # Serializer: RegistroProduccionSerializer
 # Uso: manejo de información de la etapa 4 produccion incluyendo referencias a los serializers de manejo del cronometro, actulizada en tiempo real según JS
 
 class RegistroProduccionSerializer(serializers.ModelSerializer):
-    registro_tiempo = RegistroTiempoProduccionSerializer(source='registros_tiempo', many=True, read_only=True)
+    registro_tiempo    = RegistroTiempoProduccionSerializer(source='registros_tiempo', many=True, read_only=True)
+    productos_produccion = ProductoProduccionSerializer(many=True, read_only=True)
 
-    #Propiedades calculadas Models.py etapa produccion
+    cantidad_elaborada            = serializers.ReadOnlyField()
     tiempo_elaboracion_produccion = serializers.ReadOnlyField()
     minutos_hombre_produccion_dom = serializers.ReadOnlyField()
     minutos_restantes_dom         = serializers.ReadOnlyField()
@@ -325,9 +366,7 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'registro_planeacion',
-            'producto_planeacion',
             'numero_registro',
-            'cantidad_elaborada',
             'minutos_asignados',
             'numero_personas_asignadas',
             'novedad_cumplimiento_produccion',
@@ -335,17 +374,18 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
             'produccion_no_completada',
             'cierre_produccion',
             # propiedades calculadas
+            'cantidad_elaborada',
             'tarea_asignada_planeacion',
             'tiempo_elaboracion_produccion',
             'minutos_hombre_produccion_dom',
             'minutos_restantes_dom',
             'etapa_4_bloqueada',
-            # cronometro
+            # hijos anidados
+            'productos_produccion',
             'registro_tiempo',
         ]
-        
+
         read_only_fields = ['numero_registro']
-        # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
         extra_kwargs = {
             'novedad_cumplimiento_produccion': {
                 'allow_null': True,
@@ -483,6 +523,7 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
             'tratamiento_termico',
             'sello_ica',
             'peso',
+            'marcado_cliente',
 
             # bloqueo
             'planeacion_completa',
@@ -514,6 +555,7 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
             'tratamiento_termico':      {'allow_null': True, 'required': False},
             'sello_ica':                {'allow_null': True, 'required': False},
             'peso':                     {'allow_null': True, 'required': False},
+            'marcado_cliente':          {'allow_null': True, 'required': False},
         }
 
 # Serializer: AuditoriaDom
