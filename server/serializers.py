@@ -195,8 +195,9 @@ class DomDetalleSerializer(serializers.ModelSerializer):
     cantidad_elaborada_total = serializers.ReadOnlyField()
     cantidad_pedida_total = serializers.ReadOnlyField()
     cantidad_pendiente_total = serializers.ReadOnlyField()
+    tiempo_proyectado_total = serializers.ReadOnlyField()
 
-    class Meta: 
+    class Meta:
         model = Dom
         fields = [
             #PK
@@ -240,6 +241,7 @@ class DomDetalleSerializer(serializers.ModelSerializer):
             'cantidad_pedida_total',
             'cantidad_pendiente_total',
             'cantidad_elaborada_total',
+            'tiempo_proyectado_total',
         ]
         read_only_fields = ['dom_id', 'fecha_asignacion_dom']
         extra_kwargs = {

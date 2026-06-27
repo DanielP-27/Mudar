@@ -1,0 +1,135 @@
+{
+  "info": {
+    "name": "Mudar - PUT Turno-Dia (Paso 3 - Impacto / Paso 4 - Auditoria)",
+    "description": "Valida que el PUT a RegistroTurnoDiaDetalleView devuelva el bloque 'impacto' (preview_capacidad) y que, cuando deja el turno en déficit, se genere auditoría para cada DOM afectado.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000" },
+    { "key": "token", "value": "" },
+    { "key": "registro_turno_dia_id", "value": "" },
+    { "key": "numero_operarios_nuevo", "value": "" },
+    { "key": "minutos_totales_nuevo", "value": "" },
+    { "key": "dom_id_afectado", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. PUT - Actualizar turno-dia (genera deficit)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Token {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{base_url}}/api/turnos-dia/{{registro_turno_dia_id}}/",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"numero_operarios\": {{numero_operarios_nuevo}},\n  \"minutos_totales\": {{minutos_totales_nuevo}}\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const data = pm.response.json();",
+              "",
+              "pm.test('Respuesta trae mensaje, registro e impacto', function () {",
+              "    pm.expect(data).to.have.property('mensaje');",
+              "    pm.expect(data).to.have.property('registro');",
+              "    pm.expect(data).to.have.property('impacto');",
+              "});",
+              "",
+              "pm.test('Bloque impacto tiene las claves de preview_capacidad', function () {",
+              "    const claves = ['turno', 'fecha', 'capacidad_actual', 'capacidad_propuesta',",
+              "                    'sumatoria_minutos_ocupados', 'restante_propuesto',",
+              "                    'turno_quedaria_negativo', 'deficit_minutos', 'doms'];",
+              "    claves.forEach(c => pm.expect(data.impacto).to.have.property(c));",
+              "});",
+              "",
+              "pm.test('capacidad_propuesta = numero_operarios x minutos_totales guardados', function () {",
+              "    const esperado = data.registro.numero_operarios * data.registro.minutos_totales;",
+              "    pm.expect(data.impacto.capacidad_propuesta).to.eql(esperado);",
+              "});",
+              "",
+              "pm.test('restante_propuesto = capacidad_propuesta - sumatoria_minutos_ocupados', function () {",
+              "    const esperado = data.impacto.capacidad_propuesta - data.impacto.sumatoria_minutos_ocupados;",
+              "    pm.expect(data.impacto.restante_propuesto).to.eql(esperado);",
+              "});",
+              "",
+              "pm.test('turno_quedaria_negativo coincide con el signo de restante_propuesto', function () {",
+              "    pm.expect(data.impacto.turno_quedaria_negativo).to.eql(data.impacto.restante_propuesto < 0);",
+              "});",
+              "",
+              "pm.test('deficit_minutos coincide con abs(restante_propuesto) solo si es negativo', function () {",
+              "    const esperado = data.impacto.turno_quedaria_negativo ? Math.abs(data.impacto.restante_propuesto) : 0;",
+              "    pm.expect(data.impacto.deficit_minutos).to.eql(esperado);",
+              "});",
+              "",
+              "if (data.impacto.doms.length > 0) {",
+              "    pm.environment.set('dom_id_afectado', data.impacto.doms[0].dom_id);",
+              "}",
+              "",
+              "pm.environment.set('turno_quedo_negativo', data.impacto.turno_quedaria_negativo);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. GET - Verificar auditoria generada (solo si el PUT dejo el turno en deficit)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Token {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/informes/auditoria/?fecha_inicio={{$isoTimestamp}}&fecha_fin={{$isoTimestamp}}&dom_id={{dom_id_afectado}}",
+          "host": ["{{base_url}}"],
+          "path": ["api", "informes", "auditoria", ""],
+          "query": [
+            { "key": "fecha_inicio", "value": "{{$isoTimestamp}}" },
+            { "key": "fecha_fin", "value": "{{$isoTimestamp}}" },
+            { "key": "dom_id", "value": "{{dom_id_afectado}}" }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "const hoy = new Date().toISOString().slice(0, 10);",
+              "pm.collectionVariables.set('fecha_hoy', hoy);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Solo correr esta validacion si el PUT anterior dejo el turno negativo', function () {",
+              "    const dejoNegativo = pm.environment.get('turno_quedo_negativo') === 'true';",
+              "    if (!dejoNegativo) {",
+              "        pm.expect(true).to.eql(true);",
+              "        return;",
+              "    }",
+              "    pm.response.to.have.status(200);",
+              "    const data = pm.response.json();",
+              "    pm.expect(data.acciones.length).to.be.above(0);",
+              "    const ultima = data.acciones[0];",
+              "    pm.expect(ultima.accion).to.eql('EDICION');",
+              "    pm.expect(ultima.etapa).to.eql('etapa_2');",
+              "    pm.expect(ultima.campos_modificados).to.have.property('deficit_generado_minutos');",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

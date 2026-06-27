@@ -140,6 +140,47 @@ class RegistroTurnoDia(models.Model):
     def __str__(self):
         return f'{self.turno.nombre_turno} — {self.fecha} — {self.numero_operarios} operarios — {self.minutos_totales} min'
 
+    def preview_capacidad(self, numero_operarios_propuesto, minutos_totales_propuesto):
+        capacidad_propuesta = minutos_totales_propuesto * numero_operarios_propuesto
+
+        planeaciones = RegistroPlaneacion.objects.filter(
+            turno=self.turno,
+            fecha_planeacion=self.fecha,
+        ).select_related('dom__nombre_cliente').prefetch_related(
+            'productos_planeacion__dom_producto__tipo_producto'
+        )
+
+        doms = []
+        sumatoria_minutos_ocupados = 0
+        for planeacion in planeaciones:
+            minutos_ocupados = sum(
+                pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                for pp in planeacion.productos_planeacion.all()
+                if pp.cantidad_proyectada and pp.dom_producto
+            )
+            if minutos_ocupados:
+                doms.append({
+                    'dom_id': planeacion.dom.dom_id,
+                    'nombre_cliente': planeacion.dom.nombre_cliente.nombre_cliente,
+                    'minutos_ocupados': minutos_ocupados,
+                })
+                sumatoria_minutos_ocupados += minutos_ocupados
+
+        restante_propuesto = capacidad_propuesta - sumatoria_minutos_ocupados
+        turno_quedaria_negativo = restante_propuesto < 0
+
+        return {
+            'turno': self.turno_id,
+            'fecha': self.fecha,
+            'capacidad_actual': self.minutos_totales * self.numero_operarios,
+            'capacidad_propuesta': capacidad_propuesta,
+            'sumatoria_minutos_ocupados': sumatoria_minutos_ocupados,
+            'restante_propuesto': restante_propuesto,
+            'turno_quedaria_negativo': turno_quedaria_negativo,
+            'deficit_minutos': abs(restante_propuesto) if turno_quedaria_negativo else 0,
+            'doms': doms,
+        }
+
 # Tabla para el manejo de los listados predefinidos que se encuentran dentro del formato. A diferencia de Clientes, productos y turnos, No necesitan una tabla por separado para su manejo.
 
 class ListaPredefinida(models.Model):
@@ -266,7 +307,15 @@ class Dom(models.Model):
         if pedido:
             return pedido - self.cantidad_elaborada_total
         return None
-    
+
+    @property
+    def tiempo_proyectado_total(self):
+        # Tiempo proyectado del DOM completo: cantidad_pedido x tiempo_produccion_unitario de cada producto registrado en el DOM
+        total = 0
+        for p in self.productos.select_related('tipo_producto').all():
+            total += p.cantidad_pedido * p.tipo_producto.tiempo_produccion_unitario
+        return total or None
+
     def etapa_1_bloqueada(self):
         return self.dom_relacionado_produccion
     
@@ -380,10 +429,9 @@ class RegistroPlaneacion(models.Model):
         ).prefetch_related('productos_planeacion__dom_producto__tipo_producto')
         total = 0
         for p in planeaciones:
-            operarios = p.numero_operarios_turno or 1
             for pp in p.productos_planeacion.all():
                 if pp.cantidad_proyectada and pp.dom_producto:
-                    total += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario * operarios
+                    total += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
         return total
     
     @property

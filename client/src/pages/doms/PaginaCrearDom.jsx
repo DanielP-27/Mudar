@@ -8,6 +8,7 @@ import { useDebounce } from '../../hooks/useDebounce'
 import { toInt } from '../../utils/formatters'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
+import SelectSiNo from '../../components/common/SelectSiNo'
 
 // Tipos de DOM que no llevan productos ni etapas de producción
 const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
@@ -565,24 +566,16 @@ function PaginaCrearDom() {
                       className="campo-input" />
                   </CampoFormulario>
                   <CampoFormulario label="¿DOM resultado de campaña de venta?">
-                    <select value={datosEtapa1.campana_venta}
-                      onChange={e => actualizarEtapa1('campana_venta', e.target.value)}
-                      className="campo-input">
-                      <option value="">Seleccione una opción</option>
-                      <option value="false">No</option>
-                      <option value="true">Sí</option>
-                    </select>
+                    <SelectSiNo name="crear_campana_venta"
+                      value={datosEtapa1.campana_venta}
+                      onChange={v => actualizarEtapa1('campana_venta', v)} />
                   </CampoFormulario>
                 </div>
 
                 <CampoFormulario label="¿DOM relacionado con producción?">
-                  <select value={datosEtapa1.dom_relacionado_produccion}
-                    onChange={e => actualizarEtapa1('dom_relacionado_produccion', e.target.value)}
-                    className="campo-input">
-                    <option value="">Seleccione una opción</option>
-                    <option value="false">No</option>
-                    <option value="true">Sí</option>
-                  </select>
+                  <SelectSiNo name="crear_dom_relacionado_produccion"
+                    value={datosEtapa1.dom_relacionado_produccion}
+                    onChange={v => actualizarEtapa1('dom_relacionado_produccion', v)} />
                   <p className="text-xs text-amber-600 mt-1">
                     Importante: una vez seleccione Sí y guarde, no podrá realizar
                     modificaciones posteriores a esta etapa.

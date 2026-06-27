@@ -76,6 +76,10 @@ export const obtenerTurnosDia = (filtros = {}) =>
 export const actualizarTurnoDia = (registroId, datos) =>
   api.put(`/api/turnos-dia/${registroId}/`, datos)
 
+// Previsualiza el impacto de cambiar la capacidad de un turno día, sin guardar
+export const consultarPreviewTurnoDia = (registroId, params) =>
+  api.get(`/api/turnos-dia/${registroId}/preview/`, { params })
+
 // Retorna el reporte consolidado de un DOM en formato PDF
 export const obtenerReporteDom = (domId) =>
   api.get(`/api/reportes/dom/${domId}/`, { responseType: 'blob' })

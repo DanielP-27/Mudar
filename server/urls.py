@@ -57,6 +57,7 @@ from server.views import(
     RegistroTratamientoDetalleView,
     RegistroTurnoDiaListView,
     RegistroTurnoDiaDetalleView,
+    RegistroTurnoDiaPreviewView,
 
     # Modulo 5 - Cronometro 
     CronometroIniciarView,
@@ -116,6 +117,7 @@ urlpatterns = [
     path('api/tratamiento/<int:registro_id>/', RegistroTratamientoDetalleView.as_view(), name='tratamiento-detalle'),
     path('api/turnos-dia/', RegistroTurnoDiaListView.as_view(), name='turnos-dia'),
     path('api/turnos-dia/<int:registro_id>/', RegistroTurnoDiaDetalleView.as_view(), name='turno-dia-detalle'),
+    path('api/turnos-dia/<int:registro_id>/preview/', RegistroTurnoDiaPreviewView.as_view(), name='turno-dia-preview'),
 
     # Módulo 5 - cronometro
     path('api/cronometro/iniciar/', CronometroIniciarView.as_view(), name='cronometro-iniciar'),

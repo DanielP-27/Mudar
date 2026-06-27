@@ -1,9 +1,10 @@
 // src/pages/doms/PaginaEditarDom.jsx
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Fragment } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   FiEye, FiFileText, FiBriefcase, FiPackage,
-  FiSettings, FiThermometer, FiTruck, FiPlus
+  FiSettings, FiThermometer, FiTruck, FiPlus,
+  FiChevronRight, FiChevronDown
 } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { puedeEditarEtapa, esSoloLectura } from '../../utils/permisos'
@@ -16,11 +17,13 @@ import {
   actualizarTratamiento, crearTratamiento,
   crearProductoPlaneacion, actualizarProductoPlaneacion,
   crearProductoProduccion, actualizarProductoProduccion, eliminarProductoProduccion,
+  consultarPreviewTurnoDia, actualizarTurnoDia,
 } from '../../api/doms'
 import { obtenerClientes, obtenerListasPorTipo, obtenerTurnos, consultarTurnoDia } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
+import SelectSiNo from '../../components/common/SelectSiNo'
 
 // Tipos de DOM administrativos — no llevan etapas de producción
 const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
@@ -30,13 +33,6 @@ const OPCIONES_MINUTOS = [
   { value: '', label: 'Seleccione duración' },
   { value: 480, label: '8 horas (480 min)' },
   { value: 600, label: '10 horas (600 min)' },
-]
-
-// Opciones reutilizables para dropdowns booleanos
-const OPCIONES_SI_NO = [
-  { value: '', label: 'Seleccione una opción' },
-  { value: 'true', label: 'Sí' },
-  { value: 'false', label: 'No' },
 ]
 
 // Convierte booleano del backend a string para el select
@@ -58,6 +54,7 @@ function PaginaEditarDom() {
   // Estado de carga y mensajes
   const [cargando, setCargando]   = useState(true)
   const [guardando, setGuardando] = useState(false)
+  const [guardandoTurno, setGuardandoTurno] = useState(false)
   const [error, setError]         = useState(null)
   const [exito, setExito]         = useState(null)
 
@@ -74,7 +71,6 @@ function PaginaEditarDom() {
   const [idxTratamiento, setIdxTratamiento] = useState(0)
 
   // Estado para el flujo de creación de nueva planeación
-  const [requiereTurnoDia, setRequiereTurnoDia]   = useState(false)
   const [datosTurnoDia, setDatosTurnoDia]         = useState({ numero_operarios: '', minutos_totales: '' })
   const [turnoDiaExistente, setTurnoDiaExistente] = useState(null)
 
@@ -85,6 +81,11 @@ function PaginaEditarDom() {
   // Estado local para cálculos de capacidad (preview)
   const [capacidadCalculo, setCapacidadCalculo] = useState(null)
   const [tiempoRestantePreview, setTiempoRestantePreview] = useState(null)
+
+  // Preview de impacto al editar un turno-día ya existente (GET /preview/, con debounce)
+  const [previewTurnoDia, setPreviewTurnoDia] = useState(null)
+  const operariosDebounced = useDebounce(datosTurnoDia.numero_operarios, 400)
+  const minutosDebounced   = useDebounce(datosTurnoDia.minutos_totales, 400)
 
   // Listas para dropdowns
   const [tiposEstadoDom, setTiposEstadoDom]       = useState([])
@@ -103,6 +104,15 @@ function PaginaEditarDom() {
 
   // Determina si el DOM es administrativo
   const esDomAdministrativo = TIPOS_ADMINISTRATIVOS.includes(datosDom?.tipo_estado_dom)
+
+  // Habilita el botón de guardar turno-día solo si hay un cambio real frente a lo ya guardado
+  const hayCambiosTurnoDia = Boolean(
+    turnoDiaExistente &&
+    datosTurnoDia.numero_operarios !== '' &&
+    datosTurnoDia.minutos_totales !== '' &&
+    (parseInt(datosTurnoDia.numero_operarios) !== turnoDiaExistente.numero_operarios ||
+     parseInt(datosTurnoDia.minutos_totales) !== turnoDiaExistente.minutos_totales)
+  )
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -128,7 +138,16 @@ function PaginaEditarDom() {
         // Cargar planeaciones solo para DOMs productivos
         if (!TIPOS_ADMINISTRATIVOS.includes(dom.tipo_estado_dom)) {
           const resPlaneacion = await obtenerPlaneacion({ dom_id: domId })
-          setPlaneaciones(resPlaneacion.data.registros ?? [])
+          const registros = resPlaneacion.data.registros ?? []
+          setPlaneaciones(registros)
+
+          // El efecto que consulta RegistroTurnoDia reacciona a idxPlaneacion,
+          // pero ya corrió antes de que llegaran estos datos (planeaciones aún vacío).
+          // Se dispara aquí con los datos recién obtenidos para no depender de un re-render.
+          const planActivo = registros[idxPlaneacion]
+          if (planActivo?.turno && planActivo?.fecha_planeacion) {
+            consultarDisponibilidadTurno(planActivo.turno, planActivo.fecha_planeacion)
+          }
         }
 
         const [rTipos, rResp, rLideres, rObj, rEmp, rNeg, rTurnos] = resListas
@@ -157,7 +176,9 @@ function PaginaEditarDom() {
     } else {
       setTurnoDiaExistente(null)
     }
-  }, [planeaciones, idxPlaneacion])
+    // Cada planeación tiene su propio turno+fecha — el draft de operarios/duración no debe heredarse al cambiar de pestaña
+    setDatosTurnoDia({ numero_operarios: '', minutos_totales: '' })
+  }, [idxPlaneacion])
 
   // Calcula capacidad en tiempo real (preview) cuando cambian operarios o duración
   useEffect(() => {
@@ -171,6 +192,28 @@ function PaginaEditarDom() {
       setTiempoRestantePreview(null)
     }
   }, [datosTurnoDia.numero_operarios, datosTurnoDia.minutos_totales, turnoDiaExistente])
+
+  // Consulta el preview de impacto cuando se edita un turno-día ya existente
+  // (solo si los valores debounced difieren de los ya guardados, para no consultar sin necesidad)
+  useEffect(() => {
+    if (!turnoDiaExistente || !operariosDebounced || !minutosDebounced) {
+      setPreviewTurnoDia(null)
+      return
+    }
+    const sinCambios =
+      parseInt(operariosDebounced) === turnoDiaExistente.numero_operarios &&
+      parseInt(minutosDebounced) === turnoDiaExistente.minutos_totales
+    if (sinCambios) {
+      setPreviewTurnoDia(null)
+      return
+    }
+    consultarPreviewTurnoDia(turnoDiaExistente.id, {
+      numero_operarios: operariosDebounced,
+      minutos_totales: minutosDebounced,
+    })
+      .then(res => setPreviewTurnoDia(res.data.preview))
+      .catch(() => setPreviewTurnoDia(null))
+  }, [operariosDebounced, minutosDebounced, turnoDiaExistente])
 
   // ── Typeahead cliente ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -236,6 +279,11 @@ function PaginaEditarDom() {
       const registros = res.data.registros ?? []
       if (registros.length > 0) {
         setTurnoDiaExistente(registros[0])
+        // Precarga los campos editables con los valores ya registrados — ADMIN y PLANEADOR pueden corregirlos
+        setDatosTurnoDia({
+          numero_operarios: registros[0].numero_operarios,
+          minutos_totales: registros[0].minutos_totales,
+        })
       } else {
         setTurnoDiaExistente(null)
       }
@@ -298,7 +346,11 @@ function PaginaEditarDom() {
   // Crea un nuevo ProductoPlaneacion (POST) para un producto del DOM
   const agregarProductoPlaneacion = async (productoDomId, localKey) => {
     const cantidad = proyectadaLocal[localKey]
-    if (!planActual || !cantidad) return
+    if (!planActual) return
+    if (cantidad === undefined || cantidad === '') {
+      setError('Debe ingresar una cantidad proyectada antes de continuar.')
+      return
+    }
     setGuardando(true)
     setError(null)
     try {
@@ -332,7 +384,10 @@ function PaginaEditarDom() {
   // Guarda cantidad_proyectada de un ProductoPlaneacion
   const guardarCantidadProyectada = async (productoPlaneacion) => {
     const valor = proyectadaLocal[productoPlaneacion.id]
-    if (valor === undefined) return
+    if (valor === undefined || valor === '') {
+      setError('Debe ingresar una cantidad proyectada antes de continuar.')
+      return
+    }
     setGuardando(true)
     setError(null)
     try {
@@ -403,24 +458,17 @@ function PaginaEditarDom() {
   }
 
   // Crea un nuevo registro de planeación para este DOM
-  const crearNuevaPlaneacion = async (extraDatos = {}) => {
+  const crearNuevaPlaneacion = async () => {
     setGuardando(true)
     setError(null)
     try {
-      const payload = { dom_id: domId, ...extraDatos }
-      await crearPlaneacion(payload)
+      await crearPlaneacion({ dom_id: domId })
       const resPlaneacion = await obtenerPlaneacion({ dom_id: toInt(domId) })
       const nuevas = resPlaneacion.data.registros ?? []
       setPlaneaciones(nuevas)
       setIdxPlaneacion(nuevas.length - 1)
-      setRequiereTurnoDia(false)
-      setDatosTurnoDia({ numero_operarios: '', minutos_totales: '' })
       mostrarExito('Nueva planeación creada correctamente.')
     } catch (err) {
-      if (err.response?.data?.requiere_turno_dia) {
-        setRequiereTurnoDia(true)
-        return
-      }
       setError(err.response?.data?.error ?? 'Error al crear la planeación.')
     } finally {
       setGuardando(false)
@@ -432,9 +480,15 @@ function PaginaEditarDom() {
     const plan = planeaciones[idxPlaneacion]
     if (!plan) return
 
-    // Validación 1: Verificar que turno, fecha, operarios y duración están completos
-    if (!plan.turno || !plan.fecha_planeacion || !datosTurnoDia.numero_operarios || !datosTurnoDia.minutos_totales) {
-      setError('Debe completar: Turno, Fecha, Número de operarios y Duración del turno.')
+    // Validación 1: Turno y fecha siempre son obligatorios
+    if (!plan.turno || !plan.fecha_planeacion) {
+      setError('Debe completar: Turno y Fecha.')
+      return
+    }
+
+    // Operarios y duración solo son obligatorios si es el primer registro para este turno y fecha
+    if (!turnoDiaExistente && (!datosTurnoDia.numero_operarios || !datosTurnoDia.minutos_totales)) {
+      setError('Es el primer registro para este turno y fecha. Debe indicar Número de operarios y Duración del turno.')
       return
     }
 
@@ -461,12 +515,71 @@ function PaginaEditarDom() {
         orden_produccion:  toInt(plan.orden_produccion),
         orden_tratamiento: toInt(plan.orden_tratamiento),
         peso: plan.peso ?? false,
+        ...(!turnoDiaExistente && {
+          numero_operarios: toInt(datosTurnoDia.numero_operarios),
+          minutos_totales:  toInt(datosTurnoDia.minutos_totales),
+        }),
       })
+      await consultarDisponibilidadTurno(plan.turno, plan.fecha_planeacion)
+
+      const res = await obtenerPlaneacion({ dom_id: domId })
+      const nuevosRegistros = res.data.registros ?? []
+      setPlaneaciones(prev => prev.map((p, i) =>
+        i === idxPlaneacion
+          ? {
+              ...p,
+              tiempo_proyectado:    nuevosRegistros[idxPlaneacion]?.tiempo_proyectado    ?? p.tiempo_proyectado,
+              tiempo_restante_dia:  nuevosRegistros[idxPlaneacion]?.tiempo_restante_dia  ?? p.tiempo_restante_dia,
+              sumatoria_tiempo_asignado_turnos: nuevosRegistros[idxPlaneacion]?.sumatoria_tiempo_asignado_turnos ?? p.sumatoria_tiempo_asignado_turnos,
+            }
+          : p
+      ))
+
       mostrarExito('Planeación guardada correctamente.')
     } catch (err) {
       setError(err.response?.data?.error ?? 'Error al guardar la planeación.')
     } finally {
       setGuardando(false)
+    }
+  }
+
+  // Guarda cambios de operarios/duración de un turno-día ya existente.
+  // El backend permite siempre el guardado (no bloquea con 400); si deja
+  // alguna planeación en déficit, se avisa aquí antes de confirmar.
+  const guardarTurnoDia = async () => {
+    if (!turnoDiaExistente) return
+
+    if (previewTurnoDia?.turno_quedaria_negativo) {
+      const continuar = window.confirm(
+        `Este cambio deja el turno con un déficit de ${previewTurnoDia.deficit_minutos} min, ` +
+        `afectando a: ${previewTurnoDia.doms.map(d => `${d.nombre_cliente} (${d.minutos_ocupados} min)`).join(', ')}. ` +
+        `¿Deseas continuar de todas formas?`
+      )
+      if (!continuar) return
+    }
+
+    setGuardandoTurno(true)
+    setError(null)
+    try {
+      const res = await actualizarTurnoDia(turnoDiaExistente.id, {
+        numero_operarios: toInt(datosTurnoDia.numero_operarios),
+        minutos_totales:  toInt(datosTurnoDia.minutos_totales),
+      })
+      setTurnoDiaExistente(res.data.registro)
+      setPreviewTurnoDia(null)
+
+      const impacto = res.data.impacto
+      setPlaneaciones(prev => prev.map((p, i) =>
+        i === idxPlaneacion
+          ? { ...p, tiempo_restante_dia: impacto.restante_propuesto }
+          : p
+      ))
+
+      mostrarExito('Turno actualizado correctamente.')
+    } catch (err) {
+      setError(err.response?.data?.error ?? 'Error al actualizar el turno.')
+    } finally {
+      setGuardandoTurno(false)
     }
   }
 
@@ -562,7 +675,7 @@ function PaginaEditarDom() {
       {/* Encabezado */}
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-800">
-          Editar registro DOM #{datosDom.dom_id}
+          Editar registro DOM
         </h1>
         <p className="text-sm text-gray-500 mt-1">
           {esSoloLectura(usuario?.rol)
@@ -575,28 +688,6 @@ function PaginaEditarDom() {
       {/* Mensajes */}
       {exito && <p className="text-sm text-green-600 mb-4">{exito}</p>}
       {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
-
-      {/* Selector de planeación — solo DOMs productivos con múltiples planeaciones */}
-      {!esDomAdministrativo && planeaciones.length > 1 && (
-        <div className="mb-4 flex items-center gap-3">
-          <span className="text-sm text-gray-600">Planeación:</span>
-          {planeaciones.map((p, i) => (
-            <button key={p.id} onClick={() => {
-              setIdxPlaneacion(i)
-              setIdxAlmacen(0)
-              setIdxProduccion(0)
-              setIdxTratamiento(0)
-            }}
-              className={`px-3 py-1 text-sm rounded border
-                ${idxPlaneacion === i
-                  ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
-                  : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                }`}>
-              Planeación #{i + 1}
-            </button>
-          ))}
-        </div>
-      )}
 
       {/* Sistema de pestañas */}
       <div className="border-b border-gray-200 mb-6 overflow-x-auto">
@@ -622,16 +713,38 @@ function PaginaEditarDom() {
         <span className="font-medium">DOM #{datosDom.dom_id}</span>
         <span className="text-blue-300">|</span>
         <span>Cliente: {datosDom.nombre_cliente_detalle ?? '—'}</span>
-      </div>
-
-      {/* Tabla consolidada de productos — visible en todas las pestañas */}
-      {!esDomAdministrativo && datosDom.productos?.length > 0 && (
+      </div>  
+          
+      {/* Tabla consolidada de productos — visible en todas las pestañas */}  
+      {!esDomAdministrativo && datosDom.productos?.length > 0 && (  
         <TablaConsolidadoProductos
           productos={datosDom.productos}
           planeaciones={planeaciones}
           elaboradaPorProducto={elaboradaPorProducto}
           proyectadaPorProducto={proyectadaPorProducto}
         />
+      )}
+
+      {/* Selector de planeación — solo DOMs productivos con múltiples planeaciones */}
+      {!esDomAdministrativo && planeaciones.length > 1 && (
+        <div className="mb-4 flex items-center gap-3">
+          <span className="text-sm text-gray-600">Planeación:</span>
+          {planeaciones.map((p, i) => (
+            <button key={p.id} onClick={() => {
+              setIdxPlaneacion(i)
+              setIdxAlmacen(0)
+              setIdxProduccion(0)
+              setIdxTratamiento(0)
+            }}
+              className={`px-3 py-1 text-sm rounded border
+                ${idxPlaneacion === i
+                  ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
+                  : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                }`}>
+              Planeación #{i + 1}
+            </button>
+          ))}
+        </div>
       )}
 
       {/* Contenido de pestañas */}
@@ -707,7 +820,7 @@ function PaginaEditarDom() {
               </p>
             </CampoFormulario>
 
-            {/* Cliente — typeahead */}
+            {/* Cliente — bloqueado para evitar cambio de cliente tras creación del DOM administrativo */}
             <CampoFormulario label="Nombre del cliente" obligatorio>
               <TypeaheadInput
                 valor={busquedaCliente}
@@ -726,7 +839,7 @@ function PaginaEditarDom() {
                 obtenerLabel={c => c.nombre_cliente}
                 obtenerKey={c => c.cliente_id}
                 placeholder="Digite el nombre del cliente"
-                disabled={!esEditable('etapa_0') && !esEditable('etapa_1')}
+                disabled
               />
             </CampoFormulario>
 
@@ -791,7 +904,7 @@ function PaginaEditarDom() {
                 obtenerLabel={c => c.nombre_cliente}
                 obtenerKey={c => c.cliente_id}
                 placeholder="Digite el nombre del cliente"
-                disabled={!esEditable('etapa_0')}
+                disabled
               />
             </CampoFormulario>
 
@@ -880,14 +993,14 @@ function PaginaEditarDom() {
                   className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
               </CampoFormulario>
               <CampoFormulario label="Campaña de venta">
-                <SelectSiNo value={boolToStr(datosDom.campana_venta)}
+                <SelectSiNo name="dom_campana_venta" value={boolToStr(datosDom.campana_venta)}
                   onChange={v => actualizarCampoDom('campana_venta', strToBool(v))}
                   disabled={!esEditable('etapa_1')} />
               </CampoFormulario>
             </div>
 
             <CampoFormulario label="Validación etapa 1">
-              <SelectSiNo value={boolToStr(datosDom.dom_relacionado_produccion)}
+              <SelectSiNo name="dom_relacionado_produccion" value={boolToStr(datosDom.dom_relacionado_produccion)}
                 onChange={v => actualizarCampoDom('dom_relacionado_produccion', strToBool(v))}
                 disabled={!esEditable('etapa_1')} />
               <p className="text-xs text-amber-600 mt-1">
@@ -898,91 +1011,18 @@ function PaginaEditarDom() {
           </FormEtapa>
         )}
 
-        {/* ── Etapa 3 — Planeación ─────────────────────────────────────────── */}
+{/* ── Etapa 3 — Planeación ─────────────────────────────────────────── */}
         {pestanaActiva === 'etapa2' && (
           <>
-          {(planeaciones.length === 0 || planActual?.planeacion_completa) && esEditable('etapa_2') && (
-            <div className="mb-4 space-y-3">
-              {requiereTurnoDia ? (
-                <div className="grid grid-cols-2 gap-3 p-4 bg-amber-50 border border-amber-200 rounded">
-                  <p className="col-span-2 text-sm text-amber-700 font-medium">
-                    Primer registro para este turno y fecha — ingrese los datos del turno:
-                  </p>
-                  <CampoFormulario label="Número de operarios">
-                    <input type="number" value={datosTurnoDia.numero_operarios}
-                      onChange={e => setDatosTurnoDia(prev => ({ ...prev, numero_operarios: e.target.value }))}
-                      placeholder="Ej: 8"
-                      className="campo-input" />
-                  </CampoFormulario>
-                  <CampoFormulario label="Duración del turno">
-                    <select value={datosTurnoDia.minutos_totales}
-                      onChange={e => setDatosTurnoDia(prev => ({ ...prev, minutos_totales: e.target.value }))}
-                      className="campo-input">
-                      {OPCIONES_MINUTOS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </CampoFormulario>
-                  <div className="col-span-2 flex gap-3">
-                    <button
-                      onClick={() => crearNuevaPlaneacion({
-                        numero_operarios: toInt(datosTurnoDia.numero_operarios),
-                        minutos_totales:  toInt(datosTurnoDia.minutos_totales),
-                      })}
-                      disabled={!datosTurnoDia.numero_operarios || !datosTurnoDia.minutos_totales || guardando}
-                      className="px-4 py-2 bg-[#1A56A0] text-white text-sm font-medium rounded
-                                 hover:bg-[#134080] disabled:opacity-60 disabled:cursor-not-allowed">
-                      Confirmar
-                    </button>
-                    <button onClick={() => { setRequiereTurnoDia(false); setDatosTurnoDia({ numero_operarios: '', minutos_totales: '' }) }}
-                      className="px-4 py-2 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50">
-                      Cancelar
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={() => crearNuevaPlaneacion()}
-                  disabled={guardando}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium
-                             text-[#1A56A0] border border-[#1A56A0] rounded
-                             hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed">
-                  <FiPlus size={14} /> Nueva planeación
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Tabla de cantidad proyectada por producto — siempre visible cuando hay planeación */}
-          {planActual && datosDom?.productos?.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                Cantidad proyectada por producto
-              </p>
-              <div className="overflow-x-auto border border-gray-200 rounded">
-                <table className="w-full text-xs">
-                  <thead className="bg-gray-100 border-b border-gray-200">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-semibold text-gray-700">Producto</th>
-                      <th className="px-3 py-2 text-right font-semibold text-gray-700">Cantidad proyectada</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {datosDom.productos.map(prod => {
-                      const pp = planActual.productos_planeacion?.find(p => p.dom_producto === prod.id)
-                      return (
-                        <tr key={prod.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 text-gray-800">
-                            {prod.tipo_producto_detalle?.nombre_producto ?? '—'}
-                          </td>
-                          <td className="px-3 py-2 text-right text-gray-700">
-                            {pp?.cantidad_proyectada ?? '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+          {esEditable('etapa_2') && (
+            <div className="mb-4">
+              <button onClick={() => crearNuevaPlaneacion()}
+                disabled={guardando}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium
+                           text-[#1A56A0] border border-[#1A56A0] rounded
+                           hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                <FiPlus size={14} /> Nueva planeación
+              </button>
             </div>
           )}
 
@@ -1023,24 +1063,15 @@ function PaginaEditarDom() {
                 {/* Operarios y minutos — habilitados para lectura/edición, pero con validación al guardar */}
                 <CampoFormulario label="Número de operarios">
                   <input type="number"
-                    value={turnoDiaExistente
-                      ? turnoDiaExistente.numero_operarios
-                      : datosTurnoDia.numero_operarios}
+                    value={datosTurnoDia.numero_operarios}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, numero_operarios: e.target.value }))}
                     disabled={!esEditable('etapa_2')}
                     placeholder="Ingrese número de operarios"
                     className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
-                  {turnoDiaExistente && (
-                    <p className="text-xs text-amber-600 mt-1">
-                      ⚠️ Ya existe un registro de turno para este turno y fecha. No se guardarán cambios en estos campos.
-                    </p>
-                  )}
                 </CampoFormulario>
                 <CampoFormulario label="Duración del turno">
                   <select
-                    value={turnoDiaExistente
-                      ? turnoDiaExistente.minutos_totales
-                      : datosTurnoDia.minutos_totales}
+                    value={datosTurnoDia.minutos_totales}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, minutos_totales: e.target.value }))}
                     disabled={!esEditable('etapa_2')}
                     className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
@@ -1051,8 +1082,25 @@ function PaginaEditarDom() {
                 </CampoFormulario>
                 <CampoLectura
                   label="Tiempo proyectado total (min)"
-                  valor={planActual?.tiempo_proyectado}
+                  valor={datosDom?.tiempo_proyectado_total}
                 />
+              </div>
+            )}
+
+            {/* BLOQUE 1B: Edición de turno-día ya existente — preview de impacto y guardado */}
+            {planActual && turnoDiaExistente && esEditable('etapa_2') && (
+              <div className="mt-3 space-y-2">
+                {previewTurnoDia?.turno_quedaria_negativo && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                    ⚠️ Diferencia en minutos con la modificación propuesta: <strong>-{previewTurnoDia.deficit_minutos} min</strong>.
+                    Afecta a: {previewTurnoDia.doms.map(d => `${d.nombre_cliente} (${d.minutos_ocupados} min)`).join(', ')}.
+                  </div>
+                )}
+                <button onClick={guardarTurnoDia} disabled={!hayCambiosTurnoDia || guardandoTurno}
+                  className="px-4 py-2 bg-[#1A56A0] text-white text-sm font-medium rounded
+                             hover:bg-[#134080] disabled:opacity-40 disabled:cursor-not-allowed">
+                  {guardandoTurno ? 'Guardando turno...' : 'Guardar cambios del turno'}
+                </button>
               </div>
             )}
 
@@ -1160,12 +1208,12 @@ function PaginaEditarDom() {
                     className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben pesarse?">
-                  <SelectSiNo value={boolToStr(planActual.peso)}
+                  <SelectSiNo name="planeacion_peso" value={boolToStr(planActual.peso)}
                     onChange={v => actualizarCampoPlaneacion('peso', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Materias primas disponibles para fabricar este DOM?">
-                  <SelectSiNo value={boolToStr(planActual.materia_prima_disponible)}
+                  <SelectSiNo name="planeacion_materia_prima_disponible" value={boolToStr(planActual.materia_prima_disponible)}
                     onChange={v => actualizarCampoPlaneacion('materia_prima_disponible', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
@@ -1180,42 +1228,42 @@ function PaginaEditarDom() {
                   </select>
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos van encartonados?">
-                  <SelectSiNo value={boolToStr(planActual.encartonar)}
+                  <SelectSiNo name="planeacion_encartonar" value={boolToStr(planActual.encartonar)}
                     onChange={v => actualizarCampoPlaneacion('encartonar', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren grafado y elaboración de fundas">
-                  <SelectSiNo value={boolToStr(planActual.grafado_fundas)}
+                  <SelectSiNo name="planeacion_grafado_fundas" value={boolToStr(planActual.grafado_fundas)}
                     onChange={v => actualizarCampoPlaneacion('grafado_fundas', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Producto requiere Control de tiempo y ensamble en armadora?">
-                  <SelectSiNo value={boolToStr(planActual.control_tiempo)}
+                  <SelectSiNo name="planeacion_control_tiempo" value={boolToStr(planActual.control_tiempo)}
                     onChange={v => actualizarCampoPlaneacion('control_tiempo', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Cliente recoge los productos?">
-                  <SelectSiNo value={boolToStr(planActual.cliente_recoge)}
+                  <SelectSiNo name="planeacion_cliente_recoge" value={boolToStr(planActual.cliente_recoge)}
                     onChange={v => actualizarCampoPlaneacion('cliente_recoge', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Mudar de Colombia entrega los productos?">
-                  <SelectSiNo value={boolToStr(planActual.mudar_entrega)}
+                  <SelectSiNo name="planeacion_mudar_entrega" value={boolToStr(planActual.mudar_entrega)}
                     onChange={v => actualizarCampoPlaneacion('mudar_entrega', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren tratamiento térmico?">
-                  <SelectSiNo value={boolToStr(planActual.tratamiento_termico)}
+                  <SelectSiNo name="planeacion_tratamiento_termico" value={boolToStr(planActual.tratamiento_termico)}
                     onChange={v => actualizarCampoPlaneacion('tratamiento_termico', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben llevar Sello ICA?">
-                  <SelectSiNo value={boolToStr(planActual.sello_ica)}
+                  <SelectSiNo name="planeacion_sello_ica" value={boolToStr(planActual.sello_ica)}
                     onChange={v => actualizarCampoPlaneacion('sello_ica', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActual?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos llevan marcas o símbolos del cliente?">
-                  <SelectSiNo value={boolToStr(planActual.marcado_cliente)}
+                  <SelectSiNo name="planeacion_marcado_cliente" value={boolToStr(planActual.marcado_cliente)}
                     onChange={v => actualizarCampoPlaneacion('marcado_cliente', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                 </CampoFormulario>
@@ -1251,14 +1299,13 @@ function PaginaEditarDom() {
                             disabled={!esEditable('etapa_2') || !!planActual.planeacion_completa}
                             placeholder="Ingrese cantidad"
                             className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
-                          {esEditable('etapa_2') && !planActual.planeacion_completa &&
-                            proyectadaLocal[localKey] !== undefined && (
+                          {esEditable('etapa_2') && !planActual.planeacion_completa && (
                             <button
                               onClick={() => pp
                                 ? guardarCantidadProyectada(pp)
                                 : agregarProductoPlaneacion(prod.id, localKey)
                               }
-                              disabled={guardando}
+                              disabled={guardando || proyectadaLocal[localKey] === undefined}
                               className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
                                          hover:bg-[#134080] disabled:opacity-60">
                               {pp ? 'Guardar' : 'Agregar'}
@@ -1281,7 +1328,7 @@ function PaginaEditarDom() {
             {planActual && (
               <div className="grid grid-cols-2 gap-4">
                 <CampoFormulario label="¿Registro de planeación completo y relacionado con producción?">
-                  <SelectSiNo value={boolToStr(planActual.planeacion_completa)}
+                  <SelectSiNo name="planeacion_completa" value={boolToStr(planActual.planeacion_completa)}
                     onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                   <p className="text-xs text-amber-600 mt-1">
@@ -1320,7 +1367,7 @@ function PaginaEditarDom() {
               {almacenActual && (
                 <div className="grid grid-cols-2 gap-4">
                   <CampoFormulario label="¿Materias primas internas procesadas?">
-                    <SelectSiNo value={boolToStr(almacenActual.materias_primas)}
+                    <SelectSiNo name="almacen_materias_primas" value={boolToStr(almacenActual.materias_primas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_primas', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActual.dom_realizado_planeacion} />
                   </CampoFormulario>
@@ -1337,12 +1384,12 @@ function PaginaEditarDom() {
                       className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
                   </CampoFormulario>
                   <CampoFormulario label="¿Materias primas liberadas para producción?">
-                    <SelectSiNo value={boolToStr(almacenActual.materias_liberadas)}
+                    <SelectSiNo name="almacen_materias_liberadas" value={boolToStr(almacenActual.materias_liberadas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_liberadas', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActual.dom_realizado_planeacion} />
                   </CampoFormulario>
                   <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
-                    <SelectSiNo value={boolToStr(almacenActual.dom_realizado_planeacion)}
+                    <SelectSiNo name="almacen_dom_realizado_planeacion" value={boolToStr(almacenActual.dom_realizado_planeacion)}
                       onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActual.dom_realizado_planeacion} />
                     <p className="text-xs text-amber-600 mt-1">
@@ -1443,7 +1490,7 @@ function PaginaEditarDom() {
               {produccionActual && (
                 <div className="grid grid-cols-2 gap-4">
                   <CampoLectura
-                    label="Tiempo proyectado total (min)"
+                    label="Tiempo proyectado para esta planeación (min)"
                     valor={planActual?.tiempo_proyectado}
                   />
                   <CampoFormulario label="Minutos asignados">
@@ -1471,17 +1518,17 @@ function PaginaEditarDom() {
                       className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
                   </CampoFormulario>
                   <CampoFormulario label="¿Actividades de producción realizadas según registro de planeación?">
-                    <SelectSiNo value={boolToStr(produccionActual.segun_planeacion)}
+                    <SelectSiNo name="produccion_segun_planeacion" value={boolToStr(produccionActual.segun_planeacion)}
                       onChange={v => actualizarCampoHijo('produccion', 'segun_planeacion', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion} />
                   </CampoFormulario>
                   <CampoFormulario label="Producción no completada">
-                    <SelectSiNo value={boolToStr(produccionActual.produccion_no_completada)}
+                    <SelectSiNo name="produccion_no_completada" value={boolToStr(produccionActual.produccion_no_completada)}
                       onChange={v => actualizarCampoHijo('produccion', 'produccion_no_completada', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion} />
                   </CampoFormulario>
                   <CampoFormulario label="¿Este DOM ya ha sido liberado desde producción?">
-                    <SelectSiNo value={boolToStr(produccionActual.cierre_produccion)}
+                    <SelectSiNo name="produccion_cierre_produccion" value={boolToStr(produccionActual.cierre_produccion)}
                       onChange={v => actualizarCampoHijo('produccion', 'cierre_produccion', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion} />
                     <p className="text-xs text-amber-600 mt-1">
@@ -1521,7 +1568,7 @@ function PaginaEditarDom() {
               {tratamientoActual && (
                 <div className="grid grid-cols-2 gap-4">
                   <CampoFormulario label="DOM con tratamiento">
-                    <SelectSiNo value={boolToStr(tratamientoActual.dom_con_tratamiento)}
+                    <SelectSiNo name="tratamiento_dom_con_tratamiento" value={boolToStr(tratamientoActual.dom_con_tratamiento)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'dom_con_tratamiento', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado} />
                   </CampoFormulario>
@@ -1544,12 +1591,12 @@ function PaginaEditarDom() {
                       className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
                   </CampoFormulario>
                   <CampoFormulario label="Tratamiento según planeación">
-                    <SelectSiNo value={boolToStr(tratamientoActual.tratamiento_segun_planeacion)}
+                    <SelectSiNo name="tratamiento_segun_planeacion" value={boolToStr(tratamientoActual.tratamiento_segun_planeacion)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_segun_planeacion', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado} />
                   </CampoFormulario>
                   <CampoFormulario label="¿Actividades de tratamiento termico realizadas según planeación?">
-                    <SelectSiNo value={boolToStr(tratamientoActual.tratamiento_completado)}
+                    <SelectSiNo name="tratamiento_completado" value={boolToStr(tratamientoActual.tratamiento_completado)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_completado', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado} />
                     <p className="text-xs text-amber-600 mt-1">
@@ -1619,7 +1666,7 @@ function PaginaEditarDom() {
                 </select>
               </CampoFormulario>
               <CampoFormulario label="¿Este DOM requiere materiales externos?">
-                <SelectSiNo value={boolToStr(datosDom.materiales_externos)}
+                <SelectSiNo name="dom_materiales_externos" value={boolToStr(datosDom.materiales_externos)}
                   onChange={v => actualizarCampoDom('materiales_externos', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre} />
               </CampoFormulario>
@@ -1650,12 +1697,12 @@ function PaginaEditarDom() {
                   className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
               </CampoFormulario>
               <CampoFormulario label="DOM entregado OK">
-                <SelectSiNo value={boolToStr(datosDom.dom_entregado_ok)}
+                <SelectSiNo name="dom_entregado_ok" value={boolToStr(datosDom.dom_entregado_ok)}
                   onChange={v => actualizarCampoDom('dom_entregado_ok', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre} />
               </CampoFormulario>
               <CampoFormulario label="DOM liberado cierre">
-                <SelectSiNo value={boolToStr(datosDom.dom_liberado_cierre)}
+                <SelectSiNo name="dom_liberado_cierre" value={boolToStr(datosDom.dom_liberado_cierre)}
                   onChange={v => actualizarCampoDom('dom_liberado_cierre', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre} />
                 <p className="text-xs text-amber-600 mt-1">
@@ -1756,18 +1803,6 @@ function FormEtapa({ titulo, editable, guardando, onGuardar, sinRegistro, childr
 }
 
 // Dropdown reutilizable para campos booleanos Sí/No
-function SelectSiNo({ value, onChange, disabled }) {
-  return (
-    <select value={value} onChange={e => onChange(e.target.value)}
-      disabled={disabled}
-      className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
-      {OPCIONES_SI_NO.map(o => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
-  )
-}
-
 // Campo de solo lectura con nota informativa
 function CampoLectura({ label, valor, nota }) {
   return (
@@ -1799,11 +1834,47 @@ function CampoConsolidado({ label, valor }) {
 
 // Tabla consolidada de productos — visible en todas las pestañas
 function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProducto, proyectadaPorProducto }) {
+  const [expandidos, setExpandidos] = useState(new Set())
+
+  const toggleExpandido = (productoId) => {
+    setExpandidos(prev => {
+      const next = new Set(prev)
+      if (next.has(productoId)) next.delete(productoId)
+      else next.add(productoId)
+      return next
+    })
+  }
+
+  // Desglose por planeación (y por registro de producción, si hay más de uno) para un producto del DOM
+  const desglosePorPlaneacion = (productoDomId) =>
+    planeaciones
+      .map(plan => {
+        const pp = (plan.productos_planeacion ?? []).find(p => p.dom_producto === productoDomId)
+        if (!pp) return null
+        const producciones = (plan.registros_produccion ?? [])
+          .flatMap(rp => (rp.productos_produccion ?? [])
+            .filter(prod => prod.producto_planeacion === pp.id && (prod.cantidad_elaborada ?? 0) > 0)
+            .map(prod => ({ numero_registro: rp.numero_registro, cantidad_elaborada: prod.cantidad_elaborada }))
+          )
+        return {
+          planeacionId: plan.id,
+          numero_registro: plan.numero_registro,
+          turno: plan.turno_detalle?.nombre_turno,
+          fecha: plan.fecha_planeacion,
+          proyectada: pp.cantidad_proyectada ?? 0,
+          elaborada: pp.cantidad_elaborada ?? 0,
+          pendiente: pp.cantidad_pendiente ?? 0,
+          producciones,
+        }
+      })
+      .filter(Boolean)
+
   return (
     <div className="mb-4 border border-gray-200 rounded overflow-hidden">
       <table className="w-full text-sm">
         <thead className="bg-gray-100 text-xs text-gray-500 uppercase">
           <tr>
+            <th className="px-2 py-2 w-6"></th>
             <th className="text-left px-3 py-2 font-medium">Producto</th>
             <th className="text-center px-3 py-2 font-medium">Tiempo unit. (min)</th>
             <th className="text-center px-3 py-2 font-medium">Cant. pedido</th>
@@ -1819,24 +1890,76 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
             const elaborada  = elaboradaPorProducto(p.id)
             const pendientePorProyectar = (p.cantidad_pedido ?? 0) - (proyectada ?? 0)
             const proyectadaPendiente = (proyectada ?? 0) - elaborada
+            const puedeExpandir = proyectada > 0 || elaborada > 0
+            const expandido = expandidos.has(p.id)
             return (
-              <tr key={p.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                <td className="px-3 py-2 text-gray-800">
-                  {p.tipo_producto_detalle?.nombre_producto ?? '—'}
-                </td>
-                <td className="px-3 py-2 text-center text-gray-600">
-                  {p.tipo_producto_detalle?.tiempo_produccion_unitario ?? '—'}
-                </td>
-                <td className="px-3 py-2 text-center text-gray-600">{p.cantidad_pedido ?? '—'}</td>
-                <td className="px-3 py-2 text-center text-gray-600">{proyectada || '—'}</td>
-                <td className={`px-3 py-2 text-center font-medium ${pendientePorProyectar > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                  {pendientePorProyectar > 0 ? pendientePorProyectar : '—'}
-                </td>
-                <td className="px-3 py-2 text-center text-gray-600">{elaborada}</td>
-                <td className={`px-3 py-2 text-center font-medium ${proyectadaPendiente > 0 ? 'text-amber-600' : 'text-green-600'}`}>
-                  {proyectadaPendiente > 0 ? proyectadaPendiente : '—'}
-                </td>
-              </tr>
+              <Fragment key={p.id}>
+                <tr className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  <td className="px-2 py-2 text-center">
+                    {puedeExpandir && (
+                      <button onClick={() => toggleExpandido(p.id)} className="text-gray-500 hover:text-[#1A56A0]">
+                        {expandido ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
+                      </button>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-gray-800">
+                    {p.tipo_producto_detalle?.nombre_producto ?? '—'}
+                  </td>
+                  <td className="px-3 py-2 text-center text-gray-600">
+                    {p.tipo_producto_detalle?.tiempo_produccion_unitario ?? '—'}
+                  </td>
+                  <td className="px-3 py-2 text-center text-gray-600">{p.cantidad_pedido ?? '—'}</td>
+                  <td className="px-3 py-2 text-center text-gray-600">{proyectada || '—'}</td>
+                  <td className={`px-3 py-2 text-center font-medium ${pendientePorProyectar > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                    {pendientePorProyectar > 0 ? pendientePorProyectar : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-center text-gray-600">{elaborada}</td>
+                  <td className={`px-3 py-2 text-center font-medium ${proyectadaPendiente > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                    {proyectadaPendiente > 0 ? proyectadaPendiente : '—'}
+                  </td>
+                </tr>
+                {expandido && (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-3 bg-gray-50 border-t border-gray-200">
+                      <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Desglose por planeación</p>
+                      <table className="w-full text-xs">
+                        <thead className="text-gray-400 uppercase">
+                          <tr>
+                            <th className="text-left py-1 pl-3">Planeación</th>
+                            <th className="text-left py-1">Turno · Fecha</th>
+                            <th className="text-center py-1">Proyectada</th>
+                            <th className="text-center py-1">Elaborada</th>
+                            <th className="text-center py-1">Pendiente</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {desglosePorPlaneacion(p.id).map(d => (
+                            <Fragment key={d.planeacionId}>
+                              <tr className="border-t border-gray-200">
+                                <td className="py-1 pl-3 text-gray-700">#{d.numero_registro}</td>
+                                <td className="py-1 text-gray-600">{d.turno ?? '—'} · {d.fecha ?? '—'}</td>
+                                <td className="py-1 text-center text-gray-700">{d.proyectada || '—'}</td>
+                                <td className="py-1 text-center text-gray-700">{d.elaborada || '—'}</td>
+                                <td className="py-1 text-center text-gray-700">{d.pendiente > 0 ? d.pendiente : '—'}</td>
+                              </tr>
+                              {/* Sub-desglose por registro de producción — solo si hay más de uno aportando a esta planeación */}
+                              {d.producciones.length > 1 && d.producciones.map(prod => (
+                                <tr key={prod.numero_registro}>
+                                  <td></td>
+                                  <td className="py-0.5 pl-6 text-gray-400">↳ Producción #{prod.numero_registro}</td>
+                                  <td></td>
+                                  <td className="py-0.5 text-center text-gray-500">{prod.cantidad_elaborada}</td>
+                                  <td></td>
+                                </tr>
+                              ))}
+                            </Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             )
           })}
         </tbody>

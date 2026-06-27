@@ -1617,65 +1617,7 @@ class RegistroPlaneacionListView(APIView):
                 {'error': 'DOM no encontrado'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
-        # Verifica si ya existe RegistroTurnoDia para este turno y fecha. Si no existe, exige numero_operarios y horas_extras para crearlo
-        turno_id = request.data.get('turno', None)
-        fecha_planeacion = request.data.get('fecha_planeacion', None)
 
-        if turno_id and fecha_planeacion:
-            try:
-                turno_obj = Turno.objects.get(turno_id=turno_id)
-            except Turno.DoesNotExist:
-                return Response(
-                    {'error': 'Turno no encontrado'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            registro_turno_dia = RegistroTurnoDia.objects.filter(
-                turno=turno_obj,
-                fecha=fecha_planeacion
-            ).first()
-
-            if registro_turno_dia is None:
-                numero_operarios = request.data.get('numero_operarios', None)
-                minutos_totales  = request.data.get('minutos_totales', None)
-                if not numero_operarios or not minutos_totales:
-                    return Response(
-                        {
-                            'error': 'Es el primer registro para este turno y fecha. Indique el número de operarios y la duración del turno.',
-                            'requiere_turno_dia': True
-                        },
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                RegistroTurnoDia.objects.create(
-                    turno=turno_obj,
-                    fecha=fecha_planeacion,
-                    numero_operarios=numero_operarios,
-                    minutos_totales=minutos_totales,
-                    registrado_por=request.user
-                )
-
-            # Valida capacidad del turno sumando el tiempo proyectado de todos los productos enviados
-            productos = request.data.get('productos', [])
-            if productos:
-                tiempo_nuevo = 0
-                for item in productos:
-                    try:
-                        dom_producto_obj = ProductosDom.objects.select_related('tipo_producto').get(id=item.get('dom_producto'))
-                        cantidad = item.get('cantidad_proyectada', 0) or 0
-                        tiempo_nuevo += int(cantidad) * dom_producto_obj.tipo_producto.tiempo_produccion_unitario
-                    except ProductosDom.DoesNotExist:
-                        return Response(
-                            {'error': f'Producto del DOM no encontrado: {item.get("dom_producto")}'},
-                            status=status.HTTP_404_NOT_FOUND
-                        )
-                planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_planeacion)
-                disponible_actual, resultado = planeacion_temp.tiempo_disponible_turno(tiempo_nuevo)
-                if resultado is not None and resultado < 0:
-                    return Response(
-                        {'error': 'El turno no tiene capacidad suficiente.', 'tiempo_disponible': disponible_actual, 'tiempo_requerido': tiempo_nuevo},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
         # Asigna numero de registro (recordar se permiten N registros) - correlativo por DOM
         ultimo_registro = RegistroPlaneacion.objects.filter(dom=dom).order_by('-numero_registro').first()
         numero_registro = (ultimo_registro.numero_registro + 1) if ultimo_registro else 1 
@@ -1697,25 +1639,12 @@ class RegistroPlaneacionListView(APIView):
             dom=dom
         )
 
-        # Crea los ProductoPlaneacion asociados
-        productos = request.data.get('productos', [])
-        for item in productos:
-            try:
-                dom_producto_obj = ProductosDom.objects.get(id=item.get('dom_producto'))
-                ProductoPlaneacion.objects.create(
-                    registro_planeacion=registro,
-                    dom_producto=dom_producto_obj,
-                    cantidad_proyectada=item.get('cantidad_proyectada')
-                )
-            except ProductosDom.DoesNotExist:
-                pass
-
         registrar_auditoria(
             dom=dom,
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_2',
-            campos_modificados={k: str(v) for k, v in request.data.items() if k != 'productos'}
+            campos_modificados={k: str(v) for k, v in request.data.items()}
         )
 
         # Refresca el objeto con relaciones cargadas
@@ -1778,6 +1707,13 @@ class RegistroPlaneacionDetalleView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        # Verificación de bloqueo de etapa — debe ocurrir antes de cualquier escritura (incl. RegistroTurnoDia)
+        if registro.etapa2_bloqueada():
+            return Response(
+                {'error': 'Este registro de planeación ya ha sido bloqueado para edición, contacte al Administrador del sistema'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Valida capacidad si cambia turno o fecha_planeacion
         turno_nuevo = request.data.get('turno', None)
         fecha_nueva = request.data.get('fecha_planeacion', None)
@@ -1792,6 +1728,28 @@ class RegistroPlaneacionDetalleView(APIView):
                         {'error': 'Turno no encontrado'},
                         status=status.HTTP_404_NOT_FOUND
                     )
+
+                # Si es la primera vez que se usa este turno y fecha, crea el RegistroTurnoDia con los datos enviados
+                registro_turno_dia = RegistroTurnoDia.objects.filter(
+                    turno=turno_obj,
+                    fecha=fecha_eval
+                ).first()
+                if registro_turno_dia is None:
+                    numero_operarios = request.data.get('numero_operarios', None)
+                    minutos_totales  = request.data.get('minutos_totales', None)
+                    if not numero_operarios or not minutos_totales:
+                        return Response(
+                            {'error': 'Es el primer registro para este turno y fecha. Indique el número de operarios y la duración del turno.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    RegistroTurnoDia.objects.create(
+                        turno=turno_obj,
+                        fecha=fecha_eval,
+                        numero_operarios=numero_operarios,
+                        minutos_totales=minutos_totales,
+                        registrado_por=request.user
+                    )
+
                 planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_eval)
                 tiempo_total = sum(
                     pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
@@ -1925,6 +1883,26 @@ class ProductoPlaneacionListView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
+            tiempo_nuevo_producto = cantidad_proyectada_nueva * dom_producto.tipo_producto.tiempo_produccion_unitario
+            tiempo_otros_productos = sum(
+                pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                for pp in planeacion.productos_planeacion.select_related('dom_producto__tipo_producto').all()
+                if pp.cantidad_proyectada and pp.dom_producto
+            )
+            disponible_actual, resultado = planeacion.tiempo_disponible_turno(
+                tiempo_otros_productos + tiempo_nuevo_producto, excluir_registro_id=planeacion.id
+            )
+            if resultado is not None and resultado < 0:
+                return Response(
+                    {
+                        'error': 'El turno no tiene capacidad suficiente para esta cantidad.',
+                        'tiempo_disponible': disponible_actual,
+                        'tiempo_requerido': tiempo_otros_productos + tiempo_nuevo_producto
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         serializer = ProductoPlaneacionSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -1993,6 +1971,27 @@ class ProductoPlaneacionDetalleView(APIView):
                         'cantidad_ya_proyectada': ya_proyectado,
                         'cantidad_solicitada': cantidad_proyectada_nueva,
                         'disponible': producto.dom_producto.cantidad_pedido - ya_proyectado
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
+            registro_planeacion = producto.registro_planeacion
+            tiempo_nuevo_producto = cantidad_proyectada_nueva * producto.dom_producto.tipo_producto.tiempo_produccion_unitario
+            tiempo_otros_productos = sum(
+                pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                for pp in registro_planeacion.productos_planeacion.select_related('dom_producto__tipo_producto').exclude(id=producto_id)
+                if pp.cantidad_proyectada and pp.dom_producto
+            )
+            disponible_actual, resultado = registro_planeacion.tiempo_disponible_turno(
+                tiempo_otros_productos + tiempo_nuevo_producto, excluir_registro_id=registro_planeacion.id
+            )
+            if resultado is not None and resultado < 0:
+                return Response(
+                    {
+                        'error': 'El turno no tiene capacidad suficiente para esta cantidad.',
+                        'tiempo_disponible': disponible_actual,
+                        'tiempo_requerido': tiempo_otros_productos + tiempo_nuevo_producto
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )
@@ -2779,7 +2778,7 @@ class RegistroTratamientoDetalleView(APIView):
         )
 
 # Vista para consultar y corregir el registro de operarios de un turno/fecha
-# Solo ADMIN puede modificar este dato una vez registrado
+# Solo ADMIN y PLANEADOR puede modificar este dato una vez registrado
 
 class RegistroTurnoDiaListView(APIView):
     authentication_classes = [TokenAuthentication]
@@ -2799,6 +2798,45 @@ class RegistroTurnoDiaListView(APIView):
                 'mensaje': 'Registros de turno del día obtenidos correctamente',
                 'total': registros.count(),
                 'registros': serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class RegistroTurnoDiaPreviewView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, registro_id):
+        if not verificar_rol(request, ['ADMIN', 'PLANEADOR']):
+            return Response(
+                {'error': 'No tienes permisos para previsualizar cambios de capacidad del turno'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            registro = RegistroTurnoDia.objects.select_related('turno').get(id=registro_id)
+        except RegistroTurnoDia.DoesNotExist:
+            return Response(
+                {'error': 'Registro de turno del día no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        numero_operarios_propuesto = request.query_params.get('numero_operarios', registro.numero_operarios)
+        minutos_totales_propuesto = request.query_params.get('minutos_totales', registro.minutos_totales)
+        try:
+            numero_operarios_propuesto = int(numero_operarios_propuesto)
+            minutos_totales_propuesto = int(minutos_totales_propuesto)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'numero_operarios y minutos_totales deben ser numéricos'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        preview = registro.preview_capacidad(numero_operarios_propuesto, minutos_totales_propuesto)
+        return Response(
+            {
+                'mensaje': 'Previsualización de capacidad calculada correctamente',
+                'preview': preview
             },
             status=status.HTTP_200_OK
         )
@@ -2826,9 +2864,9 @@ class RegistroTurnoDiaDetalleView(APIView):
         )
 
     def put(self, request, registro_id):
-        if not verificar_rol(request, ['ADMIN']):
+        if not verificar_rol(request, ['ADMIN', 'PLANEADOR']):
             return Response(
-                {'error': 'Solo el administrador puede modificar los operarios de un turno'},
+                {'error': 'No tienes permisos para modificar los operarios de un turno'},
                 status=status.HTTP_403_FORBIDDEN
             )
         try:
@@ -2838,6 +2876,9 @@ class RegistroTurnoDiaDetalleView(APIView):
                 {'error': 'Registro de turno del día no encontrado'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+        capacidad_anterior = registro.numero_operarios * registro.minutos_totales
+
         serializer = RegistroTurnoDiaSerializer(registro, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -2848,10 +2889,29 @@ class RegistroTurnoDiaDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         registro = serializer.save()
+
+        impacto = registro.preview_capacidad(registro.numero_operarios, registro.minutos_totales)
+        impacto['capacidad_actual'] = capacidad_anterior
+
+        if impacto['turno_quedaria_negativo']:
+            dom_ids = [d['dom_id'] for d in impacto['doms']]
+            for dom in Dom.objects.filter(dom_id__in=dom_ids):
+                registrar_auditoria(
+                    dom=dom,
+                    usuario=request.user,
+                    accion='EDICION',
+                    etapa='etapa_2',
+                    campos_modificados={
+                        'capacidad_turno_dia': {'antes': str(capacidad_anterior), 'despues': str(impacto['capacidad_propuesta'])},
+                        'deficit_generado_minutos': {'antes': '0', 'despues': str(impacto['deficit_minutos'])},
+                    }
+                )
+
         return Response(
             {
-                'mensaje': f'Registro de turno del día actualizado correctamente',
-                'registro': RegistroTurnoDiaSerializer(registro).data
+                'mensaje': 'Registro de turno del día actualizado correctamente',
+                'registro': RegistroTurnoDiaSerializer(registro).data,
+                'impacto': impacto,
             },
             status=status.HTTP_200_OK
         )
@@ -3760,7 +3820,7 @@ class InformeAuditoriaView(APIView):
             'total_ediciones': totales['total_ediciones'],
             'total_bloqueos': totales['total_bloqueos'],
             'total_eliminaciones': totales['total_eliminaciones'],
-            'acciones': AuditoriaDomSerializer(acciones, many=True).data
+            'acciones': acciones
         }
 
         serializer = InformeAuditoriaSerializer(data)
