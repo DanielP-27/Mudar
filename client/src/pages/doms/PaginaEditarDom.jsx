@@ -24,6 +24,7 @@ import { useDebounce } from '../../hooks/useDebounce'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import SelectSiNo from '../../components/common/SelectSiNo'
+import CronometroProduccion from '../../components/common/CronometroProduccion'
 
 // Tipos de DOM administrativos — no llevan etapas de producción
 const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
@@ -293,6 +294,12 @@ function PaginaEditarDom() {
   }
 
   // ── Funciones de guardado ──────────────────────────────────────────────────
+
+  // Refresca planeaciones desde el backend — usado como onAccion del cronómetro
+  const refrescarPlaneaciones = async () => {
+    const res = await obtenerPlaneacion({ dom_id: domId })
+    setPlaneaciones(res.data.registros ?? [])
+  }
 
   const mostrarExito = (msg) => {
     setExito(msg)
@@ -1482,23 +1489,36 @@ function PaginaEditarDom() {
               editable={esEditable('etapa_4') && !produccionActual?.cierre_produccion}
               guardando={guardando}
               onGuardar={() => guardarHijo('produccion', idxProduccion, actualizarProduccion, {
-                minutos_asignados:         toInt(produccionActual?.minutos_asignados),
                 numero_personas_asignadas: toInt(produccionActual?.numero_personas_asignadas),
               })}
               sinRegistro={!produccionActual}
             >
               {produccionActual && (
-                <div className="grid grid-cols-2 gap-4">
+                <>
+                  <CronometroProduccion
+                    registrosTiempo={produccionActual.registro_tiempo ?? []}
+                    registroProduccionId={produccionActual.id}
+                    onAccion={refrescarPlaneaciones}
+                    puedeOperar={esEditable('etapa_4')}
+                    personasAsignadas={produccionActual?.numero_personas_asignadas}
+                  />
+                  <div className="grid grid-cols-2 gap-4">
                   <CampoLectura
-                    label="Tiempo proyectado para esta planeación (min)"
+                    label="Tiempo proyectado (min)"
                     valor={planActual?.tiempo_proyectado}
                   />
-                  <CampoFormulario label="Minutos asignados">
-                    <input type="number" value={produccionActual.minutos_asignados ?? ''}
-                      onChange={e => actualizarCampoHijo('produccion', 'minutos_asignados', e.target.value, idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion}
-                      className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
-                  </CampoFormulario>
+                  <CampoLectura
+                    label="Minutos asignados (cronómetro)"
+                    valor={produccionActual.minutos_asignados}
+                  />
+                  <CampoLectura
+                    label="Minutos hombre producción"
+                    valor={produccionActual.minutos_hombre_produccion_dom}
+                  />
+                  <CampoLectura
+                    label="Minutos restantes"
+                    valor={produccionActual.minutos_restantes_dom}
+                  />
                   <CampoFormulario label="Número personas asignadas">
                     <input type="number" value={produccionActual.numero_personas_asignadas ?? ''}
                       onChange={e => actualizarCampoHijo('produccion', 'numero_personas_asignadas', e.target.value, idxProduccion)}
@@ -1537,6 +1557,7 @@ function PaginaEditarDom() {
                     </p>
                   </CampoFormulario>
                 </div>
+                </>
               )}
             </FormEtapa>
           </div>

@@ -668,7 +668,7 @@ class RegistroProduccion(models.Model):
     
     @property
     def minutos_restantes_dom(self):
-        t_elab = self.tiempo_elaboracion_produccion
+        t_elab = self.registro_planeacion.tiempo_proyectado
         m_hombre = self.minutos_hombre_produccion_dom
         if t_elab is not None and m_hombre is not None:
             return t_elab - m_hombre

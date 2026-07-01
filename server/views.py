@@ -2567,7 +2567,16 @@ class RegistroProduccionDetalleView(APIView):
                 {'error': 'Este registro se encuentra actualmente bloqueado y no puede ser modificado. Por favor contacte al Administrador del sistema'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # Verifica que exista cronómetro finalizado antes de permitir el cierre
+        if request.data.get('cierre_produccion') is True:
+            cronometro_finalizado = registro.registros_tiempo.filter(estado='FINALIZADO').exists()
+            if not cronometro_finalizado:
+                return Response(
+                    {'error': 'No es posible cerrar la producción sin un cronómetro finalizado. Finalice el cronómetro antes de cerrar este registro.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         serializer = RegistroProduccionSerializer(registro, data=request.data, partial=True)
 
         if not serializer.is_valid():
