@@ -673,7 +673,32 @@ class RegistroProduccion(models.Model):
         if t_elab is not None and m_hombre is not None:
             return t_elab - m_hombre
         return None
-    
+
+    @property
+    def cantidad_proyectada_total(self):
+        return self.registro_planeacion.productos_planeacion.aggregate(
+            total=Sum('cantidad_proyectada')
+        )['total'] or 0
+
+    @property
+    def cumplimiento_produccion(self):
+        cantidad_elab  = self.cantidad_elaborada
+        cantidad_proy  = self.cantidad_proyectada_total
+        minutos_hombre = self.minutos_hombre_produccion_dom
+        tiempo_proy    = self.registro_planeacion.tiempo_proyectado
+
+        if minutos_hombre is None or tiempo_proy is None:
+            return None
+
+        cumple_tiempo   = minutos_hombre <= tiempo_proy
+        cumple_cantidad = cantidad_elab >= cantidad_proy
+
+        if cumple_tiempo and cumple_cantidad:
+            return 'CUMPLIÓ'
+        elif cumple_tiempo or cumple_cantidad:
+            return 'CUMPLIMIENTO_PARCIAL'
+        return 'NO_CUMPLIÓ'
+
     def etapa_4_bloqueada(self):
         return self.cierre_produccion
 

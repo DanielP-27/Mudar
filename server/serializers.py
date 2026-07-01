@@ -358,6 +358,7 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
     minutos_hombre_produccion_dom = serializers.ReadOnlyField()
     minutos_restantes_dom         = serializers.ReadOnlyField()
     tarea_asignada_planeacion     = serializers.ReadOnlyField()
+    cumplimiento_produccion       = serializers.ReadOnlyField()
     etapa_4_bloqueada             = serializers.SerializerMethodField()
 
     def get_etapa_4_bloqueada(self, obj):
@@ -381,6 +382,7 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
             'tiempo_elaboracion_produccion',
             'minutos_hombre_produccion_dom',
             'minutos_restantes_dom',
+            'cumplimiento_produccion',
             'etapa_4_bloqueada',
             # hijos anidados
             'productos_produccion',

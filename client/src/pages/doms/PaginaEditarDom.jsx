@@ -44,6 +44,10 @@ const boolToStr = (val) =>
 const strToBool = (val) =>
   val === 'true' ? true : val === 'false' ? false : null
 
+// Convierte booleano a etiqueta legible para el consolidado
+const boolLabel = (val) =>
+  val === true ? 'Sí' : val === false ? 'No' : 'Pendiente'
+
 function PaginaEditarDom() {
   const { domId }   = useParams()
   const navegar     = useNavigate()
@@ -82,6 +86,10 @@ function PaginaEditarDom() {
   // Estado local para cálculos de capacidad (preview)
   const [capacidadCalculo, setCapacidadCalculo] = useState(null)
   const [tiempoRestantePreview, setTiempoRestantePreview] = useState(null)
+
+  // Confirmación de personas asignadas antes de iniciar cronómetro
+  const [personasConfirmadas, setPersonasConfirmadas]     = useState(false)
+  const [mostrarModalPersonas, setMostrarModalPersonas]   = useState(false)
 
   // Preview de impacto al editar un turno-día ya existente (GET /preview/, con debounce)
   const [previewTurnoDia, setPreviewTurnoDia] = useState(null)
@@ -215,6 +223,15 @@ function PaginaEditarDom() {
       .then(res => setPreviewTurnoDia(res.data.preview))
       .catch(() => setPreviewTurnoDia(null))
   }, [operariosDebounced, minutosDebounced, turnoDiaExistente])
+
+  // Sincroniza personasConfirmadas con el valor persistido en DB
+  // Si el registro activo ya tiene numero_personas_asignadas en DB → habilita el cronómetro sin re-confirmar
+  useEffect(() => {
+    const valorEnDB = planeaciones[idxPlaneacion]
+      ?.registros_produccion?.[idxProduccion]
+      ?.numero_personas_asignadas
+    setPersonasConfirmadas(valorEnDB != null && valorEnDB > 0)
+  }, [planeaciones, idxPlaneacion, idxProduccion])
 
   // ── Typeahead cliente ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -590,6 +607,27 @@ function PaginaEditarDom() {
     }
   }
 
+  // Confirma numero_personas_asignadas en DB y habilita el cronómetro
+  const confirmarPersonasAsignadas = async () => {
+    const registro = planeaciones[idxPlaneacion]?.registros_produccion?.[idxProduccion]
+    if (!registro) return
+    setGuardando(true)
+    setError(null)
+    try {
+      await actualizarProduccion(registro.id, {
+        numero_personas_asignadas: parseInt(registro.numero_personas_asignadas, 10),
+      })
+      setPersonasConfirmadas(true)
+      setMostrarModalPersonas(false)
+      await refrescarPlaneaciones()
+    } catch (err) {
+      setError(err.response?.data?.error ?? 'Error al confirmar el número de personas.')
+      setMostrarModalPersonas(false)
+    } finally {
+      setGuardando(false)
+    }
+  }
+
   // Guarda registro hijo activo
   const guardarHijo = async (tipo, idx, actualizarFn, campos = {}) => {
     const registros = planeaciones[idxPlaneacion]?.[`registros_${tipo}`]
@@ -648,6 +686,8 @@ function PaginaEditarDom() {
   const ultimoAlmacenCerrado     = almacenesActuales.at(-1)?.dom_realizado_planeacion === true
   const ultimaProduccionCerrada  = produccionesActuales.at(-1)?.cierre_produccion === true
   const ultimoTratamientoCerrado = tratamientosActuales.at(-1)?.tratamiento_completado === true
+
+  const cronometroFinalizado = (produccionActual?.registro_tiempo ?? []).some(r => r.estado === 'FINALIZADO')
 
   // ── Pestañas ───────────────────────────────────────────────────────────────
   const pestanas = esDomAdministrativo ? [
@@ -783,20 +823,70 @@ function PaginaEditarDom() {
 
                 {planActual && (
                   <SeccionConsolidado titulo="Etapa 3 — Planeación">
-                    <CampoConsolidado label="Fecha planeación"    valor={planActual.fecha_planeacion} />
-                    <CampoConsolidado label="Cantidad pedido"     valor={planActual.cantidad_pedido} />
-                    <CampoConsolidado label="Planeación completa"
-                      valor={planActual.planeacion_completa ? 'Sí' : 'No'} />
+                    <CampoConsolidado label="Fecha planeación"                       valor={planActual.fecha_planeacion} />
+                    <CampoConsolidado label="Turno"                                  valor={planActual.turno_detalle?.nombre_turno} />
+                    <CampoConsolidado label="Número de operarios"                    valor={planActual.numero_operarios_turno} />
+                    <CampoConsolidado label="Capacidad del turno (min)"              valor={planActual.capacidad_turno_dia} />
+                    <CampoConsolidado label="Tiempo proyectado total (min)"          valor={planActual.tiempo_proyectado} />
+                    <CampoConsolidado label="Orden producción"                       valor={planActual.orden_produccion} />
+                    <CampoConsolidado label="Orden tratamiento térmico"              valor={planActual.orden_tratamiento} />
+                    <CampoConsolidado label="Líder de producción"                    valor={planActual.lider_produccion} />
+                    <CampoConsolidado label="Líder de almacén"                       valor={planActual.lider_almacen} />
+                    <CampoConsolidado label="Objetivo planeación"                    valor={planActual.objetivo_planeacion} />
+                    <CampoConsolidado label="¿Productos deben pesarse?"              valor={boolLabel(planActual.peso)} />
+                    <CampoConsolidado label="¿Materias primas disponibles?"          valor={boolLabel(planActual.materia_prima_disponible)} />
+                    <CampoConsolidado label="¿Tablilla o madera larga?"              valor={planActual.tablilla_madera ?? 'Pendiente'} />
+                    <CampoConsolidado label="¿Productos van encartonados?"           valor={boolLabel(planActual.encartonar)} />
+                    <CampoConsolidado label="¿Grafado y elaboración de fundas?"      valor={boolLabel(planActual.grafado_fundas)} />
+                    <CampoConsolidado label="¿Control de tiempo y ensamble?"         valor={boolLabel(planActual.control_tiempo)} />
+                    <CampoConsolidado label="¿Cliente recoge los productos?"         valor={boolLabel(planActual.cliente_recoge)} />
+                    <CampoConsolidado label="¿Mudar de Colombia entrega?"            valor={boolLabel(planActual.mudar_entrega)} />
+                    <CampoConsolidado label="¿Tratamiento térmico?"                  valor={boolLabel(planActual.tratamiento_termico)} />
+                    <CampoConsolidado label="¿Sello ICA?"                            valor={boolLabel(planActual.sello_ica)} />
+                    <CampoConsolidado label="¿Marcas o símbolos del cliente?"        valor={boolLabel(planActual.marcado_cliente)} />
+                    <CampoConsolidado label="Planeación completa"                    valor={boolLabel(planActual.planeacion_completa)} />
                   </SeccionConsolidado>
                 )}
 
+                <SeccionConsolidado titulo="Etapa 5 — Producción">
+                  <CampoConsolidado label="Tiempo proyectado (min)"          valor={planActual?.tiempo_proyectado} />
+                  <CampoConsolidado label="Minutos asignados (cronómetro)"   valor={produccionActual?.minutos_asignados} />
+                  <CampoConsolidado label="Minutos hombre producción"        valor={produccionActual?.minutos_hombre_produccion_dom} />
+                  <CampoConsolidado label="Minutos restantes"                valor={produccionActual?.minutos_restantes_dom} />
+                  <CampoConsolidado label="Número personas asignadas"        valor={produccionActual?.numero_personas_asignadas} />
+                  <CampoConsolidado label="¿Producción según planeación?"    valor={boolLabel(produccionActual?.segun_planeacion)} />
+                  <CampoConsolidado label="Producción no completada"         valor={boolLabel(produccionActual?.produccion_no_completada)} />
+                  <CampoConsolidado label="Cierre producción"                valor={boolLabel(produccionActual?.cierre_produccion)} />
+                </SeccionConsolidado>
+
+                <SeccionConsolidado titulo="Etapa 6 — Tratamiento">
+                  <CampoConsolidado label="DOM con tratamiento"                valor={boolLabel(tratamientoActual?.dom_con_tratamiento)} />
+                  <CampoConsolidado label="Número de tratamiento"              valor={tratamientoActual?.numero_tratamiento} />
+                  <CampoConsolidado label="Tratamiento según planeación"       valor={boolLabel(tratamientoActual?.tratamiento_segun_planeacion)} />
+                  <CampoConsolidado label="Tratamiento completado"             valor={boolLabel(tratamientoActual?.tratamiento_completado)} />
+                </SeccionConsolidado>
+
+                <SeccionConsolidado titulo="Etapa 4 — Almacén">
+                  <CampoConsolidado label="¿Materias primas internas procesadas?"        valor={boolLabel(almacenActual?.materias_primas)} />
+                  <CampoConsolidado label="¿Materias primas liberadas para producción?"  valor={boolLabel(almacenActual?.materias_liberadas)} />
+                  <CampoConsolidado label="¿Actividades realizadas según planeación?"    valor={boolLabel(almacenActual?.dom_realizado_planeacion)} />
+                  <CampoConsolidado label="Novedad cumplimiento almacén"                 valor={almacenActual?.novedad_cumplimiento_almacen} />
+                </SeccionConsolidado>
+
                 <SeccionConsolidado titulo="Etapa 7 — Despachos">
-                  <CampoConsolidado label="Fecha entrega pactada"
-                    valor={datosDom.fecha_entrega_pactada} />
-                  <CampoConsolidado label="DOM entregado OK"
-                    valor={datosDom.dom_entregado_ok ? 'Sí' : 'No'} />
-                  <CampoConsolidado label="DOM liberado cierre"
-                    valor={datosDom.dom_liberado_cierre ? 'Sí' : 'No'} />
+                  <CampoConsolidado label="Fecha entrega pactada"      valor={datosDom.fecha_entrega_pactada} />
+                  <CampoConsolidado label="Fecha entrega planificada"  valor={datosDom.fecha_entrega_planificada} />
+                  <CampoConsolidado label="Fecha entrega proyectada"   valor={datosDom.fecha_entrega_proyectada} />
+                  <CampoConsolidado label="Cantidad empaques"          valor={datosDom.cantidad_empaques} />
+                  <CampoConsolidado label="Empaque servicio"           valor={datosDom.empaque_servicio} />
+                  <CampoConsolidado label="Tipo negociación"           valor={datosDom.tipo_negociacion} />
+                  <CampoConsolidado label="¿Materiales externos?"      valor={boolLabel(datosDom.materiales_externos)} />
+                  <CampoConsolidado label="Vehículo"                   valor={datosDom.vehiculo} />
+                  <CampoConsolidado label="Orden entrega"              valor={datosDom.orden_entrega} />
+                  <CampoConsolidado label="Notas"                      valor={datosDom.notas} />
+                  <CampoConsolidado label="Novedades cumplimiento"     valor={datosDom.novedades_cumplimiento} />
+                  <CampoConsolidado label="DOM entregado OK"           valor={boolLabel(datosDom.dom_entregado_ok)} />
+                  <CampoConsolidado label="DOM liberado cierre"        valor={boolLabel(datosDom.dom_liberado_cierre)} />
                 </SeccionConsolidado>
               </>
             )}
@@ -1420,55 +1510,61 @@ function PaginaEditarDom() {
                 <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
                   Cantidad elaborada por producto
                 </p>
-                {datosDom.productos.map(prod => {
-                  const pp                   = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
-                  const productoProduccion   = pp ? productoProduccionActivo(pp.id) : null
-                  const localKey             = pp?.id ?? `new_${prod.id}`
-                  const bloqueado            = produccionActual?.cierre_produccion === true
-                  return (
-                    <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
-                      <div>
-                        <p className="text-xs text-gray-500">Producto</p>
-                        <p className="text-sm font-medium text-gray-800">
-                          {prod.tipo_producto_detalle?.nombre_producto ?? '—'}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Cantidad proyectada</p>
-                        <p className="text-sm text-gray-700">{pp?.cantidad_proyectada ?? '—'}</p>
-                      </div>
-                      <CampoFormulario label="Cantidad elaborada">
-                        {!pp ? (
-                          <p className="text-xs text-amber-600 mt-1">
-                            Sin proyección — asigne en etapa de planeación
+                {(() => {
+                  return datosDom.productos.map(prod => {
+                    const pp                 = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
+                    const productoProduccion = pp ? productoProduccionActivo(pp.id) : null
+                    const localKey           = pp?.id ?? `new_${prod.id}`
+                    const bloqueado          = produccionActual?.cierre_produccion === true
+                    return (
+                      <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
+                        <div>
+                          <p className="text-xs text-gray-500">Producto</p>
+                          <p className="text-sm font-medium text-gray-800">
+                            {prod.tipo_producto_detalle?.nombre_producto ?? '—'}
                           </p>
-                        ) : (
-                          <div className="flex gap-2">
-                            <input type="number"
-                              value={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada ?? ''}
-                              onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
-                              disabled={!esEditable('etapa_4') || bloqueado}
-                              placeholder="Ingrese cantidad"
-                              className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
-                            {esEditable('etapa_4') && !bloqueado &&
-                              elaboradaLocal[localKey] !== undefined && (
-                              <button
-                                onClick={() => productoProduccion
-                                  ? actualizarProductoElaborada(productoProduccion.id, localKey)
-                                  : crearProductoElaborada(pp.id, localKey)
-                                }
-                                disabled={guardando}
-                                className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
-                                           hover:bg-[#134080] disabled:opacity-60">
-                                {productoProduccion ? 'Guardar' : 'Agregar'}
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </CampoFormulario>
-                    </div>
-                  )
-                })}
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Cantidad proyectada</p>
+                          <p className="text-sm text-gray-700">{pp?.cantidad_proyectada ?? '—'}</p>
+                        </div>
+                        <CampoFormulario label="Cantidad elaborada">
+                          {!pp ? (
+                            <p className="text-xs text-amber-600 mt-1">
+                              Sin proyección — asigne en etapa de planeación
+                            </p>
+                          ) : !cronometroFinalizado ? (
+                            <p className="text-xs text-amber-600 mt-1">
+                              Disponible una vez finalice el cronómetro de producción
+                            </p>
+                          ) : (
+                            <div className="flex gap-2">
+                              <input type="number"
+                                value={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada ?? ''}
+                                onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
+                                disabled={!esEditable('etapa_4') || bloqueado}
+                                placeholder="Ingrese cantidad"
+                                className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                              {esEditable('etapa_4') && !bloqueado &&
+                                elaboradaLocal[localKey] !== undefined && (
+                                <button
+                                  onClick={() => productoProduccion
+                                    ? actualizarProductoElaborada(productoProduccion.id, localKey)
+                                    : crearProductoElaborada(pp.id, localKey)
+                                  }
+                                  disabled={guardando}
+                                  className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
+                                             hover:bg-[#134080] disabled:opacity-60">
+                                  {productoProduccion ? 'Guardar' : 'Agregar'}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </CampoFormulario>
+                      </div>
+                    )
+                  })
+                })()}
               </div>
             )}
 
@@ -1500,7 +1596,7 @@ function PaginaEditarDom() {
                     registroProduccionId={produccionActual.id}
                     onAccion={refrescarPlaneaciones}
                     puedeOperar={esEditable('etapa_4')}
-                    personasAsignadas={produccionActual?.numero_personas_asignadas}
+                    personasAsignadas={personasConfirmadas}
                   />
                   <div className="grid grid-cols-2 gap-4">
                   <CampoLectura
@@ -1519,9 +1615,20 @@ function PaginaEditarDom() {
                     label="Minutos restantes"
                     valor={produccionActual.minutos_restantes_dom}
                   />
+                  <CampoLectura
+                    label="Cumplimiento producción"
+                    valor={produccionActual.cumplimiento_produccion}
+                  />
                   <CampoFormulario label="Número personas asignadas">
                     <input type="number" value={produccionActual.numero_personas_asignadas ?? ''}
-                      onChange={e => actualizarCampoHijo('produccion', 'numero_personas_asignadas', e.target.value, idxProduccion)}
+                      onChange={e => {
+                        actualizarCampoHijo('produccion', 'numero_personas_asignadas', e.target.value, idxProduccion)
+                        setPersonasConfirmadas(false)
+                      }}
+                      onBlur={() => {
+                        const val = produccionActual.numero_personas_asignadas
+                        if (val && parseInt(val) > 0) setMostrarModalPersonas(true)
+                      }}
                       disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion}
                       className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
                   </CampoFormulario>
@@ -1550,11 +1657,18 @@ function PaginaEditarDom() {
                   <CampoFormulario label="¿Este DOM ya ha sido liberado desde producción?">
                     <SelectSiNo name="produccion_cierre_produccion" value={boolToStr(produccionActual.cierre_produccion)}
                       onChange={v => actualizarCampoHijo('produccion', 'cierre_produccion', strToBool(v), idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion} />
-                    <p className="text-xs text-amber-600 mt-1">
-                      Importante: una vez marque Sí y guarde, no podrá realizar
-                      modificaciones posteriores a este registro.
-                    </p>
+                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion || !cronometroFinalizado} />
+                    {!cronometroFinalizado && !produccionActual.cierre_produccion && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Disponible una vez finalice el cronómetro de producción.
+                      </p>
+                    )}
+                    {!produccionActual.cierre_produccion && cronometroFinalizado && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Importante: una vez marque Sí y guarde, no podrá realizar
+                        modificaciones posteriores a este registro.
+                      </p>
+                    )}
                   </CampoFormulario>
                 </div>
                 </>
@@ -1745,6 +1859,41 @@ function PaginaEditarDom() {
           VOLVER
         </button>
       </div>
+
+      {/* Modal confirmación número de personas asignadas */}
+      {mostrarModalPersonas && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">
+              Confirmar personas asignadas
+            </h3>
+            <p className="text-sm text-gray-600 mb-1">
+              Este dato es necesario para calcular los <strong>minutos hombre de producción</strong> y
+              los <strong>minutos restantes</strong> al finalizar el cronómetro.
+            </p>
+            <p className="text-sm text-gray-800 font-medium mt-3 mb-5">
+              ¿Confirmar{' '}
+              <span className="text-[#1A56A0] font-bold">
+                {produccionActual?.numero_personas_asignadas} persona{produccionActual?.numero_personas_asignadas !== 1 ? 's' : ''}
+              </span>{' '}
+              asignadas a esta producción?
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setMostrarModalPersonas(false)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={confirmarPersonasAsignadas}
+                disabled={guardando}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080] disabled:opacity-60">
+                {guardando ? 'Confirmando...' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )
@@ -1992,7 +2141,7 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
 // Sección del consolidado con título
 function SeccionConsolidado({ titulo, children }) {
   return (
-    <div>
+    <div className="pb-6 border-b border-gray-400 last:border-b-0 last:pb-0">
       <h3 className="text-xs font-semibold text-[#1A56A0] uppercase tracking-wide mb-3">
         {titulo}
       </h3>

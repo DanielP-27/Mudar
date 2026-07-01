@@ -87,7 +87,10 @@ Define 6 roles con permisos diferenciados por etapa via `puede_editar_etapas(eta
 | `LIDER_PLANTA` | 3, 4, 5 |
 | `GERENCIA` | ninguna (solo lectura) |
 
-### 5. Gestión de secretos y entorno
+### 5. Limitación conocida — cronómetro y cambio de operarios
+`minutos_hombre_produccion_dom = minutos_asignados × numero_personas_asignadas` asume un único valor de personas para toda la duración. Si el número de operarios cambia a mitad del cronómetro, el cálculo aplica el valor final retroactivamente y el resultado es incorrecto. Flujo soportado: `numero_personas_asignadas` se confirma antes de iniciar y no cambia durante la producción. Cambio mid-cronómetro no está implementado ni soportado — requeriría registrar segmentos de tiempo.
+
+### 6. Gestión de secretos y entorno
 - Las credenciales de BD y `SECRET_KEY` se leen desde `.env` via `python-decouple` (`config()`)
 - `.env` está excluido del repositorio — nunca debe commitearse
 - El `.gitignore` cubre: `.env`, `*.sqlite3`, `__pycache__/`, `*.pyc`, `venv/`, `node_modules`
