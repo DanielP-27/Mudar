@@ -251,7 +251,7 @@ class Dom(models.Model):
     rentabilidad=models.IntegerField(blank=True, null=True, verbose_name='Rentabilidad (%)', help_text='Porcentaje de rentabilidad')
     campana_venta = models.BooleanField(null=True, blank=True, default=None, verbose_name='DOM generado en campaña de venta')
     numero_cotizacion=models.CharField(max_length=50, blank=True, null=True, verbose_name='Numero de Cotización')
-    numero_factura=models.IntegerField(blank=True, null=True, verbose_name='Número Factura de venta')
+    numero_factura=models.CharField(max_length=50, blank=True, null=True, verbose_name='Número Factura de venta')
     # Bloqueo etapa
     dom_relacionado_produccion=models.BooleanField(default=False, verbose_name='Validación etapa 1', help_text='Seleccione si unicamente si ya ha finalizado esta etapa, no podrá realizar cambios de forma posterior')
 
@@ -364,7 +364,7 @@ class RegistroPlaneacion(models.Model):
     encartonar = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Encartonar?')
     grafado_fundas = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Productos requieren grafado y/o elaboración fundas?')
     control_tiempo = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Producto lleva control de tiempo de corte y ensamble en armadora?')
-    orden_tratamiento=models.IntegerField(default=1, verbose_name='Orden Tratamiento')
+    orden_tratamiento=models.IntegerField(blank=True, null=True, verbose_name='Orden Tratamiento')
     lider_almacen = models.CharField(max_length=50, blank=True, null=True, verbose_name='Lider de almacén')
     cliente_recoge = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Cliente recoge productos?')
     mudar_entrega = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Mudar de Colombia entrega productos?')

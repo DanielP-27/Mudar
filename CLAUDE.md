@@ -66,6 +66,8 @@ Cada etapa tiene un campo boolean de bloqueo. Una vez marcado `True`, la etapa n
 | 5 — Tratamiento | `RegistroTratamiento` | `tratamiento_completado` |
 | 6 — Despacho | `Dom` | `dom_liberado_cierre` |
 
+**Bloqueo desactivado deliberadamente — etapa 1 (Gestión comercial y diseño):** el modelo `Dom` tiene el campo `dom_relacionado_produccion` y el método `etapa_1_bloqueada()` (`models.py:256,319-320`), pero desde 2026-07-02 el bloqueo de esta etapa está **desactivado a propósito** — se quitó `'etapa_1': dom.etapa_1_bloqueada` del diccionario `bloqueos` en `DomDetalleView.put` (`views.py`) para evitar que un usuario bloquee la etapa por error, y se retiró el campo `CampoFormulario` "Validación etapa 1" del frontend (`PaginaEditarDom.jsx`) para que no sea visible ni editable. El campo del modelo, el método y el serializer siguen intactos — es código muerto reversible. Si el dueño del negocio pide reactivar este bloqueo en el futuro, hay que: (1) volver a agregar `'etapa_1': dom.etapa_1_bloqueada,` al diccionario `bloqueos`, y (2) restaurar el `CampoFormulario` correspondiente en el frontend.
+
 ### 2. Modelo `RegistroTurnoDia` (migración 0005)
 Registra operarios disponibles por turno y fecha. Es la base del cálculo de `capacidad_turno_dia` en `RegistroPlaneacion`. Sus campos clave: `turno` (FK), `fecha`, `numero_operarios`, `horas_extras` (+120 min si `True`). Restricción: `unique_together = ('turno', 'fecha')`.
 
@@ -94,6 +96,18 @@ Define 6 roles con permisos diferenciados por etapa via `puede_editar_etapas(eta
 - Las credenciales de BD y `SECRET_KEY` se leen desde `.env` via `python-decouple` (`config()`)
 - `.env` está excluido del repositorio — nunca debe commitearse
 - El `.gitignore` cubre: `.env`, `*.sqlite3`, `__pycache__/`, `*.pyc`, `venv/`, `node_modules`
+
+## Pendientes
+
+- **Validar visibilidad de campos `SelectSiNo` sin permisos de edición** — `client/src/components/common/SelectSiNo.jsx` tiene dos variantes activas en paralelo, falta validar en navegador y decidir cuál queda:
+  - Etapa 2 (Planeación, 11 campos): prop `mostrarCandado` activa — radio seleccionado se mantiene azul fijo, señal de bloqueo es un ícono de candado (`FiLock`) junto a los radios.
+  - Resto de etapas (Almacén, Producción, Tratamiento, Despacho, DOM): sin candado — radio azul cuando editable, negro sólido cuando bloqueado.
+  - Pendiente decidir si se extiende el candado a todas las etapas o se queda solo en Planeación.
+- **Contraste de campos deshabilitados aún no convence al usuario** — se aplicaron varias capas de fix (contraste de texto/fondo en `disabled:*`, override global de `-webkit-text-fill-color`/`opacity` en `client/src/index.css`), pero tras probarlo en navegador el usuario indicó que el aspecto visual sigue sin convencerlo. Retomar y revisar con el usuario antes de seguir iterando a ciegas.
+
+## Deuda técnica / mejoras a futuro
+
+- **Cronómetro — cambio de operarios a mitad de la producción** — la fórmula `minutos_hombre_produccion_dom = minutos_asignados × numero_personas_asignadas` asume un único valor de personas para toda la duración (ver sección 5, "Limitación conocida"). Si el número de operarios cambia mid-cronómetro, el cálculo aplica el valor final retroactivamente y el resultado es incorrecto. Mejora potencial: registrar segmentos de tiempo con su respectivo `numero_personas_asignadas` y sumar `minutos_hombre` por segmento, en lugar de un único producto global. No priorizado — el flujo actual (confirmar personas antes de iniciar y no cambiarlas durante la producción) es suficiente para el negocio hoy.
 
 ## Resumen de Sesión — 2026-05-14
 

@@ -1510,8 +1510,11 @@ class DomDetalleView(APIView):
                 )
 
         # Verifica bloqueo de etapa antes de aplicar cambios
+        # etapa_1 (Gestión comercial) queda deliberadamente sin bloqueo activo — el campo
+        # dom_relacionado_produccion y el método etapa_1_bloqueada() siguen existiendo.
+        # Si se decide reactivar el bloqueo de esta etapa, agregar de nuevo:
+        #   'etapa_1': dom.etapa_1_bloqueada,
         bloqueos = {
-            'etapa_1': dom.etapa_1_bloqueada,
             'etapa_6': dom.etapa_6_bloqueada,
         }
         if etapa in bloqueos and bloqueos[etapa]():

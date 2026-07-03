@@ -8,7 +8,7 @@ function TypeaheadInput({ valor, onChange, sugerencias, mostrar, onSeleccionar,
       <input type="text" value={valor} onChange={onChange}
         placeholder={placeholder}
         disabled={disabled}
-        className="campo-input w-full disabled:bg-gray-50 disabled:text-gray-500"
+        className="campo-input w-full disabled:bg-gray-100 disabled:text-gray-700"
         autoComplete="off" />
       {mostrar && sugerencias.length > 0 && (
         <ul className="absolute z-10 w-full bg-white border border-gray-200

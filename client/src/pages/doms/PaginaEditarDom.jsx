@@ -65,9 +65,13 @@ function PaginaEditarDom() {
 
   // Datos del DOM — etapas 0, 1 y 6
   const [datosDom, setDatosDom] = useState(null)
+  // Snapshot del DOM tal como lo confirmó el servidor — usado para el bloqueo de etapa (no se actualiza con ediciones locales)
+  const [datosDomOriginal, setDatosDomOriginal] = useState(null)
 
   // Planeaciones y registro activo
   const [planeaciones, setPlaneaciones]           = useState([])
+  // Snapshot de planeaciones tal como lo confirmó el servidor — usado para el bloqueo de etapa (no se actualiza con ediciones locales)
+  const [planeacionesOriginal, setPlaneacionesOriginal] = useState([])
   const [idxPlaneacion, setIdxPlaneacion]         = useState(0)
 
   // Índices de registros hijos activos
@@ -90,6 +94,9 @@ function PaginaEditarDom() {
   // Confirmación de personas asignadas antes de iniciar cronómetro
   const [personasConfirmadas, setPersonasConfirmadas]     = useState(false)
   const [mostrarModalPersonas, setMostrarModalPersonas]   = useState(false)
+
+  // Confirmación de bloqueo de etapa — modal propio en vez de window.confirm()
+  const [confirmacionBloqueo, setConfirmacionBloqueo]     = useState(null) // { mensaje, resolve } | null
 
   // Preview de impacto al editar un turno-día ya existente (GET /preview/, con debounce)
   const [previewTurnoDia, setPreviewTurnoDia] = useState(null)
@@ -142,6 +149,7 @@ function PaginaEditarDom() {
 
         const dom = resDom.data.dom
         setDatosDom(dom)
+        setDatosDomOriginal(dom)
         setBusquedaCliente(dom.nombre_cliente_detalle ?? '')
 
         // Cargar planeaciones solo para DOMs productivos
@@ -149,6 +157,7 @@ function PaginaEditarDom() {
           const resPlaneacion = await obtenerPlaneacion({ dom_id: domId })
           const registros = resPlaneacion.data.registros ?? []
           setPlaneaciones(registros)
+          setPlaneacionesOriginal(registros)
 
           // El efecto que consulta RegistroTurnoDia reacciona a idxPlaneacion,
           // pero ya corrió antes de que llegaran estos datos (planeaciones aún vacío).
@@ -323,6 +332,22 @@ function PaginaEditarDom() {
     setTimeout(() => setExito(null), 3000)
   }
 
+  // Mensaje de confirmación mostrado antes de guardar un cambio que bloquea una etapa
+  const mensajeConfirmacionBloqueo = (nombreCampo, tipoRegistro) =>
+    `Ha seleccionado el campo ${nombreCampo}. Si confirma su elección, este registro de ${tipoRegistro} quedará bloqueado para edición.`
+
+  // Muestra el modal de confirmación de bloqueo y devuelve una promesa que se
+  // resuelve con true/false según el botón que el usuario presione
+  const confirmarBloqueo = (mensaje) =>
+    new Promise(resolve => setConfirmacionBloqueo({ mensaje, resolve }))
+
+  // Campo de bloqueo y textos del modal, según el tipo de registro hijo
+  const CAMPO_BLOQUEO_POR_TIPO = {
+    almacen:     { campo: 'materias_liberadas',    nombre: 'Materias primas liberadas', tipoRegistro: 'Almacén' },
+    produccion:  { campo: 'cierre_produccion',      nombre: 'Cierre producción',         tipoRegistro: 'Producción' },
+    tratamiento: { campo: 'tratamiento_completado', nombre: 'Tratamiento completado',    tipoRegistro: 'Tratamiento' },
+  }
+
   // Crea un ProductoProduccion (cantidad elaborada por producto)
   const crearProductoElaborada = async (ppId, localKey) => {
     const valor = elaboradaLocal[localKey]
@@ -460,18 +485,25 @@ function PaginaEditarDom() {
 
   // Guarda etapas 0, 1 y 7 — todas usan PUT /api/doms/<id>/
   const guardarDom = async (mensaje, etapa) => {
+    // Confirmación de bloqueo — solo si esta acción es la que activa el bloqueo
+    const yaEstabaBloqueado = datosDomOriginal?.dom_liberado_cierre === true
+    if (!yaEstabaBloqueado && datosDom.dom_liberado_cierre === true) {
+      if (!await confirmarBloqueo(mensajeConfirmacionBloqueo('DOM liberado cierre', 'DOM'))) return
+    }
+
     setGuardando(true)
     setError(null)
     try {
-      await actualizarDom(domId, {
+      const res = await actualizarDom(domId, {
         ...datosDom,
         etapa,
         nombre_cliente:        toInt(datosDom.nombre_cliente),
         tiempo_salida_almacen: toInt(datosDom.tiempo_salida_almacen),
         rentabilidad:          toInt(datosDom.rentabilidad),
-        numero_factura:        toInt(datosDom.numero_factura),
         cantidad_empaques:     toInt(datosDom.cantidad_empaques),
       })
+      setDatosDom(res.data.dom)
+      setDatosDomOriginal(res.data.dom)
       mostrarExito(mensaje)
     } catch (err) {
       setError(err.response?.data?.error ?? err.response?.data?.detail
@@ -531,6 +563,12 @@ function PaginaEditarDom() {
       }
     }
 
+    // Confirmación de bloqueo — solo si esta acción es la que activa el bloqueo
+    const yaEstabaBloqueada = planeacionesOriginal[idxPlaneacion]?.planeacion_completa === true
+    if (!yaEstabaBloqueada && plan.planeacion_completa) {
+      if (!await confirmarBloqueo(mensajeConfirmacionBloqueo('Planeación completa', 'Planeación'))) return
+    }
+
     setGuardando(true)
     setError(null)
     try {
@@ -558,6 +596,7 @@ function PaginaEditarDom() {
             }
           : p
       ))
+      setPlaneacionesOriginal(nuevosRegistros)
 
       mostrarExito('Planeación guardada correctamente.')
     } catch (err) {
@@ -633,10 +672,30 @@ function PaginaEditarDom() {
     const registros = planeaciones[idxPlaneacion]?.[`registros_${tipo}`]
     const registro  = registros?.[idx]
     if (!registro) return
+
+    // Confirmación de bloqueo — solo si esta acción es la que activa el bloqueo
+    const infoBloqueo = CAMPO_BLOQUEO_POR_TIPO[tipo]
+    const registrosOriginal = planeacionesOriginal[idxPlaneacion]?.[`registros_${tipo}`]
+    const yaEstabaBloqueado = registrosOriginal?.[idx]?.[infoBloqueo.campo] === true
+    if (!yaEstabaBloqueado && registro[infoBloqueo.campo] === true) {
+      if (!await confirmarBloqueo(mensajeConfirmacionBloqueo(infoBloqueo.nombre, infoBloqueo.tipoRegistro))) return
+    }
+
     setGuardando(true)
     setError(null)
     try {
-      await actualizarFn(registro.id, { ...registro, ...campos })
+      const res = await actualizarFn(registro.id, { ...registro, ...campos })
+      const registroActualizado = res.data.registro
+
+      const mergeHijo = prev => prev.map((p, i) =>
+        i === idxPlaneacion ? {
+          ...p,
+          [`registros_${tipo}`]: p[`registros_${tipo}`].map((h, j) => j === idx ? registroActualizado : h)
+        } : p
+      )
+      setPlaneaciones(mergeHijo)
+      setPlaneacionesOriginal(mergeHijo)
+
       mostrarExito(`Registro de ${tipo} guardado correctamente.`)
     } catch (err) {
       setError(err.response?.data?.error ?? `Error al guardar el registro de ${tipo}.`)
@@ -682,10 +741,19 @@ function PaginaEditarDom() {
   const produccionActual  = produccionesActuales[idxProduccion]
   const tratamientoActual = tratamientosActuales[idxTratamiento]
 
+  // Snapshot de los mismos datos, confirmado por el servidor — usado para el bloqueo de etapa
+  const planActualOriginal           = planeacionesOriginal[idxPlaneacion]
+  const almacenesActualesOriginal    = planActualOriginal?.registros_almacen    ?? []
+  const produccionesActualesOriginal = planActualOriginal?.registros_produccion ?? []
+  const tratamientosActualesOriginal = planActualOriginal?.registros_tratamiento ?? []
+  const almacenActualOriginal        = almacenesActualesOriginal[idxAlmacen]
+  const produccionActualOriginal     = produccionesActualesOriginal[idxProduccion]
+  const tratamientoActualOriginal    = tratamientosActualesOriginal[idxTratamiento]
+
   // Determina si el último registro hijo está cerrado — habilita "+ Nuevo"
-  const ultimoAlmacenCerrado     = almacenesActuales.at(-1)?.dom_realizado_planeacion === true
-  const ultimaProduccionCerrada  = produccionesActuales.at(-1)?.cierre_produccion === true
-  const ultimoTratamientoCerrado = tratamientosActuales.at(-1)?.tratamiento_completado === true
+  const ultimoAlmacenCerrado     = almacenesActualesOriginal.at(-1)?.materias_liberadas === true
+  const ultimaProduccionCerrada  = produccionesActualesOriginal.at(-1)?.cierre_produccion === true
+  const ultimoTratamientoCerrado = tratamientosActualesOriginal.at(-1)?.tratamiento_completado === true
 
   const cronometroFinalizado = (produccionActual?.registro_tiempo ?? []).some(r => r.estado === 'FINALIZADO')
 
@@ -909,7 +977,7 @@ function PaginaEditarDom() {
             {/* Tipo DOM — bloqueado para evitar cambio entre administrativo/productivo */}
             <CampoFormulario label="Tipo o estado DOM">
               <select value={datosDom.tipo_estado_dom} disabled
-                className="campo-input bg-gray-50 text-gray-500 cursor-not-allowed">
+                className="campo-input bg-gray-100 text-gray-700 cursor-not-allowed">
                 <option value={datosDom.tipo_estado_dom}>{datosDom.tipo_estado_dom}</option>
               </select>
               <p className="text-xs text-amber-600 mt-1">
@@ -945,21 +1013,21 @@ function PaginaEditarDom() {
                 onChange={e => actualizarCampoDom('descripcion', e.target.value)}
                 disabled={!esEditable('etapa_0') && !esEditable('etapa_1')}
                 rows={3} placeholder="Describa el trámite o procedimiento interno"
-                className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
+                className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
             </CampoFormulario>
 
             <CampoFormulario label="Fecha límite respuesta" obligatorio>
               <input type="date" value={datosDom.fecha_solicitada_cliente ?? ''}
                 onChange={e => actualizarCampoDom('fecha_solicitada_cliente', e.target.value)}
                 disabled={!esEditable('etapa_0') && !esEditable('etapa_1')}
-                className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
             </CampoFormulario>
 
             <CampoFormulario label="Responsable" obligatorio>
               <select value={datosDom.responsable ?? ''}
                 onChange={e => actualizarCampoDom('responsable', e.target.value)}
                 disabled={!esEditable('etapa_0') && !esEditable('etapa_1')}
-                className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                 <option value="">Seleccione una opción</option>
                 {responsables.map(r => (
                   <option key={r.lista_id} value={r.nombre}>{r.nombre}</option>
@@ -1010,7 +1078,7 @@ function PaginaEditarDom() {
                 onChange={e => actualizarCampoDom('descripcion', e.target.value)}
                 disabled={!esEditable('etapa_0')}
                 rows={3} placeholder="Información relevante del DOM"
-                className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
+                className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
             </CampoFormulario>
 
             {/* Tipo DOM — permite cambios entre estados productivos, bloqueado a administrativos */}
@@ -1018,7 +1086,7 @@ function PaginaEditarDom() {
               <select value={datosDom.tipo_estado_dom ?? ''}
                 onChange={e => actualizarCampoDom('tipo_estado_dom', e.target.value)}
                 disabled={!esEditable('etapa_0')}
-                className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                 <option value="">Seleccione una opción</option>
                 {tiposEstadoDom
                   .filter(t => !TIPOS_ADMINISTRATIVOS.includes(t.nombre))
@@ -1032,14 +1100,14 @@ function PaginaEditarDom() {
               <input type="date" value={datosDom.fecha_solicitada_cliente ?? ''}
                 onChange={e => actualizarCampoDom('fecha_solicitada_cliente', e.target.value)}
                 disabled={!esEditable('etapa_0')}
-                className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
             </CampoFormulario>
 
             <CampoFormulario label="Responsable" obligatorio>
               <select value={datosDom.responsable ?? ''}
                 onChange={e => actualizarCampoDom('responsable', e.target.value)}
                 disabled={!esEditable('etapa_0')}
-                className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                 <option value="">Seleccione una opción</option>
                 {responsables.map(r => (
                   <option key={r.lista_id} value={r.nombre}>{r.nombre}</option>
@@ -1063,31 +1131,31 @@ function PaginaEditarDom() {
                 <input type="text" value={datosDom.orden_compra ?? ''}
                   onChange={e => actualizarCampoDom('orden_compra', e.target.value)}
                   disabled={!esEditable('etapa_1')}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Número cotización">
                 <input type="text" value={datosDom.numero_cotizacion ?? ''}
                   onChange={e => actualizarCampoDom('numero_cotizacion', e.target.value)}
                   disabled={!esEditable('etapa_1')}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Número factura">
-                <input type="number" value={datosDom.numero_factura ?? ''}
+                <input type="text" value={datosDom.numero_factura ?? ''} maxLength={50}
                   onChange={e => actualizarCampoDom('numero_factura', e.target.value)}
                   disabled={!esEditable('etapa_1')}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Rentabilidad (%)">
                 <input type="number" value={datosDom.rentabilidad ?? ''}
                   onChange={e => actualizarCampoDom('rentabilidad', e.target.value)}
                   disabled={!esEditable('etapa_1')}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Tiempo salida almacén (minutos)">
                 <input type="number" value={datosDom.tiempo_salida_almacen ?? ''}
                   onChange={e => actualizarCampoDom('tiempo_salida_almacen', e.target.value)}
                   disabled={!esEditable('etapa_1')}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Campaña de venta">
                 <SelectSiNo name="dom_campana_venta" value={boolToStr(datosDom.campana_venta)}
@@ -1095,16 +1163,6 @@ function PaginaEditarDom() {
                   disabled={!esEditable('etapa_1')} />
               </CampoFormulario>
             </div>
-
-            <CampoFormulario label="Validación etapa 1">
-              <SelectSiNo name="dom_relacionado_produccion" value={boolToStr(datosDom.dom_relacionado_produccion)}
-                onChange={v => actualizarCampoDom('dom_relacionado_produccion', strToBool(v))}
-                disabled={!esEditable('etapa_1')} />
-              <p className="text-xs text-amber-600 mt-1">
-                Importante: una vez marque Sí y guarde, no podrá realizar
-                modificaciones posteriores a esta etapa.
-              </p>
-            </CampoFormulario>
           </FormEtapa>
         )}
 
@@ -1125,7 +1183,7 @@ function PaginaEditarDom() {
 
           <FormEtapa
             titulo="Etapa 3 — Planeación"
-            editable={esEditable('etapa_2') && !planActual?.planeacion_completa}
+            editable={esEditable('etapa_2') && !planActualOriginal?.planeacion_completa}
             guardando={guardando}
             onGuardar={guardarPlaneacion}
             sinRegistro={!planActual}
@@ -1140,7 +1198,7 @@ function PaginaEditarDom() {
                       consultarDisponibilidadTurno(planActual.turno, e.target.value)
                     }}
                     disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                 </CampoFormulario>
                 <CampoFormulario label="Turno">
                   <select value={planActual.turno ?? ''}
@@ -1149,7 +1207,7 @@ function PaginaEditarDom() {
                       consultarDisponibilidadTurno(toInt(e.target.value), planActual.fecha_planeacion)
                     }}
                     disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     <option value="">Seleccione una opción</option>
                     {turnos.map(t => (
                       <option key={t.turno_id} value={t.turno_id}>{t.nombre_turno}</option>
@@ -1164,14 +1222,14 @@ function PaginaEditarDom() {
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, numero_operarios: e.target.value }))}
                     disabled={!esEditable('etapa_2')}
                     placeholder="Ingrese número de operarios"
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                 </CampoFormulario>
                 <CampoFormulario label="Duración del turno">
                   <select
                     value={datosTurnoDia.minutos_totales}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, minutos_totales: e.target.value }))}
                     disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     {OPCIONES_MINUTOS.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
@@ -1262,14 +1320,14 @@ function PaginaEditarDom() {
                 <CampoFormulario label="Orden producción dentro de turno y fecha">
                   <input type="text" value={planActual.orden_produccion ?? ''}
                     onChange={e => actualizarCampoPlaneacion('orden_produccion', e.target.value)}
-                    disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                 </CampoFormulario>
                 <CampoFormulario label="Líder de producción">
                   <select value={planActual.lider_produccion ?? ''}
                     onChange={e => actualizarCampoPlaneacion('lider_produccion', e.target.value)}
-                    disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     <option value="">Seleccione una opción</option>
                     {lideresPlanta.map(l => (
                       <option key={l.lista_id} value={l.nombre}>{l.nombre}</option>
@@ -1279,8 +1337,8 @@ function PaginaEditarDom() {
                 <CampoFormulario label="Objetivo planeación actual">
                   <select value={planActual.objetivo_planeacion ?? ''}
                     onChange={e => actualizarCampoPlaneacion('objetivo_planeacion', e.target.value)}
-                    disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     <option value="">Seleccione una opción</option>
                     {objetivos.map(o => (
                       <option key={o.lista_id} value={o.nombre}>{o.nombre}</option>
@@ -1290,8 +1348,8 @@ function PaginaEditarDom() {
                 <CampoFormulario label="Líder de almacén">
                   <select value={planActual.lider_almacen ?? ''}
                     onChange={e => actualizarCampoPlaneacion('lider_almacen', e.target.value)}
-                    disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     <option value="">Seleccione una opción</option>
                     {lideresPlanta.map(l => (
                       <option key={l.lista_id} value={l.nombre}>{l.nombre}</option>
@@ -1301,24 +1359,24 @@ function PaginaEditarDom() {
                 <CampoFormulario label="Orden de tratamiento termico en turno y fecha">
                   <input type="text" value={planActual.orden_tratamiento ?? ''}
                     onChange={e => actualizarCampoPlaneacion('orden_tratamiento', e.target.value)}
-                    disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben pesarse?">
                   <SelectSiNo name="planeacion_peso" value={boolToStr(planActual.peso)}
                     onChange={v => actualizarCampoPlaneacion('peso', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Materias primas disponibles para fabricar este DOM?">
                   <SelectSiNo name="planeacion_materia_prima_disponible" value={boolToStr(planActual.materia_prima_disponible)}
                     onChange={v => actualizarCampoPlaneacion('materia_prima_disponible', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos se elaboran con tablilla o madera larga?">
                   <select value={planActual.tablilla_madera ?? ''}
                     onChange={e => actualizarCampoPlaneacion('tablilla_madera', e.target.value)}
-                    disabled={!esEditable('etapa_2')}
-                    className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     <option value="">Seleccione una opción</option>
                     <option value="Madera">Madera</option>
                     <option value="Tablilla">Tablilla</option>
@@ -1327,42 +1385,42 @@ function PaginaEditarDom() {
                 <CampoFormulario label="¿Productos van encartonados?">
                   <SelectSiNo name="planeacion_encartonar" value={boolToStr(planActual.encartonar)}
                     onChange={v => actualizarCampoPlaneacion('encartonar', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren grafado y elaboración de fundas">
                   <SelectSiNo name="planeacion_grafado_fundas" value={boolToStr(planActual.grafado_fundas)}
                     onChange={v => actualizarCampoPlaneacion('grafado_fundas', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Producto requiere Control de tiempo y ensamble en armadora?">
                   <SelectSiNo name="planeacion_control_tiempo" value={boolToStr(planActual.control_tiempo)}
                     onChange={v => actualizarCampoPlaneacion('control_tiempo', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Cliente recoge los productos?">
                   <SelectSiNo name="planeacion_cliente_recoge" value={boolToStr(planActual.cliente_recoge)}
                     onChange={v => actualizarCampoPlaneacion('cliente_recoge', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Mudar de Colombia entrega los productos?">
                   <SelectSiNo name="planeacion_mudar_entrega" value={boolToStr(planActual.mudar_entrega)}
                     onChange={v => actualizarCampoPlaneacion('mudar_entrega', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren tratamiento térmico?">
                   <SelectSiNo name="planeacion_tratamiento_termico" value={boolToStr(planActual.tratamiento_termico)}
                     onChange={v => actualizarCampoPlaneacion('tratamiento_termico', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben llevar Sello ICA?">
                   <SelectSiNo name="planeacion_sello_ica" value={boolToStr(planActual.sello_ica)}
                     onChange={v => actualizarCampoPlaneacion('sello_ica', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActual?.planeacion_completa} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos llevan marcas o símbolos del cliente?">
                   <SelectSiNo name="planeacion_marcado_cliente" value={boolToStr(planActual.marcado_cliente)}
                     onChange={v => actualizarCampoPlaneacion('marcado_cliente', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
                 </CampoFormulario>
               </div>
             )}
@@ -1393,10 +1451,10 @@ function PaginaEditarDom() {
                           <input type="number"
                             value={proyectadaLocal[localKey] ?? pp?.cantidad_proyectada ?? ''}
                             onChange={e => setProyectadaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
-                            disabled={!esEditable('etapa_2') || !!planActual.planeacion_completa}
+                            disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
                             placeholder="Ingrese cantidad"
-                            className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
-                          {esEditable('etapa_2') && !planActual.planeacion_completa && (
+                            className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                          {esEditable('etapa_2') && !planActualOriginal?.planeacion_completa && (
                             <button
                               onClick={() => pp
                                 ? guardarCantidadProyectada(pp)
@@ -1425,7 +1483,7 @@ function PaginaEditarDom() {
             {planActual && (
               <div className="grid grid-cols-2 gap-4">
                 <CampoFormulario label="¿Registro de planeación completo y relacionado con producción?">
-                  <SelectSiNo name="planeacion_completa" value={boolToStr(planActual.planeacion_completa)}
+                  <SelectSiNo name="planeacion_completa" mostrarCandado value={boolToStr(planActual.planeacion_completa)}
                     onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                   <p className="text-xs text-amber-600 mt-1">
@@ -1445,18 +1503,19 @@ function PaginaEditarDom() {
             {/* Selector de registro almacén */}
             <SelectorRegistro
               registros={almacenesActuales}
+              registrosOriginal={almacenesActualesOriginal}
               idxActivo={idxAlmacen}
               onCambiar={setIdxAlmacen}
               etiqueta="Almacén"
-              campoCierre="dom_realizado_planeacion"
+              campoCierre="materias_liberadas"
               ultimoCerrado={ultimoAlmacenCerrado}
-              puedeCrear={esEditable('etapa_3')}
+              puedeCrear={esEditable('etapa_3') && (almacenesActuales.length === 0 || ultimoAlmacenCerrado)}
               onNuevo={() => crearNuevoHijo('almacen', crearAlmacen, setIdxAlmacen)}
               guardando={guardando}
             />
             <FormEtapa
               titulo="Etapa 4 — Almacén"
-              editable={esEditable('etapa_3') && !almacenActual?.dom_realizado_planeacion}
+              editable={esEditable('etapa_3') && !almacenActualOriginal?.materias_liberadas}
               guardando={guardando}
               onGuardar={() => guardarHijo('almacen', idxAlmacen, actualizarAlmacen)}
               sinRegistro={!almacenActual}
@@ -1466,33 +1525,33 @@ function PaginaEditarDom() {
                   <CampoFormulario label="¿Materias primas internas procesadas?">
                     <SelectSiNo name="almacen_materias_primas" value={boolToStr(almacenActual.materias_primas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_primas', strToBool(v), idxAlmacen)}
-                      disabled={!esEditable('etapa_3') || almacenActual.dom_realizado_planeacion} />
+                      disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                   </CampoFormulario>
                   <CampoFormulario label="Tarea asignada de planeación">
                     <input type="text" value={planActual?.objetivo_planeacion ?? '—'}
                       disabled
-                      className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                      className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="Novedad cumplimiento almacén">
                     <textarea value={almacenActual.novedad_cumplimiento_almacen ?? ''}
                       onChange={e => actualizarCampoHijo('almacen', 'novedad_cumplimiento_almacen', e.target.value, idxAlmacen)}
-                      disabled={!esEditable('etapa_3') || almacenActual.dom_realizado_planeacion}
+                      disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas}
                       rows={2}
-                      className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
+                      className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="¿Materias primas liberadas para producción?">
                     <SelectSiNo name="almacen_materias_liberadas" value={boolToStr(almacenActual.materias_liberadas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_liberadas', strToBool(v), idxAlmacen)}
-                      disabled={!esEditable('etapa_3') || almacenActual.dom_realizado_planeacion} />
-                  </CampoFormulario>
-                  <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
-                    <SelectSiNo name="almacen_dom_realizado_planeacion" value={boolToStr(almacenActual.dom_realizado_planeacion)}
-                      onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
-                      disabled={!esEditable('etapa_3') || almacenActual.dom_realizado_planeacion} />
+                      disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                     <p className="text-xs text-amber-600 mt-1">
                       Importante: una vez marque Sí y guarde, no podrá realizar
                       modificaciones posteriores a este registro.
                     </p>
+                  </CampoFormulario>
+                  <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
+                    <SelectSiNo name="almacen_dom_realizado_planeacion" value={boolToStr(almacenActual.dom_realizado_planeacion)}
+                      onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
+                      disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                   </CampoFormulario>
                 </div>
               )}
@@ -1515,7 +1574,7 @@ function PaginaEditarDom() {
                     const pp                 = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
                     const productoProduccion = pp ? productoProduccionActivo(pp.id) : null
                     const localKey           = pp?.id ?? `new_${prod.id}`
-                    const bloqueado          = produccionActual?.cierre_produccion === true
+                    const bloqueado          = produccionActualOriginal?.cierre_produccion === true
                     return (
                       <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
                         <div>
@@ -1544,7 +1603,7 @@ function PaginaEditarDom() {
                                 onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
                                 disabled={!esEditable('etapa_4') || bloqueado}
                                 placeholder="Ingrese cantidad"
-                                className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                                className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                               {esEditable('etapa_4') && !bloqueado &&
                                 elaboradaLocal[localKey] !== undefined && (
                                 <button
@@ -1571,6 +1630,7 @@ function PaginaEditarDom() {
             {/* Selector y formulario detallado — campos originales */}
             <SelectorRegistro
               registros={produccionesActuales}
+              registrosOriginal={produccionesActualesOriginal}
               idxActivo={idxProduccion}
               onCambiar={setIdxProduccion}
               etiqueta="Producción"
@@ -1582,7 +1642,7 @@ function PaginaEditarDom() {
             />
             <FormEtapa
               titulo="Etapa 5 — Producción"
-              editable={esEditable('etapa_4') && !produccionActual?.cierre_produccion}
+              editable={esEditable('etapa_4') && !produccionActualOriginal?.cierre_produccion}
               guardando={guardando}
               onGuardar={() => guardarHijo('produccion', idxProduccion, actualizarProduccion, {
                 numero_personas_asignadas: toInt(produccionActual?.numero_personas_asignadas),
@@ -1629,41 +1689,41 @@ function PaginaEditarDom() {
                         const val = produccionActual.numero_personas_asignadas
                         if (val && parseInt(val) > 0) setMostrarModalPersonas(true)
                       }}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion}
-                      className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion}
+                      className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="Tarea asignada de planeación">
                     <input type="text" value={planActual?.objetivo_planeacion ?? '—'}
                       disabled
-                      className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                      className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="Novedad cumplimiento producción">
                     <textarea value={produccionActual.novedad_cumplimiento_produccion ?? ''}
                       onChange={e => actualizarCampoHijo('produccion', 'novedad_cumplimiento_produccion', e.target.value, idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion}
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion}
                       rows={2}
-                      className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
+                      className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="¿Actividades de producción realizadas según registro de planeación?">
                     <SelectSiNo name="produccion_segun_planeacion" value={boolToStr(produccionActual.segun_planeacion)}
                       onChange={v => actualizarCampoHijo('produccion', 'segun_planeacion', strToBool(v), idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion} />
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
                   </CampoFormulario>
                   <CampoFormulario label="Producción no completada">
                     <SelectSiNo name="produccion_no_completada" value={boolToStr(produccionActual.produccion_no_completada)}
                       onChange={v => actualizarCampoHijo('produccion', 'produccion_no_completada', strToBool(v), idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion} />
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
                   </CampoFormulario>
                   <CampoFormulario label="¿Este DOM ya ha sido liberado desde producción?">
                     <SelectSiNo name="produccion_cierre_produccion" value={boolToStr(produccionActual.cierre_produccion)}
                       onChange={v => actualizarCampoHijo('produccion', 'cierre_produccion', strToBool(v), idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActual.cierre_produccion || !cronometroFinalizado} />
-                    {!cronometroFinalizado && !produccionActual.cierre_produccion && (
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || !cronometroFinalizado} />
+                    {!cronometroFinalizado && !produccionActualOriginal?.cierre_produccion && (
                       <p className="text-xs text-amber-600 mt-1">
                         Disponible una vez finalice el cronómetro de producción.
                       </p>
                     )}
-                    {!produccionActual.cierre_produccion && cronometroFinalizado && (
+                    {!produccionActualOriginal?.cierre_produccion && cronometroFinalizado && (
                       <p className="text-xs text-amber-600 mt-1">
                         Importante: una vez marque Sí y guarde, no podrá realizar
                         modificaciones posteriores a este registro.
@@ -1682,18 +1742,19 @@ function PaginaEditarDom() {
           <div className="space-y-4">
             <SelectorRegistro
               registros={tratamientosActuales}
+              registrosOriginal={tratamientosActualesOriginal}
               idxActivo={idxTratamiento}
               onCambiar={setIdxTratamiento}
               etiqueta="Tratamiento"
               campoCierre="tratamiento_completado"
               ultimoCerrado={ultimoTratamientoCerrado}
-              puedeCrear={esEditable('etapa_5')}
+              puedeCrear={esEditable('etapa_5') && (tratamientosActuales.length === 0 || ultimoTratamientoCerrado)}
               onNuevo={() => crearNuevoHijo('tratamiento', crearTratamiento, setIdxTratamiento)}
               guardando={guardando}
             />
             <FormEtapa
               titulo="Etapa 6 — Tratamiento"
-              editable={esEditable('etapa_5') && !tratamientoActual?.tratamiento_completado}
+              editable={esEditable('etapa_5') && !tratamientoActualOriginal?.tratamiento_completado}
               guardando={guardando}
               onGuardar={() => guardarHijo('tratamiento', idxTratamiento, actualizarTratamiento, {
                 numero_tratamiento: toInt(tratamientoActual?.numero_tratamiento),
@@ -1705,35 +1766,35 @@ function PaginaEditarDom() {
                   <CampoFormulario label="DOM con tratamiento">
                     <SelectSiNo name="tratamiento_dom_con_tratamiento" value={boolToStr(tratamientoActual.dom_con_tratamiento)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'dom_con_tratamiento', strToBool(v), idxTratamiento)}
-                      disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado} />
+                      disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
                   <CampoFormulario label="Número de tratamiento fitosanitario asignado">
                     <input type="number" value={tratamientoActual.numero_tratamiento ?? ''}
                       onChange={e => actualizarCampoHijo('tratamiento', 'numero_tratamiento', e.target.value, idxTratamiento)}
-                      disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado}
-                      className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                      disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado}
+                      className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="Tarea asignada de planeación">
                     <input type="text" value={planActual?.objetivo_planeacion ?? '—'}
                       disabled
-                      className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                      className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="Novedad cumplimiento tratamiento">
                     <textarea value={tratamientoActual.novedad_cumplimiento_tratamiento ?? ''}
                       onChange={e => actualizarCampoHijo('tratamiento', 'novedad_cumplimiento_tratamiento', e.target.value, idxTratamiento)}
-                      disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado}
+                      disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado}
                       rows={2}
-                      className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
+                      className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="Tratamiento según planeación">
                     <SelectSiNo name="tratamiento_segun_planeacion" value={boolToStr(tratamientoActual.tratamiento_segun_planeacion)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_segun_planeacion', strToBool(v), idxTratamiento)}
-                      disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado} />
+                      disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
                   <CampoFormulario label="¿Actividades de tratamiento termico realizadas según planeación?">
                     <SelectSiNo name="tratamiento_completado" value={boolToStr(tratamientoActual.tratamiento_completado)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_completado', strToBool(v), idxTratamiento)}
-                      disabled={!esEditable('etapa_5') || tratamientoActual.tratamiento_completado} />
+                      disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                     <p className="text-xs text-amber-600 mt-1">
                       Importante: una vez marque Sí y guarde, no podrá realizar
                       modificaciones posteriores a este registro.
@@ -1749,7 +1810,7 @@ function PaginaEditarDom() {
         {pestanaActiva === 'etapa6' && (
           <FormEtapa
             titulo="Etapa 7 — Despachos"
-            editable={esEditable('etapa_6') && !datosDom.dom_liberado_cierre}
+            editable={esEditable('etapa_6') && !datosDomOriginal?.dom_liberado_cierre}
             guardando={guardando}
             onGuardar={() => guardarDom('Despacho guardado correctamente.', 'etapa_6')}
           >
@@ -1757,32 +1818,32 @@ function PaginaEditarDom() {
               <CampoFormulario label="Fecha entrega pactada">
                 <input type="date" value={datosDom.fecha_entrega_pactada ?? ''}
                   onChange={e => actualizarCampoDom('fecha_entrega_pactada', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Fecha entrega planificada">
                 <input type="date" value={datosDom.fecha_entrega_planificada ?? ''}
                   onChange={e => actualizarCampoDom('fecha_entrega_planificada', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Fecha entrega proyectada">
                 <input type="date" value={datosDom.fecha_entrega_proyectada ?? ''}
                   onChange={e => actualizarCampoDom('fecha_entrega_proyectada', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Cantidad empaques">
                 <input type="number" value={datosDom.cantidad_empaques ?? ''}
                   onChange={e => actualizarCampoDom('cantidad_empaques', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Empaque servicio">
                 <select value={datosDom.empaque_servicio ?? ''}
                   onChange={e => actualizarCampoDom('empaque_servicio', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                   <option value="">Seleccione una opción</option>
                   {empaques.map(e => (
                     <option key={e.lista_id} value={e.nombre}>{e.nombre}</option>
@@ -1792,8 +1853,8 @@ function PaginaEditarDom() {
               <CampoFormulario label="Tipo negociación">
                 <select value={datosDom.tipo_negociacion ?? ''}
                   onChange={e => actualizarCampoDom('tipo_negociacion', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500">
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                   <option value="">Seleccione una opción</option>
                   {tiposNegociacion.map(t => (
                     <option key={t.lista_id} value={t.nombre}>{t.nombre}</option>
@@ -1803,43 +1864,43 @@ function PaginaEditarDom() {
               <CampoFormulario label="¿Este DOM requiere materiales externos?">
                 <SelectSiNo name="dom_materiales_externos" value={boolToStr(datosDom.materiales_externos)}
                   onChange={v => actualizarCampoDom('materiales_externos', strToBool(v))}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre} />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>
               <CampoFormulario label="Vehículo">
                 <input type="text" value={datosDom.vehiculo ?? ''}
                   onChange={e => actualizarCampoDom('vehiculo', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Orden entrega">
                 <input type="text" value={datosDom.orden_entrega ?? ''}
                   onChange={e => actualizarCampoDom('orden_entrega', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
-                  className="campo-input disabled:bg-gray-50 disabled:text-gray-500" />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="¿Notas o comentarios del encargado de servicios externos?">
                 <textarea value={datosDom.notas ?? ''}
                   onChange={e => actualizarCampoDom('notas', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
                   rows={2}
-                  className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
+                  className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Novedades cumplimiento">
                 <textarea value={datosDom.novedades_cumplimiento ?? ''}
                   onChange={e => actualizarCampoDom('novedades_cumplimiento', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre}
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
                   rows={2}
-                  className="campo-input resize-none disabled:bg-gray-50 disabled:text-gray-500" />
+                  className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="DOM entregado OK">
                 <SelectSiNo name="dom_entregado_ok" value={boolToStr(datosDom.dom_entregado_ok)}
                   onChange={v => actualizarCampoDom('dom_entregado_ok', strToBool(v))}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre} />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>
               <CampoFormulario label="DOM liberado cierre">
                 <SelectSiNo name="dom_liberado_cierre" value={boolToStr(datosDom.dom_liberado_cierre)}
                   onChange={v => actualizarCampoDom('dom_liberado_cierre', strToBool(v))}
-                  disabled={!esEditable('etapa_6') || datosDom.dom_liberado_cierre} />
+                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
                 <p className="text-xs text-amber-600 mt-1">
                   Importante: una vez marque Sí y guarde, el DOM quedará
                   cerrado definitivamente.
@@ -1895,6 +1956,32 @@ function PaginaEditarDom() {
         </div>
       )}
 
+      {/* Modal confirmación de bloqueo de etapa */}
+      {confirmacionBloqueo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">
+              Confirmar bloqueo de etapa
+            </h3>
+            <p className="text-sm text-gray-800 font-medium mt-3 mb-5">
+              {confirmacionBloqueo.mensaje}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { confirmacionBloqueo.resolve(false); setConfirmacionBloqueo(null) }}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button
+                onClick={() => { confirmacionBloqueo.resolve(true); setConfirmacionBloqueo(null) }}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080]">
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
@@ -1902,23 +1989,26 @@ function PaginaEditarDom() {
 // ── Componentes auxiliares ─────────────────────────────────────────────────────
 
 // Selector de registro hijo con botón para crear nuevo
-function SelectorRegistro({ registros, idxActivo, onCambiar, etiqueta,
+function SelectorRegistro({ registros, registrosOriginal, idxActivo, onCambiar, etiqueta,
                              campoCierre, ultimoCerrado, puedeCrear, onNuevo, guardando }) {
   return (
     <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
       <span className="text-sm text-gray-600">{etiqueta}:</span>
-      {registros.map((r, i) => (
-        <button key={r.id} onClick={() => onCambiar(i)}
-          className={`px-3 py-1 text-sm rounded border
-            ${idxActivo === i
-              ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
-              : r[campoCierre]
-                ? 'border-gray-200 text-gray-400 bg-gray-50'
-                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-            }`}>
-          #{i + 1} {r[campoCierre] ? '✓' : ''}
-        </button>
-      ))}
+      {registros.map((r, i) => {
+        const cerrado = registrosOriginal?.[i]?.[campoCierre] === true
+        return (
+          <button key={r.id} onClick={() => onCambiar(i)}
+            className={`px-3 py-1 text-sm rounded border
+              ${idxActivo === i
+                ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
+                : cerrado
+                  ? 'border-gray-200 text-gray-400 bg-gray-50'
+                  : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+              }`}>
+            #{i + 1} {cerrado ? '✓' : ''}
+          </button>
+        )
+      })}
       {puedeCrear && (
         <button
           onClick={onNuevo}
@@ -1980,7 +2070,7 @@ function CampoLectura({ label, valor, nota }) {
       <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
         {label}
       </label>
-      <div className="campo-input bg-gray-50 text-gray-500 cursor-not-allowed">
+      <div className="campo-input bg-gray-100 text-gray-700 cursor-not-allowed">
         {valor ?? '—'}
       </div>
       {nota && <p className="text-xs text-gray-400">{nota}</p>}

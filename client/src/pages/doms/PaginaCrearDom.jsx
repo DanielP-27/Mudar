@@ -157,7 +157,6 @@ function PaginaCrearDom() {
         nombre_cliente:        toInt(datosEtapa0.nombre_cliente),
         tiempo_salida_almacen: toInt(datosEtapa1.tiempo_salida_almacen),
         rentabilidad:          toInt(datosEtapa1.rentabilidad),
-        numero_factura:        toInt(datosEtapa1.numero_factura),
         campana_venta:         datosEtapa1.campana_venta === 'true',
         dom_relacionado_produccion: datosEtapa1.dom_relacionado_produccion === 'true',
         // Productos — array vacío para DOMs administrativos
@@ -548,7 +547,7 @@ function PaginaCrearDom() {
                       className="campo-input" />
                   </CampoFormulario>
                   <CampoFormulario label="Número factura de venta Mudar de Colombia">
-                    <input type="number" value={datosEtapa1.numero_factura}
+                    <input type="text" value={datosEtapa1.numero_factura} maxLength={50}
                       onChange={e => actualizarEtapa1('numero_factura', e.target.value)}
                       placeholder="Número factura de venta"
                       className="campo-input" />
@@ -616,7 +615,7 @@ function CampoLectura({ label, valor, nota }) {
       <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
         {label}
       </label>
-      <div className="campo-input bg-gray-50 text-gray-500 cursor-not-allowed">
+      <div className="campo-input bg-gray-100 text-gray-700 cursor-not-allowed">
         {valor}
       </div>
       {nota && <p className="text-xs text-gray-400">{nota}</p>}
