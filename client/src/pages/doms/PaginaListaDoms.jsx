@@ -8,6 +8,7 @@ import { obtenerClientes, obtenerListasPorTipo } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
 import { ROLES } from '../../routes/RoleRoute'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
+import { extraerMensajeError } from '../../utils/errores'
 
 // Roles que pueden editar DOMs
 const ROLES_EDITAR = [
@@ -55,7 +56,7 @@ function PaginaListaDoms() {
     ]).then(([rTipos, rResp]) => {
       setTiposEstado(rTipos.data.listas)
       setResponsables(rResp.data.listas)
-    }).catch(() => setError('Error al cargar los filtros.'))
+    }).catch(err => setError(extraerMensajeError(err, 'Error al cargar los filtros.')))
   }, [])
 
   // Typeahead cliente

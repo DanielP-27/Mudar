@@ -9,6 +9,7 @@ import {
 import { useAutenticacion } from '../../context/AuthContext'
 import { puedeEditarEtapa, esSoloLectura } from '../../utils/permisos'
 import { toInt } from '../../utils/formatters'
+import { extraerMensajeError } from '../../utils/errores'
 import {
   obtenerDom, actualizarDom,
   obtenerPlaneacion, crearPlaneacion, actualizarPlaneacion,
@@ -313,9 +314,11 @@ function PaginaEditarDom() {
         })
       } else {
         setTurnoDiaExistente(null)
+        setDatosTurnoDia({ numero_operarios: '', minutos_totales: '' })
       }
     } catch {
       setTurnoDiaExistente(null)
+      setDatosTurnoDia({ numero_operarios: '', minutos_totales: '' })
     }
   }
 
@@ -386,10 +389,35 @@ function PaginaEditarDom() {
       setElaboradaLocal(prev => { const n = { ...prev }; delete n[localKey]; return n })
       mostrarExito('Cantidad elaborada actualizada.')
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al actualizar la cantidad elaborada.')
+      setError(extraerMensajeError(err, 'Error al actualizar la cantidad elaborada.'))
     } finally {
       setGuardando(false)
     }
+  }
+
+  // Valida LOCALMENTE que asignar `cantidadNueva` al producto `domProductoId` no haga que
+  // el tiempo proyectado de la planeación supere la capacidad del turno. Feedback inmediato,
+  // sin round-trip. Devuelve un mensaje de error si excede, o null si está OK.
+  const validarCapacidadLocal = (domProductoId, cantidadNueva) => {
+    const capacidad = turnoDiaExistente
+      ? turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales
+      : capacidadCalculo
+    if (!capacidad) return null   // sin capacidad conocida aquí → la valida el backend
+
+    const unitarioDe = (id) =>
+      datosDom.productos?.find(p => p.id === id)?.tipo_producto_detalle?.tiempo_produccion_unitario ?? 0
+
+    // Tiempo de los OTROS productos ya proyectados en esta planeación (excluye el que se edita)
+    const tiempoOtros = (planActual?.productos_planeacion ?? [])
+      .filter(pp => pp.dom_producto !== domProductoId)
+      .reduce((acc, pp) => acc + (pp.cantidad_proyectada ?? 0) * unitarioDe(pp.dom_producto), 0)
+
+    const requerido = tiempoOtros + cantidadNueva * unitarioDe(domProductoId)
+
+    if (requerido > capacidad) {
+      return `No hay capacidad suficiente en el turno. Disponible: ${capacidad} min, Requerido: ${requerido} min.`
+    }
+    return null
   }
 
   // Crea un nuevo ProductoPlaneacion (POST) para un producto del DOM
@@ -400,6 +428,8 @@ function PaginaEditarDom() {
       setError('Debe ingresar una cantidad proyectada antes de continuar.')
       return
     }
+    const errorCapacidad = validarCapacidadLocal(productoDomId, toInt(cantidad))
+    if (errorCapacidad) { setError(errorCapacidad); return }
     setGuardando(true)
     setError(null)
     try {
@@ -424,7 +454,7 @@ function PaginaEditarDom() {
       setProyectadaLocal(prev => { const n = { ...prev }; delete n[localKey]; return n })
       mostrarExito('Producto agregado a la planeación.')
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al agregar el producto.')
+      setError(extraerMensajeError(err, 'Error al agregar el producto.'))
     } finally {
       setGuardando(false)
     }
@@ -437,6 +467,8 @@ function PaginaEditarDom() {
       setError('Debe ingresar una cantidad proyectada antes de continuar.')
       return
     }
+    const errorCapacidad = validarCapacidadLocal(productoPlaneacion.dom_producto, toInt(valor))
+    if (errorCapacidad) { setError(errorCapacidad); return }
     setGuardando(true)
     setError(null)
     try {
@@ -457,7 +489,7 @@ function PaginaEditarDom() {
       setProyectadaLocal(prev => { const n = { ...prev }; delete n[productoPlaneacion.id]; return n })
       mostrarExito('Cantidad proyectada actualizada.')
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al guardar la cantidad proyectada.')
+      setError(extraerMensajeError(err, 'Error al guardar la cantidad proyectada.'))
     } finally {
       setGuardando(false)
     }
@@ -506,8 +538,7 @@ function PaginaEditarDom() {
       setDatosDomOriginal(res.data.dom)
       mostrarExito(mensaje)
     } catch (err) {
-      setError(err.response?.data?.error ?? err.response?.data?.detail
-        ?? 'Error al guardar los cambios.')
+      setError(extraerMensajeError(err, 'Error al guardar los cambios.'))
     } finally {
       setGuardando(false)
     }
@@ -525,7 +556,7 @@ function PaginaEditarDom() {
       setIdxPlaneacion(nuevas.length - 1)
       mostrarExito('Nueva planeación creada correctamente.')
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al crear la planeación.')
+      setError(extraerMensajeError(err, 'Error al crear la planeación.'))
     } finally {
       setGuardando(false)
     }
@@ -600,7 +631,7 @@ function PaginaEditarDom() {
 
       mostrarExito('Planeación guardada correctamente.')
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al guardar la planeación.')
+      setError(extraerMensajeError(err, 'Error al guardar la planeación.'))
     } finally {
       setGuardando(false)
     }
@@ -640,7 +671,7 @@ function PaginaEditarDom() {
 
       mostrarExito('Turno actualizado correctamente.')
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al actualizar el turno.')
+      setError(extraerMensajeError(err, 'Error al actualizar el turno.'))
     } finally {
       setGuardandoTurno(false)
     }
@@ -660,7 +691,7 @@ function PaginaEditarDom() {
       setMostrarModalPersonas(false)
       await refrescarPlaneaciones()
     } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al confirmar el número de personas.')
+      setError(extraerMensajeError(err, 'Error al confirmar el número de personas.'))
       setMostrarModalPersonas(false)
     } finally {
       setGuardando(false)
@@ -698,7 +729,7 @@ function PaginaEditarDom() {
 
       mostrarExito(`Registro de ${tipo} guardado correctamente.`)
     } catch (err) {
-      setError(err.response?.data?.error ?? `Error al guardar el registro de ${tipo}.`)
+      setError(extraerMensajeError(err, `Error al guardar el registro de ${tipo}.`))
     } finally {
       setGuardando(false)
     }
@@ -722,7 +753,7 @@ function PaginaEditarDom() {
       setIdx(nuevosRegistros.length - 1)
       mostrarExito(`Nuevo registro de ${tipo} creado correctamente.`)
     } catch (err) {
-      setError(err.response?.data?.error ?? `Error al crear el registro de ${tipo}.`)
+      setError(extraerMensajeError(err, `Error al crear el registro de ${tipo}.`))
     } finally {
       setGuardando(false)
     }
@@ -1206,13 +1237,16 @@ function PaginaEditarDom() {
                       actualizarCampoPlaneacion('turno', toInt(e.target.value))
                       consultarDisponibilidadTurno(toInt(e.target.value), planActual.fecha_planeacion)
                     }}
-                    disabled={!esEditable('etapa_2')}
+                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     <option value="">Seleccione una opción</option>
                     {turnos.map(t => (
                       <option key={t.turno_id} value={t.turno_id}>{t.nombre_turno}</option>
                     ))}
                   </select>
+                  {esEditable('etapa_2') && !planActual.fecha_planeacion && (
+                    <p className="text-xs text-amber-600 mt-1">Seleccione primero la fecha de planeación.</p>
+                  )}
                 </CampoFormulario>
 
                 {/* Operarios y minutos — habilitados para lectura/edición, pero con validación al guardar */}
@@ -1220,20 +1254,26 @@ function PaginaEditarDom() {
                   <input type="number"
                     value={datosTurnoDia.numero_operarios}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, numero_operarios: e.target.value }))}
-                    disabled={!esEditable('etapa_2')}
+                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !planActual.turno}
                     placeholder="Ingrese número de operarios"
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                  {esEditable('etapa_2') && (!planActual.fecha_planeacion || !planActual.turno) && (
+                    <p className="text-xs text-amber-600 mt-1">Disponible una vez seleccione la fecha de planeación y el turno.</p>
+                  )}
                 </CampoFormulario>
                 <CampoFormulario label="Duración del turno">
                   <select
                     value={datosTurnoDia.minutos_totales}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, minutos_totales: e.target.value }))}
-                    disabled={!esEditable('etapa_2')}
+                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !planActual.turno}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     {OPCIONES_MINUTOS.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
+                  {esEditable('etapa_2') && (!planActual.fecha_planeacion || !planActual.turno) && (
+                    <p className="text-xs text-amber-600 mt-1">Disponible una vez seleccione la fecha de planeación y el turno.</p>
+                  )}
                 </CampoFormulario>
                 <CampoLectura
                   label="Tiempo proyectado total (min)"

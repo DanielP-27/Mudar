@@ -1896,7 +1896,13 @@ class ProductoPlaneacionListView(APIView):
             disponible_actual, resultado = planeacion.tiempo_disponible_turno(
                 tiempo_otros_productos + tiempo_nuevo_producto, excluir_registro_id=planeacion.id
             )
-            if resultado is not None and resultado < 0:
+            if resultado is None:
+                return Response(
+                    {'error': 'Debe registrar el turno del día (número de operarios y '
+                              'duración) para esta fecha antes de asignar cantidades a la planeación.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if resultado < 0:
                 return Response(
                     {
                         'error': 'El turno no tiene capacidad suficiente para esta cantidad.',
@@ -1989,7 +1995,13 @@ class ProductoPlaneacionDetalleView(APIView):
             disponible_actual, resultado = registro_planeacion.tiempo_disponible_turno(
                 tiempo_otros_productos + tiempo_nuevo_producto, excluir_registro_id=registro_planeacion.id
             )
-            if resultado is not None and resultado < 0:
+            if resultado is None:
+                return Response(
+                    {'error': 'Debe registrar el turno del día (número de operarios y '
+                              'duración) para esta fecha antes de asignar cantidades a la planeación.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if resultado < 0:
                 return Response(
                     {
                         'error': 'El turno no tiene capacidad suficiente para esta cantidad.',

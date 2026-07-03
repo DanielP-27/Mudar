@@ -5,6 +5,7 @@ import { obtenerProductos, crearProducto, actualizarProducto, desactivarProducto
 import { toInt } from '../../utils/formatters'
 import { useDebounce } from '../../hooks/useDebounce'
 import CampoFormulario from '../../components/common/CampoFormulario'
+import { extraerMensajeError } from '../../utils/errores'
 
 const FORMULARIO_VACIO = { nombre_producto: '', familia_producto: '', tiempo_produccion_unitario: '' }
 
@@ -48,7 +49,7 @@ function PaginaProductos() {
   useEffect(() => {
     obtenerFamilias({ activo: true })
       .then(r => setFamilias(r.data.familias))
-      .catch(() => setError('Error al cargar las familias de producto.'))
+      .catch(err => setError(extraerMensajeError(err, 'Error al cargar las familias de producto.')))
   }, [])
 
   // Abre el formulario vacío para crear un nuevo producto

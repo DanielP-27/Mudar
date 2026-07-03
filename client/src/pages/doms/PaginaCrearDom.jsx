@@ -6,6 +6,7 @@ import { crearDom } from '../../api/doms'
 import { obtenerClientes, obtenerProductos, obtenerListasPorTipo } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
 import { toInt } from '../../utils/formatters'
+import { extraerMensajeError } from '../../utils/errores'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import SelectSiNo from '../../components/common/SelectSiNo'
@@ -170,11 +171,7 @@ function PaginaCrearDom() {
       const res = await crearDom(payload)
       navegar(`/doms/${res.data.dom.dom_id}/editar`)
     } catch (err) {
-      setError(
-        err.response?.data?.error
-          ?? err.response?.data?.detail
-          ?? 'Error al crear el registro DOM. Verifique los campos obligatorios.'
-      )
+      setError(extraerMensajeError(err, 'Error al crear el registro DOM. Verifique los campos obligatorios.'))
     } finally {
       setGuardando(false)
     }

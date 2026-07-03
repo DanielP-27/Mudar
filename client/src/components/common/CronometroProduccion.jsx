@@ -7,12 +7,7 @@ import {
   reanudarCronometro,
   finalizarCronometro,
 } from '../../api/cronometro'
-
-const mensajeFallback = (err) =>
-  err.response?.data?.error
-    ?? (err.response
-        ? 'Error inesperado del servidor. Intente de nuevo.'
-        : 'Sin conexión. Verifique su red e intente de nuevo.')
+import { extraerMensajeError } from '../../utils/errores'
 
 const formatearTiempo = (segundos) => {
   const h = Math.floor(segundos / 3600)
@@ -64,7 +59,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       await iniciarCronometro(registroProduccionId)
       await onAccion()
     } catch (err) {
-      setError(mensajeFallback(err))
+      setError(extraerMensajeError(err, 'No se pudo iniciar el cronómetro.'))
     } finally {
       setEjecutando(false)
     }
@@ -77,7 +72,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       await pausarCronometro(cronometroActivo.id)
       await onAccion()
     } catch (err) {
-      setError(mensajeFallback(err))
+      setError(extraerMensajeError(err, 'No se pudo pausar el cronómetro.'))
     } finally {
       setEjecutando(false)
     }
@@ -90,7 +85,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       await reanudarCronometro(cronometroActivo.id)
       await onAccion()
     } catch (err) {
-      setError(mensajeFallback(err))
+      setError(extraerMensajeError(err, 'No se pudo reanudar el cronómetro.'))
     } finally {
       setEjecutando(false)
     }
@@ -103,7 +98,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       await finalizarCronometro(cronometroActivo.id)
       await onAccion()
     } catch (err) {
-      setError(mensajeFallback(err))
+      setError(extraerMensajeError(err, 'No se pudo finalizar el cronómetro.'))
     } finally {
       setEjecutando(false)
     }

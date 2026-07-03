@@ -1,6 +1,7 @@
 // src/pages/dashboard/PaginaDashboard.jsx
 import { useState, useEffect } from 'react'
 import { obtenerDashboard } from '../../api/dashboard'
+import { extraerMensajeError } from '../../utils/errores'
 
 // Colores de fondo/texto según el resultado de cumplimiento
 const ESTILOS_CUMPLIMIENTO = {
@@ -28,7 +29,7 @@ function PaginaDashboard() {
   useEffect(() => {
     obtenerDashboard()
       .then(r => setMetricas(r.data.dashboard))
-      .catch(() => setError('Error al cargar el dashboard.'))
+      .catch(err => setError(extraerMensajeError(err, 'Error al cargar el dashboard.')))
       .finally(() => setCargando(false))
   }, [])
 
