@@ -562,6 +562,46 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
             'marcado_cliente':          {'allow_null': True, 'required': False},
         }
 
+    def validate(self, data):
+        # Regla de negocio (P7): la fecha de planeación no puede ser posterior a la
+        # fecha de entrega planificada del DOM. En pantalla "fecha de entrega planificada"
+        # corresponde a la columna 'fecha_entrega_pactada' (ver nota de deuda técnica en
+        # models.py). Es la ÚNICA restricción de fechas del sistema.
+        fecha_planeacion = data.get('fecha_planeacion')
+        if fecha_planeacion is None and self.instance is not None:
+            fecha_planeacion = self.instance.fecha_planeacion
+
+        # El DOM se asigna del lado del servidor: en edición viene en la instancia,
+        # en creación se pasa por contexto desde la vista.
+        dom = self.instance.dom if self.instance is not None else self.context.get('dom')
+
+        if fecha_planeacion and dom and dom.fecha_entrega_pactada:
+            if fecha_planeacion > dom.fecha_entrega_pactada:
+                raise serializers.ValidationError({
+                    'fecha_planeacion': 'La fecha de planeación no puede ser posterior a la fecha de entrega planificada.'
+                })
+
+        # Regla de negocio (P8): las opciones de entrega son mutuamente excluyentes.
+        # Si AMBAS están definidas deben diferir (exactamente una en Sí): no pueden
+        # estar ambas en Sí ni ambas en No. Se permite que una o ambas queden en null
+        # (no son campos obligatorios), en cuyo caso no hay exclusión que validar.
+        # En PUT parcial cada campo se resuelve del payload o, si no vino, de la instancia.
+        def _valor_entrega(campo):
+            if campo in data:
+                return data[campo]
+            return getattr(self.instance, campo) if self.instance is not None else None
+
+        cliente_recoge = _valor_entrega('cliente_recoge')
+        mudar_entrega = _valor_entrega('mudar_entrega')
+
+        if cliente_recoge is not None and mudar_entrega is not None:
+            if cliente_recoge == mudar_entrega:
+                raise serializers.ValidationError({
+                    'non_field_errors': 'Debe indicar exactamente una opción de entrega: o el cliente recoge los productos o Mudar los entrega.'
+                })
+
+        return data
+
 # Serializer: AuditoriaDom
 # Uso: trazabilidad y consulta de cambios - solo lectura y EXCLUSIVO ADMINISTRADOR sin embargo, dicha configuracion está en views.py 
 

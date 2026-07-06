@@ -1430,6 +1430,32 @@ class DomListView(APIView):
 # PLANEADOR     → etapa 2
 # LIDER_PLANTA  → etapas 3, 4, 5
 
+# Propiedad de cada campo editable del modelo Dom por etapa.
+# Fuente de verdad: agrupación por etapa del DomDetalleSerializer.
+# Solo campos ESCRIBIBLES; se excluyen PK, auto_now/auto_now_add,
+# auditoría y calculados (nunca se escriben vía API).
+CAMPOS_POR_ETAPA = {
+    'etapa_0': [
+        'nombre_cliente', 'descripcion', 'tipo_estado_dom',
+        'fecha_solicitada_cliente', 'responsable',
+    ],
+    'etapa_1': [
+        'orden_compra', 'tiempo_salida_almacen', 'rentabilidad',
+        'campana_venta', 'numero_cotizacion', 'numero_factura',
+        'dom_relacionado_produccion',        # bloqueo etapa 1
+    ],
+    'etapa_2': [
+        'fecha_entrega_proyectada',          # movido desde etapa_6
+    ],
+    'etapa_6': [
+        'fecha_entrega_pactada', 'fecha_entrega_planificada',
+        'cantidad_empaques', 'empaque_servicio', 'tipo_negociacion',
+        'materiales_externos', 'vehiculo', 'orden_entrega',
+        'notas', 'novedades_cumplimiento', 'dom_entregado_ok',
+        'dom_liberado_cierre',               # bloqueo etapa 6
+    ],
+}
+
 class DomDetalleView(APIView):
 
     authentication_classes = [TokenAuthentication]
@@ -1490,10 +1516,14 @@ class DomDetalleView(APIView):
         
         # permite cambiar el estado del campo TIPO O ESTADO DOM de la etapa 0 del formulario; Solo ADMIN y analistas de costos quedan facultados
 
-        if 'tipo_estado_dom' in request.data:
+        # Solo se bloquea si tipo_estado_dom REALMENTE cambia. El frontend envía el objeto
+        # DOM completo en cada guardado (incluye tipo_estado_dom sin modificar), por lo que
+        # verificar solo la presencia bloqueaba erróneamente a roles como PLANEADOR al editar
+        # otras etapas (ej. fecha_entrega_proyectada en etapa_2, que sí pega contra este PUT).
+        if 'tipo_estado_dom' in request.data and request.data.get('tipo_estado_dom') != dom.tipo_estado_dom:
             if not verificar_rol(request, ['ADMIN', 'ANALISTA_1', 'ANALISTA_2']):
                 return Response(
-                    {'error': f'No tienes permisos para cambiar el estado del DOM'},
+                    {'error': 'No tienes permisos para cambiar el estado del DOM'},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
@@ -1523,7 +1553,13 @@ class DomDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST      
             )
         
-        serializer = DomDetalleSerializer(dom, data=request.data, partial=True)
+        # Filtrado por etapa: se conservan solo los campos que pertenecen a la
+        # etapa declarada. El frontend envía el objeto completo del DOM en cada
+        # guardado; esto evita que un guardado escriba campos de otra etapa.
+        campos_validos = CAMPOS_POR_ETAPA.get(etapa, [])
+        datos_filtrados = {k: v for k, v in request.data.items() if k in campos_validos}
+
+        serializer = DomDetalleSerializer(dom, data=datos_filtrados, partial=True)
 
         if not serializer.is_valid():
             return Response(
@@ -1534,7 +1570,7 @@ class DomDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        campos_antes = {k: getattr(dom, k, None) for k in request.data.keys() if k != 'etapa'}
+        campos_antes = {k: getattr(dom, k, None) for k in datos_filtrados.keys()}
 
         dom = serializer.save()
 
@@ -1546,7 +1582,7 @@ class DomDetalleView(APIView):
             usuario=request.user,
             accion=accion,
             etapa=etapa,
-            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, dom)
+            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), datos_filtrados, dom)
         )
 
         return Response(
@@ -1625,17 +1661,20 @@ class RegistroPlaneacionListView(APIView):
         ultimo_registro = RegistroPlaneacion.objects.filter(dom=dom).order_by('-numero_registro').first()
         numero_registro = (ultimo_registro.numero_registro + 1) if ultimo_registro else 1 
 
-        serializer = RegistroPlaneacionSerializer(data=request.data)
+        # El DOM se pasa por contexto para que RegistroPlaneacionSerializer.validate()
+        # pueda comparar fecha_planeacion contra dom.fecha_entrega_pactada en creación
+        # (en creación el registro aún no existe, así que validate() no puede tomarlo de la instancia).
+        serializer = RegistroPlaneacionSerializer(data=request.data, context={'dom': dom})
 
         if not serializer.is_valid():
             return Response(
                 {
-                    'error': 'Datos invalidos', 
+                    'error': 'Datos invalidos',
                     'detalle': serializer.errors
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         registro = serializer.save(
             creado_por=request.user,
             numero_registro=numero_registro,

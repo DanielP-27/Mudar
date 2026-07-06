@@ -255,11 +255,13 @@ class Dom(models.Model):
     # Bloqueo etapa
     dom_relacionado_produccion=models.BooleanField(default=False, verbose_name='Validación etapa 1', help_text='Seleccione si unicamente si ya ha finalizado esta etapa, no podrá realizar cambios de forma posterior')
 
-    # Etapa 6 planeación despachos y servicios externos 
+    # Etapa 6 planeación despachos y servicios externos
 
+    # DEUDA TÉCNICA (fechas de entrega): a nivel de negocio 'fecha_entrega_pactada' y
+    # 'fecha_entrega_planificada' representan el mismo dato.
     fecha_entrega_pactada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega pactada')
-    fecha_entrega_planificada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega planificada')
-    cantidad_empaques = models.IntegerField(blank=True, null=True, verbose_name='Fecha de entrega proyectada')
+    fecha_entrega_planificada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega planificada')  # retirado de la UI — ver nota de deuda técnica arriba
+    cantidad_empaques = models.IntegerField(blank=True, null=True, verbose_name='cantidad de empaques que se despachan a las instalaciones del cliente')
     empaque_servicio = models.CharField(max_length=70, blank=True, null=True, verbose_name='Empaque/Servicio', help_text='Elegir el tipo de servicio que se ofrece al cliente')
     tipo_negociacion = models.CharField(max_length=70, blank=True, null=True, verbose_name='Tipo de Negociacion', help_text='Elegir el tipo de negociación pactada con el cliente')
     fecha_entrega_proyectada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega proyectada')

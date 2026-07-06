@@ -1,7 +1,7 @@
 // src/pages/doms/PaginaCrearDom.jsx
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiEye, FiFileText, FiBriefcase, FiPlus, FiTrash2 } from 'react-icons/fi'
+import { FiEye, FiFileText, FiBriefcase, FiPlus, FiTrash2, FiCheckCircle } from 'react-icons/fi'
 import { crearDom } from '../../api/doms'
 import { obtenerClientes, obtenerProductos, obtenerListasPorTipo } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
@@ -47,6 +47,9 @@ function PaginaCrearDom() {
   // Estado de carga y error del formulario
   const [guardando, setGuardando] = useState(false)
   const [error, setError]         = useState(null)
+
+  // DOM recién creado — si tiene valor, se muestra el modal de éxito (P1)
+  const [domCreado, setDomCreado] = useState(null)
 
   // Opciones para los dropdowns
   const [tiposEstadoDom, setTiposEstadoDom] = useState([])
@@ -107,6 +110,17 @@ function PaginaCrearDom() {
       .then(r => setSugerenciasProducto(r.data.productos ?? []))
       .catch(() => setSugerenciasProducto([]))
   }, [textoProducto])
+
+  // Atajo de teclado del modal de éxito: Esc lleva al dashboard.
+  // Enter no se maneja aquí: el botón primario tiene autoFocus y responde nativamente.
+  useEffect(() => {
+    if (!domCreado) return
+    const manejarTecla = (e) => {
+      if (e.key === 'Escape') navegar('/dashboard')
+    }
+    window.addEventListener('keydown', manejarTecla)
+    return () => window.removeEventListener('keydown', manejarTecla)
+  }, [domCreado, navegar])
 
   // Actualiza un campo específico de etapa 0
   const actualizarEtapa0 = (campo, valor) =>
@@ -169,7 +183,7 @@ function PaginaCrearDom() {
             })),
       }
       const res = await crearDom(payload)
-      navegar(`/doms/${res.data.dom.dom_id}/editar`)
+      setDomCreado(res.data.dom)
     } catch (err) {
       setError(extraerMensajeError(err, 'Error al crear el registro DOM. Verifique los campos obligatorios.'))
     } finally {
@@ -599,6 +613,43 @@ function PaginaCrearDom() {
           VOLVER AL DASHBOARD
         </button>
       </div>
+
+      {/* ── Modal de éxito tras crear el DOM (P1) ───────────────── */}
+      {domCreado && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex flex-col items-center text-center mb-5">
+              <FiCheckCircle className="text-green-500 mb-3" size={44} />
+              <h2 className="text-lg font-semibold text-gray-800">
+                Registro DOM creado
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                El DOM <span className="font-semibold text-gray-800">#{domCreado.dom_id}</span> para
+                el cliente <span className="font-semibold text-gray-800">{domCreado.nombre_cliente_detalle}</span> ha
+                sido creado correctamente.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <button autoFocus
+                onClick={() => navegar(`/doms/${domCreado.dom_id}/editar`)}
+                className="w-full px-4 py-2 bg-[#1A56A0] text-white text-sm font-medium rounded
+                           hover:bg-[#134080]">
+                Continuar editando este DOM
+              </button>
+              <button onClick={() => navegar('/dashboard')}
+                className="w-full px-4 py-2 border border-gray-300 text-gray-600 text-sm
+                           font-medium rounded hover:bg-gray-50">
+                Ir a la página principal
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-400 text-center mt-4">
+              Enter para editar · Esc para ir al inicio
+            </p>
+          </div>
+        </div>
+      )}
 
     </div>
   )

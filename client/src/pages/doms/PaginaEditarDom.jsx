@@ -1,6 +1,6 @@
 // src/pages/doms/PaginaEditarDom.jsx
 import { useState, useEffect, useCallback, Fragment } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   FiEye, FiFileText, FiBriefcase, FiPackage,
   FiSettings, FiThermometer, FiTruck, FiPlus,
@@ -54,8 +54,18 @@ function PaginaEditarDom() {
   const navegar     = useNavigate()
   const { usuario } = useAutenticacion()
 
-  // Pestaña activa
-  const [pestanaActiva, setPestanaActiva] = useState('etapa0')
+  // Pestaña activa — persistida en la URL (?etapa=) para sobrevivir al refresco (P15).
+  // Se usa replace para no llenar el historial con cada cambio de pestaña; el botón
+  // "atrás" regresa a la página anterior, no recorre etapa por etapa.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const pestanaActiva = searchParams.get('etapa') || 'etapa0'
+  const setPestanaActiva = useCallback((id) => {
+    setSearchParams(prev => {
+      const siguiente = new URLSearchParams(prev)
+      siguiente.set('etapa', id)
+      return siguiente
+    }, { replace: true })
+  }, [setSearchParams])
 
   // Estado de carga y mensajes
   const [cargando, setCargando]   = useState(true)
@@ -298,6 +308,11 @@ function PaginaEditarDom() {
       .flatMap(p => p.productos_planeacion ?? [])
       .filter(pp => pp.dom_producto === productoDomId)
       .reduce((sum, pp) => sum + (pp.cantidad_proyectada ?? 0), 0)
+
+  // P11: true si TODOS los productos del DOM ya tienen su cantidad pedida totalmente proyectada
+  const pedidoTotalmenteProyectado = () =>
+    (datosDom?.productos ?? []).length > 0 &&
+    datosDom.productos.every(prod => proyectadaPorProducto(prod.id) >= (prod.cantidad_pedido ?? 0))
 
   // Consulta RegistroTurnoDia cuando cambia turno o fecha en etapa 3
   const consultarDisponibilidadTurno = async (turnoId, fecha) => {
@@ -546,6 +561,11 @@ function PaginaEditarDom() {
 
   // Crea un nuevo registro de planeación para este DOM
   const crearNuevaPlaneacion = async () => {
+    // P11: no permitir nuevas planeaciones si el pedido ya está totalmente proyectado
+    if (pedidoTotalmenteProyectado()) {
+      setError('No se pueden crear más planeaciones: la cantidad proyectada ya cubre el total pedido para todos los productos.')
+      return
+    }
     setGuardando(true)
     setError(null)
     try {
@@ -803,6 +823,17 @@ function PaginaEditarDom() {
     { id: 'etapa6',      icono: <FiTruck size={15} />,      label: 'Etapa 7 — Despachos' },
   ]
 
+  // Corrige la etapa de la URL si no corresponde a este DOM (param manipulado a mano,
+  // o DOM administrativo que no tiene etapas de producción). Persistencia = URL (P15).
+  useEffect(() => {
+    if (cargando || !datosDom) return
+    const idsValidos = pestanas.map(p => p.id)
+    if (!idsValidos.includes(pestanaActiva)) {
+      setPestanaActiva(idsValidos.includes('etapa0') ? 'etapa0' : idsValidos[0])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cargando, datosDom, esDomAdministrativo, pestanaActiva])
+
   if (cargando) return (
     <div className="flex items-center justify-center h-64 text-gray-500 text-sm">
       Cargando registro DOM...
@@ -973,8 +1004,9 @@ function PaginaEditarDom() {
                 </SeccionConsolidado>
 
                 <SeccionConsolidado titulo="Etapa 7 — Despachos">
-                  <CampoConsolidado label="Fecha entrega pactada"      valor={datosDom.fecha_entrega_pactada} />
-                  <CampoConsolidado label="Fecha entrega planificada"  valor={datosDom.fecha_entrega_planificada} />
+                  {/* Etiqueta "Fecha de entrega planificada" por convención del cliente;
+                      el dato subyacente es fecha_entrega_pactada (ver deuda técnica en el modelo). */}
+                  <CampoConsolidado label="Fecha de entrega planificada" valor={datosDom.fecha_entrega_pactada} />
                   <CampoConsolidado label="Fecha entrega proyectada"   valor={datosDom.fecha_entrega_proyectada} />
                   <CampoConsolidado label="Cantidad empaques"          valor={datosDom.cantidad_empaques} />
                   <CampoConsolidado label="Empaque servicio"           valor={datosDom.empaque_servicio} />
@@ -1200,15 +1232,47 @@ function PaginaEditarDom() {
 {/* ── Etapa 3 — Planeación ─────────────────────────────────────────── */}
         {pestanaActiva === 'etapa2' && (
           <>
+          {/* Panel a nivel de DOM — fechas de entrega. fecha_solicitada_cliente es de
+              solo-lectura (se define en creación, etapa 0); fecha_entrega_proyectada se
+              edita aquí (etapa 2) y es de solo-lectura en Despachos. */}
+          <div className="mb-4 p-4 border border-gray-200 rounded bg-gray-50">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Fechas de entrega del DOM</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <CampoConsolidado label="Fecha de entrega solicitada por el cliente"
+                valor={datosDom.fecha_solicitada_cliente} />
+              <CampoFormulario label="Fecha de entrega proyectada">
+                <input type="date" value={datosDom.fecha_entrega_proyectada ?? ''}
+                  onChange={e => actualizarCampoDom('fecha_entrega_proyectada', e.target.value)}
+                  disabled={!esEditable('etapa_2') || datosDomOriginal?.dom_liberado_cierre}
+                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+              </CampoFormulario>
+            </div>
+            {esEditable('etapa_2') && (
+              <div className="mt-3">
+                <button onClick={() => guardarDom('Fecha de entrega proyectada guardada correctamente.', 'etapa_2')}
+                  disabled={guardando}
+                  className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded
+                             hover:bg-[#154785] disabled:opacity-40 disabled:cursor-not-allowed">
+                  Guardar fecha proyectada
+                </button>
+              </div>
+            )}
+          </div>
+
           {esEditable('etapa_2') && (
             <div className="mb-4">
               <button onClick={() => crearNuevaPlaneacion()}
-                disabled={guardando}
+                disabled={guardando || pedidoTotalmenteProyectado()}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium
                            text-[#1A56A0] border border-[#1A56A0] rounded
                            hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed">
                 <FiPlus size={14} /> Nueva planeación
               </button>
+              {pedidoTotalmenteProyectado() && (
+                <p className="text-xs text-amber-600 mt-1">
+                  La cantidad proyectada ya cubre el total pedido; no es necesario crear más planeaciones.
+                </p>
+              )}
             </div>
           )}
 
@@ -1500,13 +1564,18 @@ function PaginaEditarDom() {
                                 ? guardarCantidadProyectada(pp)
                                 : agregarProductoPlaneacion(prod.id, localKey)
                               }
-                              disabled={guardando || proyectadaLocal[localKey] === undefined}
+                              disabled={guardando || !turnoDiaExistente || (proyectadaLocal[localKey] ?? '').toString().trim() === ''}
                               className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
                                          hover:bg-[#134080] disabled:opacity-60">
                               {pp ? 'Guardar' : 'Agregar'}
                             </button>
                           )}
                         </div>
+                        {esEditable('etapa_2') && !turnoDiaExistente && (
+                          <p className="text-xs text-amber-600 mt-1">
+                            Guarde primero la planeación (fecha, turno y operarios) para poder asignar cantidades.
+                          </p>
+                        )}
                         {pp && (
                           <p className="text-xs text-gray-400 mt-1">
                             Proyectado actual: {pp.cantidad_proyectada ?? '—'}
@@ -1632,32 +1701,36 @@ function PaginaEditarDom() {
                             <p className="text-xs text-amber-600 mt-1">
                               Sin proyección — asigne en etapa de planeación
                             </p>
-                          ) : !cronometroFinalizado ? (
-                            <p className="text-xs text-amber-600 mt-1">
-                              Disponible una vez finalice el cronómetro de producción
-                            </p>
                           ) : (
-                            <div className="flex gap-2">
-                              <input type="number"
-                                value={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada ?? ''}
-                                onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
-                                disabled={!esEditable('etapa_4') || bloqueado}
-                                placeholder="Ingrese cantidad"
-                                className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
-                              {esEditable('etapa_4') && !bloqueado &&
-                                elaboradaLocal[localKey] !== undefined && (
-                                <button
-                                  onClick={() => productoProduccion
-                                    ? actualizarProductoElaborada(productoProduccion.id, localKey)
-                                    : crearProductoElaborada(pp.id, localKey)
-                                  }
-                                  disabled={guardando}
-                                  className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
-                                             hover:bg-[#134080] disabled:opacity-60">
-                                  {productoProduccion ? 'Guardar' : 'Agregar'}
-                                </button>
+                            <>
+                              {/* P6: el control queda visible pero deshabilitado hasta que
+                                  finalice el cronómetro (antes se ocultaba por completo). */}
+                              <div className="flex gap-2">
+                                <input type="number"
+                                  value={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada ?? ''}
+                                  onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
+                                  disabled={!esEditable('etapa_4') || bloqueado || !cronometroFinalizado}
+                                  placeholder="Ingrese cantidad"
+                                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                                {esEditable('etapa_4') && !bloqueado && (
+                                  <button
+                                    onClick={() => productoProduccion
+                                      ? actualizarProductoElaborada(productoProduccion.id, localKey)
+                                      : crearProductoElaborada(pp.id, localKey)
+                                    }
+                                    disabled={guardando || !cronometroFinalizado || (elaboradaLocal[localKey] ?? '').toString().trim() === ''}
+                                    className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
+                                               hover:bg-[#134080] disabled:opacity-60">
+                                    {productoProduccion ? 'Guardar' : 'Agregar'}
+                                  </button>
+                                )}
+                              </div>
+                              {!cronometroFinalizado && (
+                                <p className="text-xs text-amber-600 mt-1">
+                                  Disponible una vez finalice el cronómetro de producción
+                                </p>
                               )}
-                            </div>
+                            </>
                           )}
                         </CampoFormulario>
                       </div>
@@ -1855,22 +1928,25 @@ function PaginaEditarDom() {
             onGuardar={() => guardarDom('Despacho guardado correctamente.', 'etapa_6')}
           >
             <div className="grid grid-cols-2 gap-4">
-              <CampoFormulario label="Fecha entrega pactada">
+              {/* Etiqueta "Fecha de entrega planificada" por convención del cliente; el dato
+                  subyacente es fecha_entrega_pactada (ver nota de deuda técnica en el modelo Dom).
+                  fecha_entrega_planificada se retiró de la UI. */}
+              <CampoFormulario label="Fecha de entrega planificada">
                 <input type="date" value={datosDom.fecha_entrega_pactada ?? ''}
                   onChange={e => actualizarCampoDom('fecha_entrega_pactada', e.target.value)}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
-              <CampoFormulario label="Fecha entrega planificada">
-                <input type="date" value={datosDom.fecha_entrega_planificada ?? ''}
-                  onChange={e => actualizarCampoDom('fecha_entrega_planificada', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+              {/* Solo-lectura en Despachos: se editan en otras etapas.
+                  fecha_solicitada_cliente → etapa 0 (creación); fecha_entrega_proyectada → etapa 2 (planeación). */}
+              <CampoFormulario label="Fecha de entrega solicitada por el cliente">
+                <input type="date" value={datosDom.fecha_solicitada_cliente ?? ''}
+                  disabled
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
-              <CampoFormulario label="Fecha entrega proyectada">
+              <CampoFormulario label="Fecha de entrega proyectada">
                 <input type="date" value={datosDom.fecha_entrega_proyectada ?? ''}
-                  onChange={e => actualizarCampoDom('fecha_entrega_proyectada', e.target.value)}
-                  disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  disabled
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Cantidad empaques">
