@@ -265,7 +265,7 @@ class Dom(models.Model):
     empaque_servicio = models.CharField(max_length=70, blank=True, null=True, verbose_name='Empaque/Servicio', help_text='Elegir el tipo de servicio que se ofrece al cliente')
     tipo_negociacion = models.CharField(max_length=70, blank=True, null=True, verbose_name='Tipo de Negociacion', help_text='Elegir el tipo de negociación pactada con el cliente')
     fecha_entrega_proyectada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega proyectada')
-    materiales_externos = models.BooleanField(default=False, verbose_name='Este DOM requiere materiales externos (SI/NO)')
+    materiales_externos = models.BooleanField(null=True, blank=True, default=None, verbose_name='Este DOM requiere materiales externos (SI/NO)')
     vehiculo = models.CharField (max_length=100, blank=True, null=True, verbose_name='Vehiculo en el cual se realziará el despacho')
     orden_entrega = models.CharField(max_length=100, blank=True, null=True, verbose_name='Orden de entrega')
     notas = models.TextField(blank=True, null=True, verbose_name = 'Información relevante para el despacho', help_text='Incluya en este apartado información relevante respescto de este DOM Enchargados de servicios externos, notas o comentarios relevantes para el despacho, etc.')
@@ -560,7 +560,7 @@ class RegistroAlmacen(models.Model):
     materias_primas = models.BooleanField(null=True, blank=True, default=None, verbose_name='Materias Primas Internas Procesadas')
 
     novedad_cumplimiento_almacen = models.TextField(blank=True, null=True, verbose_name='Novedad cumplimiento almacen', help_text='Registre aquí cualquier novedad relevante respecto de las actividades desarrolladas en dentro de las labores de almacen para este DOM')
-    dom_realizado_planeacion = models.BooleanField(default=False, verbose_name= '¿Actividades de almacen realizadas según planeacion de la producción?')
+    dom_realizado_planeacion = models.BooleanField(null=True, blank=True, default=None, verbose_name= '¿Actividades de almacen realizadas según planeacion de la producción?')
 
     # Bloquep de etapa 3 
     materias_liberadas = models.BooleanField(default=False, verbose_name='¿Materías primas liberadas en su totalidad para este DOM?', help_text='Marque está esta opcion como SI unicamente en el evento en que la totalidad de materias primas hubieren sido liberadas para producción, no podrá realizar cambios de forma posterior')

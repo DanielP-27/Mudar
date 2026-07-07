@@ -106,6 +106,9 @@ function PaginaEditarDom() {
   const [personasConfirmadas, setPersonasConfirmadas]     = useState(false)
   const [mostrarModalPersonas, setMostrarModalPersonas]   = useState(false)
 
+  // Confirmación de cancelación (Cancelar → dashboard)
+  const [mostrarModalCancelar, setMostrarModalCancelar]   = useState(false)
+
   // Confirmación de bloqueo de etapa — modal propio en vez de window.confirm()
   const [confirmacionBloqueo, setConfirmacionBloqueo]     = useState(null) // { mensaje, resolve } | null
 
@@ -533,6 +536,11 @@ function PaginaEditarDom() {
   // Guarda etapas 0, 1 y 7 — todas usan PUT /api/doms/<id>/
   const guardarDom = async (mensaje, etapa) => {
     // Confirmación de bloqueo — solo si esta acción es la que activa el bloqueo
+    const etapa1YaBloqueada = datosDomOriginal?.dom_relacionado_produccion === true
+    if (!etapa1YaBloqueada && datosDom.dom_relacionado_produccion === true) {
+      if (!await confirmarBloqueo(mensajeConfirmacionBloqueo('DOM relacionado con producción', 'DOM'))) return
+    }
+
     const yaEstabaBloqueado = datosDomOriginal?.dom_liberado_cierre === true
     if (!yaEstabaBloqueado && datosDom.dom_liberado_cierre === true) {
       if (!await confirmarBloqueo(mensajeConfirmacionBloqueo('DOM liberado cierre', 'DOM'))) return
@@ -557,6 +565,14 @@ function PaginaEditarDom() {
     } finally {
       setGuardando(false)
     }
+  }
+
+  // Cambia la planeación activa y resetea los índices de registros hijos
+  const cambiarPlaneacion = (i) => {
+    setIdxPlaneacion(i)
+    setIdxAlmacen(0)
+    setIdxProduccion(0)
+    setIdxTratamiento(0)
   }
 
   // Crea un nuevo registro de planeación para este DOM
@@ -902,28 +918,6 @@ function PaginaEditarDom() {
         />
       )}
 
-      {/* Selector de planeación — solo DOMs productivos con múltiples planeaciones */}
-      {!esDomAdministrativo && planeaciones.length > 1 && (
-        <div className="mb-4 flex items-center gap-3">
-          <span className="text-sm text-gray-600">Planeación:</span>
-          {planeaciones.map((p, i) => (
-            <button key={p.id} onClick={() => {
-              setIdxPlaneacion(i)
-              setIdxAlmacen(0)
-              setIdxProduccion(0)
-              setIdxTratamiento(0)
-            }}
-              className={`px-3 py-1 text-sm rounded border
-                ${idxPlaneacion === i
-                  ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
-                  : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                }`}>
-              Planeación #{i + 1}
-            </button>
-          ))}
-        </div>
-      )}
-
       {/* Contenido de pestañas */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
 
@@ -1031,6 +1025,7 @@ function PaginaEditarDom() {
             editable={esEditable('etapa_0') || esEditable('etapa_1')}
             guardando={guardando}
             onGuardar={() => guardarDom('Trámite guardado correctamente.', 'etapa_0')}
+            onCancelar={() => setMostrarModalCancelar(true)}
           >
             <div className="grid grid-cols-2 gap-4">
               <CampoLectura label="Número DOM"          valor={datosDom.dom_id} />
@@ -1107,6 +1102,7 @@ function PaginaEditarDom() {
             editable={esEditable('etapa_0')}
             guardando={guardando}
             onGuardar={() => guardarDom('Etapa 1 guardada correctamente.', 'etapa_0')}
+            onCancelar={() => setMostrarModalCancelar(true)}
           >
             <div className="grid grid-cols-2 gap-4">
               <CampoLectura label="Fecha asignación DOM" valor={datosDom.fecha_asignacion_dom} />
@@ -1188,42 +1184,52 @@ function PaginaEditarDom() {
             editable={esEditable('etapa_1')}
             guardando={guardando}
             onGuardar={() => guardarDom('Etapa 2 guardada correctamente.', 'etapa_1')}
+            onCancelar={() => setMostrarModalCancelar(true)}
           >
             <div className="grid grid-cols-2 gap-4">
               <CampoFormulario label="Orden de compra">
-                <input type="text" value={datosDom.orden_compra ?? ''}
+                <input type="text" value={datosDom.orden_compra ?? ''} maxLength={50}
                   onChange={e => actualizarCampoDom('orden_compra', e.target.value)}
-                  disabled={!esEditable('etapa_1')}
+                  disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Número cotización">
-                <input type="text" value={datosDom.numero_cotizacion ?? ''}
+                <input type="text" value={datosDom.numero_cotizacion ?? ''} maxLength={50}
                   onChange={e => actualizarCampoDom('numero_cotizacion', e.target.value)}
-                  disabled={!esEditable('etapa_1')}
+                  disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Número factura">
                 <input type="text" value={datosDom.numero_factura ?? ''} maxLength={50}
                   onChange={e => actualizarCampoDom('numero_factura', e.target.value)}
-                  disabled={!esEditable('etapa_1')}
+                  disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Rentabilidad (%)">
                 <input type="number" value={datosDom.rentabilidad ?? ''}
                   onChange={e => actualizarCampoDom('rentabilidad', e.target.value)}
-                  disabled={!esEditable('etapa_1')}
+                  disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Tiempo salida almacén (minutos)">
                 <input type="number" value={datosDom.tiempo_salida_almacen ?? ''}
                   onChange={e => actualizarCampoDom('tiempo_salida_almacen', e.target.value)}
-                  disabled={!esEditable('etapa_1')}
+                  disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Campaña de venta">
                 <SelectSiNo name="dom_campana_venta" value={boolToStr(datosDom.campana_venta)}
                   onChange={v => actualizarCampoDom('campana_venta', strToBool(v))}
-                  disabled={!esEditable('etapa_1')} />
+                  disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
+              </CampoFormulario>
+              <CampoFormulario label="¿DOM relacionado con producción?">
+                <SelectSiNo name="dom_relacionado_produccion" value={boolToStr(datosDom.dom_relacionado_produccion)}
+                  onChange={v => actualizarCampoDom('dom_relacionado_produccion', strToBool(v))}
+                  disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
+                <p className="text-xs text-amber-600 mt-1">
+                  Importante: una vez marque Sí y guarde, esta etapa quedará bloqueada
+                  y no podrá realizar modificaciones posteriores.
+                </p>
               </CampoFormulario>
             </div>
           </FormEtapa>
@@ -1259,6 +1265,9 @@ function PaginaEditarDom() {
             )}
           </div>
 
+          {/* Selector de planeación — acotado a esta pestaña (etapa 2) */}
+          <SelectorPlaneacion planeaciones={planeaciones} idxActivo={idxPlaneacion} onCambiar={cambiarPlaneacion} />
+
           {esEditable('etapa_2') && (
             <div className="mb-4">
               <button onClick={() => crearNuevaPlaneacion()}
@@ -1281,6 +1290,7 @@ function PaginaEditarDom() {
             editable={esEditable('etapa_2') && !planActualOriginal?.planeacion_completa}
             guardando={guardando}
             onGuardar={guardarPlaneacion}
+            onCancelar={() => setMostrarModalCancelar(true)}
             sinRegistro={!planActual}
           >
             {/* BLOQUE 1: Campos de turno, fecha, operarios y duración */}
@@ -1609,6 +1619,7 @@ function PaginaEditarDom() {
         {/* ── Etapa 4 — Almacén ────────────────────────────────────────────── */}
         {pestanaActiva === 'etapa3' && (
           <div className="space-y-4">
+            <SelectorPlaneacion planeaciones={planeaciones} idxActivo={idxPlaneacion} onCambiar={cambiarPlaneacion} />
             {/* Selector de registro almacén */}
             <SelectorRegistro
               registros={almacenesActuales}
@@ -1627,6 +1638,7 @@ function PaginaEditarDom() {
               editable={esEditable('etapa_3') && !almacenActualOriginal?.materias_liberadas}
               guardando={guardando}
               onGuardar={() => guardarHijo('almacen', idxAlmacen, actualizarAlmacen)}
+              onCancelar={() => setMostrarModalCancelar(true)}
               sinRegistro={!almacenActual}
             >
               {almacenActual && (
@@ -1671,6 +1683,7 @@ function PaginaEditarDom() {
         {/* ── Etapa 5 — Producción ─────────────────────────────────────────── */}
         {pestanaActiva === 'etapa4' && (
           <div className="space-y-4">
+            <SelectorPlaneacion planeaciones={planeaciones} idxActivo={idxPlaneacion} onCambiar={cambiarPlaneacion} />
 
             {/* Sección cantidad elaborada por producto — solo se muestra si hay RegistroProduccion activo */}
             {produccionActual && datosDom.productos?.length > 0 && (
@@ -1760,6 +1773,7 @@ function PaginaEditarDom() {
               onGuardar={() => guardarHijo('produccion', idxProduccion, actualizarProduccion, {
                 numero_personas_asignadas: toInt(produccionActual?.numero_personas_asignadas),
               })}
+              onCancelar={() => setMostrarModalCancelar(true)}
               sinRegistro={!produccionActual}
             >
               {produccionActual && (
@@ -1853,6 +1867,7 @@ function PaginaEditarDom() {
         {/* ── Etapa 6 — Tratamiento ────────────────────────────────────────── */}
         {pestanaActiva === 'etapa5' && (
           <div className="space-y-4">
+            <SelectorPlaneacion planeaciones={planeaciones} idxActivo={idxPlaneacion} onCambiar={cambiarPlaneacion} />
             <SelectorRegistro
               registros={tratamientosActuales}
               registrosOriginal={tratamientosActualesOriginal}
@@ -1872,6 +1887,7 @@ function PaginaEditarDom() {
               onGuardar={() => guardarHijo('tratamiento', idxTratamiento, actualizarTratamiento, {
                 numero_tratamiento: toInt(tratamientoActual?.numero_tratamiento),
               })}
+              onCancelar={() => setMostrarModalCancelar(true)}
               sinRegistro={!tratamientoActual}
             >
               {tratamientoActual && (
@@ -1926,6 +1942,7 @@ function PaginaEditarDom() {
             editable={esEditable('etapa_6') && !datosDomOriginal?.dom_liberado_cierre}
             guardando={guardando}
             onGuardar={() => guardarDom('Despacho guardado correctamente.', 'etapa_6')}
+            onCancelar={() => setMostrarModalCancelar(true)}
           >
             <div className="grid grid-cols-2 gap-4">
               {/* Etiqueta "Fecha de entrega planificada" por convención del cliente; el dato
@@ -2028,15 +2045,6 @@ function PaginaEditarDom() {
 
       </div>
 
-      {/* Botón volver */}
-      <div className="mt-6">
-        <button onClick={() => navegar('/doms')}
-          className="px-6 py-2 border border-gray-300 text-gray-600 text-sm
-                     font-medium rounded hover:bg-gray-50">
-          VOLVER
-        </button>
-      </div>
-
       {/* Modal confirmación número de personas asignadas */}
       {mostrarModalPersonas && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -2098,6 +2106,33 @@ function PaginaEditarDom() {
         </div>
       )}
 
+      {/* Modal confirmación de cancelación */}
+      {mostrarModalCancelar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">
+              Cancelar edición
+            </h3>
+            <p className="text-sm text-gray-600 mb-5">
+              Si cancela, saldrá de la edición del DOM y volverá a la página principal.
+              Los cambios que no haya guardado se perderán. ¿Desea continuar?
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setMostrarModalCancelar(false)}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080]">
+                Seguir editando
+              </button>
+              <button
+                onClick={() => navegar('/dashboard')}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded hover:bg-red-700">
+                Sí, cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
@@ -2140,8 +2175,29 @@ function SelectorRegistro({ registros, registrosOriginal, idxActivo, onCambiar, 
   )
 }
 
+// Selector de planeación activa — acotado a la pestaña donde se renderiza.
+// Se oculta si hay una sola planeación (nada que elegir).
+function SelectorPlaneacion({ planeaciones, idxActivo, onCambiar }) {
+  if (planeaciones.length <= 1) return null
+  return (
+    <div className="mb-4 flex items-center gap-3">
+      <span className="text-sm text-gray-600">Planeación:</span>
+      {planeaciones.map((p, i) => (
+        <button key={p.id} onClick={() => onCambiar(i)}
+          className={`px-3 py-1 text-sm rounded border
+            ${idxActivo === i
+              ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
+              : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}>
+          Planeación #{i + 1}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 // Envuelve el contenido de cada etapa con título, badge y botón guardar
-function FormEtapa({ titulo, editable, guardando, onGuardar, sinRegistro, children }) {
+function FormEtapa({ titulo, editable, guardando, onGuardar, onCancelar, sinRegistro, children }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between mb-2">
@@ -2160,20 +2216,24 @@ function FormEtapa({ titulo, editable, guardando, onGuardar, sinRegistro, childr
           No hay registros disponibles para esta etapa en este DOM.
         </p>
       ) : (
-        <>
-          {children}
-          {editable && (
-            <div className="pt-4">
-              <button onClick={onGuardar} disabled={guardando}
-                className="px-6 py-2 bg-[#1A56A0] text-white text-sm font-medium
-                           rounded hover:bg-[#134080] disabled:opacity-60
-                           disabled:cursor-not-allowed">
-                {guardando ? 'Guardando...' : 'ACTUALIZAR REGISTRO DOM'}
-              </button>
-            </div>
-          )}
-        </>
+        children
       )}
+      {/* Fila de acciones: Actualizar (solo si editable) + Cancelar (siempre, salida) */}
+      <div className="pt-4 flex gap-3">
+        {editable && !sinRegistro && (
+          <button onClick={onGuardar} disabled={guardando}
+            className="px-6 py-2 bg-[#1A56A0] text-white text-sm font-medium
+                       rounded hover:bg-[#134080] disabled:opacity-60
+                       disabled:cursor-not-allowed">
+            {guardando ? 'Guardando...' : 'ACTUALIZAR REGISTRO DOM'}
+          </button>
+        )}
+        <button onClick={onCancelar}
+          className="px-6 py-2 bg-red-600 text-white text-sm
+                     font-medium rounded hover:bg-red-700">
+          CANCELAR
+        </button>
+      </div>
     </div>
   )
 }

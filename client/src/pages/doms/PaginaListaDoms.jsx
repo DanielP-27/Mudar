@@ -37,6 +37,12 @@ function PaginaListaDoms() {
   const [filtroFechaInicio, setFiltroFechaInicio] = useState('')
   const [filtroFechaFin, setFiltroFechaFin]       = useState('')
 
+  // Ordenamiento (Opción B: campo+dirección en un valor "campo:direccion")
+  const [ordenamiento, setOrdenamiento] = useState('fecha_entrega:asc')
+
+  // Filtro por fecha de planeación (fecha exacta, no rango)
+  const [filtroFechaPlaneacion, setFiltroFechaPlaneacion] = useState('')
+
   // Typeahead cliente
   const [busquedaCliente, setBusquedaCliente]           = useState('')
   const [sugerenciasCliente, setSugerenciasCliente]     = useState([])
@@ -82,6 +88,11 @@ function PaginaListaDoms() {
       if (filtroResponsable)   filtros.responsable = filtroResponsable
       if (filtroFechaInicio)   filtros.fecha_inicio = filtroFechaInicio
       if (filtroFechaFin)      filtros.fecha_fin    = filtroFechaFin
+      if (filtroFechaPlaneacion) filtros.fecha_planeacion = filtroFechaPlaneacion
+
+      const [orden, direccion] = ordenamiento.split(':')
+      filtros.orden = orden
+      filtros.direccion = direccion
 
       const res = await obtenerDoms(filtros)
       setDoms(res.data.doms)
@@ -93,7 +104,7 @@ function PaginaListaDoms() {
     } finally {
       setCargando(false)
     }
-  }, [clienteSeleccionado, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin])
+  }, [clienteSeleccionado, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin, filtroFechaPlaneacion, ordenamiento])
 
   // Carga inicial y cuando cambian los filtros
   useEffect(() => {
@@ -108,6 +119,8 @@ function PaginaListaDoms() {
     setFiltroResponsable('')
     setFiltroFechaInicio('')
     setFiltroFechaFin('')
+    setFiltroFechaPlaneacion('')
+    setOrdenamiento('fecha_entrega:asc')
   }
 
   // Determina si un DOM está vencido
@@ -206,6 +219,34 @@ function PaginaListaDoms() {
             </div>
           </div>
 
+          {/* Fecha de planeación (fecha exacta) */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+              Fecha de planeación
+            </label>
+            <input type="date"
+              value={filtroFechaPlaneacion}
+              onChange={e => setFiltroFechaPlaneacion(e.target.value)}
+              className="campo-input" />
+          </div>
+
+        </div>
+
+        {/* Ordenar por */}
+        <div className="flex items-center gap-2 mb-3">
+          <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+            Ordenar por
+          </label>
+          <select value={ordenamiento}
+            onChange={e => setOrdenamiento(e.target.value)}
+            className="campo-input w-auto">
+            <option value="fecha_entrega:asc">Fecha de entrega (más próxima primero)</option>
+            <option value="fecha_entrega:desc">Fecha de entrega (más lejana primero)</option>
+            <option value="cliente:asc">Cliente (A → Z)</option>
+            <option value="cliente:desc">Cliente (Z → A)</option>
+            <option value="dom:asc">N.º DOM (ascendente)</option>
+            <option value="dom:desc">N.º DOM (descendente)</option>
+          </select>
         </div>
 
         {/* Botón limpiar filtros */}
@@ -290,14 +331,17 @@ function PaginaListaDoms() {
                         <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-medium">
                           Vencido
                         </span>
-                      ) : dom.fecha_entrega_pactada &&
-                        (new Date(dom.fecha_entrega_pactada) - new Date()) / (1000 * 60 * 60 * 24) <= 7 ? (
+                      ) : !dom.fecha_entrega_pactada ? (
+                        <span className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600">
+                          Sin fecha
+                        </span>
+                      ) : (new Date(dom.fecha_entrega_pactada) - new Date()) / (1000 * 60 * 60 * 24) <= 7 ? (
                         <span className="px-2 py-1 text-xs rounded-full bg-amber-100 text-amber-700">
                           Vence pronto
                         </span>
                       ) : (
                         <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">
-                          Vigente
+                          Activo
                         </span>
                       )}
                     </td>

@@ -31,7 +31,6 @@ const estadoInicialEtapa1 = {
   campana_venta:              '',
   numero_cotizacion:          '',
   numero_factura:             '',
-  dom_relacionado_produccion: '',
 }
 
 function PaginaCrearDom() {
@@ -50,6 +49,9 @@ function PaginaCrearDom() {
 
   // DOM recién creado — si tiene valor, se muestra el modal de éxito (P1)
   const [domCreado, setDomCreado] = useState(null)
+
+  // Confirmación de cancelación (Cancelar → dashboard)
+  const [mostrarModalCancelar, setMostrarModalCancelar] = useState(false)
 
   // Opciones para los dropdowns
   const [tiposEstadoDom, setTiposEstadoDom] = useState([])
@@ -172,8 +174,7 @@ function PaginaCrearDom() {
         nombre_cliente:        toInt(datosEtapa0.nombre_cliente),
         tiempo_salida_almacen: toInt(datosEtapa1.tiempo_salida_almacen),
         rentabilidad:          toInt(datosEtapa1.rentabilidad),
-        campana_venta:         datosEtapa1.campana_venta === 'true',
-        dom_relacionado_produccion: datosEtapa1.dom_relacionado_produccion === 'true',
+        campana_venta:         datosEtapa1.campana_venta === '' ? null : datosEtapa1.campana_venta === 'true',
         // Productos — array vacío para DOMs administrativos
         productos: esDomAdministrativo
           ? []
@@ -546,13 +547,13 @@ function PaginaCrearDom() {
                 </h2>
                 <div className="grid grid-cols-2 gap-4">
                   <CampoFormulario label="Orden de compra">
-                    <input type="text" value={datosEtapa1.orden_compra}
+                    <input type="text" value={datosEtapa1.orden_compra} maxLength={50}
                       onChange={e => actualizarEtapa1('orden_compra', e.target.value)}
                       placeholder="Número orden de compra"
                       className="campo-input" />
                   </CampoFormulario>
                   <CampoFormulario label="Número cotización">
-                    <input type="text" value={datosEtapa1.numero_cotizacion}
+                    <input type="text" value={datosEtapa1.numero_cotizacion} maxLength={50}
                       onChange={e => actualizarEtapa1('numero_cotizacion', e.target.value)}
                       placeholder="Número cotización"
                       className="campo-input" />
@@ -581,16 +582,6 @@ function PaginaCrearDom() {
                       onChange={v => actualizarEtapa1('campana_venta', v)} />
                   </CampoFormulario>
                 </div>
-
-                <CampoFormulario label="¿DOM relacionado con producción?">
-                  <SelectSiNo name="crear_dom_relacionado_produccion"
-                    value={datosEtapa1.dom_relacionado_produccion}
-                    onChange={v => actualizarEtapa1('dom_relacionado_produccion', v)} />
-                  <p className="text-xs text-amber-600 mt-1">
-                    Importante: una vez seleccione Sí y guarde, no podrá realizar
-                    modificaciones posteriores a esta etapa.
-                  </p>
-                </CampoFormulario>
               </div>
             )}
           </div>
@@ -607,12 +598,39 @@ function PaginaCrearDom() {
                      hover:bg-[#134080] disabled:opacity-60 disabled:cursor-not-allowed">
           {guardando ? 'Guardando...' : 'CREAR REGISTRO DOM'}
         </button>
-        <button onClick={() => navegar('/dashboard')}
-          className="px-6 py-2 border border-gray-300 text-gray-600 text-sm
-                     font-medium rounded hover:bg-gray-50">
-          VOLVER AL DASHBOARD
+        <button onClick={() => setMostrarModalCancelar(true)}
+          className="px-6 py-2 bg-red-600 text-white text-sm
+                     font-medium rounded hover:bg-red-700">
+          CANCELAR
         </button>
       </div>
+
+      {/* ── Modal de confirmación de cancelación ───────────────── */}
+      {mostrarModalCancelar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">
+              Cancelar creación
+            </h3>
+            <p className="text-sm text-gray-600 mb-5">
+              Si cancela, saldrá de la creación del DOM y volverá a la página principal.
+              Los datos que haya ingresado se perderán. ¿Desea continuar?
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setMostrarModalCancelar(false)}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080]">
+                Seguir editando
+              </button>
+              <button
+                onClick={() => navegar('/dashboard')}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded hover:bg-red-700">
+                Sí, cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal de éxito tras crear el DOM (P1) ───────────────── */}
       {domCreado && (

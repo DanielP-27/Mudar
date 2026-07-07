@@ -1287,7 +1287,7 @@ class DomListView(APIView):
 
         estado = request.query_params.get('estado', None)
         if estado is not None:
-            doms = doms.filter(tipo_estado_dom=estado.upper())
+            doms = doms.filter(tipo_estado_dom__iexact=estado)
 
         # Filtros nuevos
         responsable = request.query_params.get('responsable', None)
@@ -1306,15 +1306,37 @@ class DomListView(APIView):
         if fecha_fin is not None:
             doms = doms.filter(fecha_entrega_pactada__lte=fecha_fin)
 
-        # Ordenamiento: vencidos primero, luego fecha_entrega_pactada ascendente
+        fecha_planeacion = request.query_params.get('fecha_planeacion', None)
+        if fecha_planeacion is not None:
+            doms = doms.filter(
+                registro_planeacion__fecha_planeacion=fecha_planeacion
+            ).distinct()
+
+        # ── Nivel de urgencia (criterio primario, SIEMPRE) ──────────────
+        # 0 vencido · 1 próximo a vencer (≤7 días) · 2 activo · 3 sin fecha.
+        # isnull se evalúa primero para apartar los null (si no, caerían en "activo").
         hoy = timezone.now().date()
+        limite_proximo = hoy + timedelta(days=7)
         doms = doms.annotate(
-            vencido=Case(
+            nivel_urgencia=Case(
+                When(fecha_entrega_pactada__isnull=True, then=3),
                 When(fecha_entrega_pactada__lt=hoy, then=0),
-                default=1,
+                When(fecha_entrega_pactada__lte=limite_proximo, then=1),
+                default=2,
                 output_field=IntegerField()
             )
-        ).order_by('vencido', 'fecha_entrega_pactada')
+        )
+
+        # ── Orden manual dentro de cada nivel (lista blanca de campos permitidos) ──
+        CAMPOS_ORDEN = {
+            'fecha_entrega': 'fecha_entrega_pactada',
+            'cliente':       'nombre_cliente__nombre_cliente',
+            'dom':           'dom_id',
+        }
+        campo = CAMPOS_ORDEN.get(request.query_params.get('orden'), 'fecha_entrega_pactada')
+        if request.query_params.get('direccion') == 'desc':
+            campo = '-' + campo
+        doms = doms.order_by('nivel_urgencia', campo)
 
         # Paginación
         total = doms.count()
@@ -1393,7 +1415,7 @@ class DomListView(APIView):
         # operación que aplica atomicidad nuevo registro debe ser DOM + ProductosDoms juntos o ninguno, DOM sin productos sin proposito dentro del sistema
         try:
             with transaction.atomic():
-                dom: Dom = serializer.save(creado_por=request.user)
+                dom: Dom = serializer.save(creado_por=request.user, dom_relacionado_produccion=False)
 
                 for producto_serializer in productos_serializers:
                     producto_serializer.save(productoDom=dom)
@@ -1539,12 +1561,11 @@ class DomDetalleView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # Verifica bloqueo de etapa antes de aplicar cambios
-        # etapa_1 (Gestión comercial) queda deliberadamente sin bloqueo activo — el campo
-        # dom_relacionado_produccion y el método etapa_1_bloqueada() siguen existiendo.
-        # Si se decide reactivar el bloqueo de esta etapa, agregar de nuevo:
-        #   'etapa_1': dom.etapa_1_bloqueada,
+        # Verifica bloqueo de etapa antes de aplicar cambios.
+        # etapa_1 se bloquea con dom_relacionado_produccion=True (reactivado 2026-07-06,
+        # cableado por el modal de confirmación del frontend).
         bloqueos = {
+            'etapa_1': dom.etapa_1_bloqueada,
             'etapa_6': dom.etapa_6_bloqueada,
         }
         if etapa in bloqueos and bloqueos[etapa]():

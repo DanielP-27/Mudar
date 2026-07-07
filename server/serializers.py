@@ -171,6 +171,7 @@ class DomListSerializer(serializers.ModelSerializer):
             'tipo_estado_dom',
             'responsable',
             'fecha_solicitada_cliente',
+            'fecha_entrega_pactada',
             'dom_relacionado_produccion',
             'dom_liberado_cierre',
             'productos',
