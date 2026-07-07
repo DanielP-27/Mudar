@@ -26,6 +26,8 @@ import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import SelectSiNo from '../../components/common/SelectSiNo'
 import CronometroProduccion from '../../components/common/CronometroProduccion'
+import ModalMensaje from '../../components/common/ModalMensaje'
+import Toast from '../../components/common/Toast'
 
 // Tipos de DOM administrativos — no llevan etapas de producción
 const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
@@ -73,6 +75,7 @@ function PaginaEditarDom() {
   const [guardandoTurno, setGuardandoTurno] = useState(false)
   const [error, setError]         = useState(null)
   const [exito, setExito]         = useState(null)
+  const [errorCarga, setErrorCarga] = useState(null)
 
   // Datos del DOM — etapas 0, 1 y 6
   const [datosDom, setDatosDom] = useState(null)
@@ -101,6 +104,9 @@ function PaginaEditarDom() {
   // Estado local para cálculos de capacidad (preview)
   const [capacidadCalculo, setCapacidadCalculo] = useState(null)
   const [tiempoRestantePreview, setTiempoRestantePreview] = useState(null)
+  // Tiempo ya asignado por OTRAS planeaciones del turno+fecha seleccionado
+  // (viene del GET de turno-día; permite previsualizar asignado/restante sin PUT)
+  const [asignadoOtras, setAsignadoOtras] = useState(0)
 
   // Confirmación de personas asignadas antes de iniciar cronómetro
   const [personasConfirmadas, setPersonasConfirmadas]     = useState(false)
@@ -178,7 +184,7 @@ function PaginaEditarDom() {
           // Se dispara aquí con los datos recién obtenidos para no depender de un re-render.
           const planActivo = registros[idxPlaneacion]
           if (planActivo?.turno && planActivo?.fecha_planeacion) {
-            consultarDisponibilidadTurno(planActivo.turno, planActivo.fecha_planeacion)
+            consultarDisponibilidadTurno(planActivo.turno, planActivo.fecha_planeacion, planActivo.id)
           }
         }
 
@@ -192,7 +198,7 @@ function PaginaEditarDom() {
         setTurnos(rTurnos.data.turnos ?? rTurnos.data)
 
       } catch {
-        setError('Error al cargar los datos del DOM.')
+        setErrorCarga('Error al cargar los datos del DOM.')
       } finally {
         setCargando(false)
       }
@@ -204,7 +210,7 @@ function PaginaEditarDom() {
   useEffect(() => {
     const plan = planeaciones[idxPlaneacion]
     if (plan?.turno && plan?.fecha_planeacion) {
-      consultarDisponibilidadTurno(plan.turno, plan.fecha_planeacion)
+      consultarDisponibilidadTurno(plan.turno, plan.fecha_planeacion, plan.id)
     } else {
       setTurnoDiaExistente(null)
     }
@@ -318,10 +324,11 @@ function PaginaEditarDom() {
     datosDom.productos.every(prod => proyectadaPorProducto(prod.id) >= (prod.cantidad_pedido ?? 0))
 
   // Consulta RegistroTurnoDia cuando cambia turno o fecha en etapa 3
-  const consultarDisponibilidadTurno = async (turnoId, fecha) => {
+  const consultarDisponibilidadTurno = async (turnoId, fecha, excluirId) => {
     if (!turnoId || !fecha) return
     try {
-      const res = await consultarTurnoDia(turnoId, fecha)
+      const res = await consultarTurnoDia(turnoId, fecha, excluirId)
+      setAsignadoOtras(res.data.tiempo_asignado_otras ?? 0)
       const registros = res.data.registros ?? []
       if (registros.length > 0) {
         setTurnoDiaExistente(registros[0])
@@ -417,8 +424,11 @@ function PaginaEditarDom() {
   // el tiempo proyectado de la planeación supere la capacidad del turno. Feedback inmediato,
   // sin round-trip. Devuelve un mensaje de error si excede, o null si está OK.
   const validarCapacidadLocal = (domProductoId, cantidadNueva) => {
+    // 1er registro: no hay otras planeaciones → capacidad total.
+    // 2º+ registro (turno-día existente): lo disponible para ESTA planeación es
+    // el restante = capacidad total − lo asignado por las otras planeaciones.
     const capacidad = turnoDiaExistente
-      ? turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales
+      ? (turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales) - asignadoOtras
       : capacidadCalculo
     if (!capacidad) return null   // sin capacidad conocida aquí → la valida el backend
 
@@ -649,7 +659,7 @@ function PaginaEditarDom() {
           minutos_totales:  toInt(datosTurnoDia.minutos_totales),
         }),
       })
-      await consultarDisponibilidadTurno(plan.turno, plan.fecha_planeacion)
+      await consultarDisponibilidadTurno(plan.turno, plan.fecha_planeacion, plan.id)
 
       const res = await obtenerPlaneacion({ dom_id: domId })
       const nuevosRegistros = res.data.registros ?? []
@@ -808,6 +818,18 @@ function PaginaEditarDom() {
   const produccionActual  = produccionesActuales[idxProduccion]
   const tratamientoActual = tratamientosActuales[idxTratamiento]
 
+  // Consolidado del turno (etapa 2) — valores en vivo del turno seleccionado.
+  // Con turno-día existente, "ya asignado" y "restante" se calculan con
+  // asignadoOtras (tiempo de las OTRAS planeaciones, del GET) para reflejar el
+  // turno seleccionado SIN esperar al PUT; tu_planeación = tiempo_proyectado
+  // de la planeación actual. Sin turno-día (1er registro) se usa el preview local.
+  const capacidadTurnoActual = turnoDiaExistente
+    ? turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales
+    : capacidadCalculo
+  const restanteTurnoActual = turnoDiaExistente
+    ? capacidadTurnoActual - asignadoOtras - (planActual?.tiempo_proyectado ?? 0)
+    : tiempoRestantePreview
+
   // Snapshot de los mismos datos, confirmado por el servidor — usado para el bloqueo de etapa
   const planActualOriginal           = planeacionesOriginal[idxPlaneacion]
   const almacenesActualesOriginal    = planActualOriginal?.registros_almacen    ?? []
@@ -856,6 +878,12 @@ function PaginaEditarDom() {
     </div>
   )
 
+  if (errorCarga) return (
+    <div className="flex items-center justify-center h-64 text-red-600 text-sm">
+      {errorCarga}
+    </div>
+  )
+
   if (!datosDom) return (
     <div className="flex items-center justify-center h-64 text-red-500 text-sm">
       No se encontró el registro DOM.
@@ -877,10 +905,6 @@ function PaginaEditarDom() {
           }
         </p>
       </div>
-
-      {/* Mensajes */}
-      {exito && <p className="text-sm text-green-600 mb-4">{exito}</p>}
-      {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
 
       {/* Sistema de pestañas */}
       <div className="border-b border-gray-200 mb-6 overflow-x-auto">
@@ -1101,7 +1125,7 @@ function PaginaEditarDom() {
             titulo="Etapa 1 — Creación del DOM"
             editable={esEditable('etapa_0')}
             guardando={guardando}
-            onGuardar={() => guardarDom('Etapa 1 guardada correctamente.', 'etapa_0')}
+            onGuardar={() => guardarDom('Etapa de creación de DOM guardada correctamente.', 'etapa_0')}
             onCancelar={() => setMostrarModalCancelar(true)}
           >
             <div className="grid grid-cols-2 gap-4">
@@ -1183,7 +1207,7 @@ function PaginaEditarDom() {
             titulo="Etapa 2 — Gestión comercial y diseño"
             editable={esEditable('etapa_1')}
             guardando={guardando}
-            onGuardar={() => guardarDom('Etapa 2 guardada correctamente.', 'etapa_1')}
+            onGuardar={() => guardarDom('Etapa de gestión comercial guardada correctamente.', 'etapa_1')}
             onCancelar={() => setMostrarModalCancelar(true)}
           >
             <div className="grid grid-cols-2 gap-4">
@@ -1300,7 +1324,7 @@ function PaginaEditarDom() {
                   <input type="date" value={planActual.fecha_planeacion ?? ''}
                     onChange={e => {
                       actualizarCampoPlaneacion('fecha_planeacion', e.target.value)
-                      consultarDisponibilidadTurno(planActual.turno, e.target.value)
+                      consultarDisponibilidadTurno(planActual.turno, e.target.value, planActual.id)
                     }}
                     disabled={!esEditable('etapa_2')}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
@@ -1309,7 +1333,7 @@ function PaginaEditarDom() {
                   <select value={planActual.turno ?? ''}
                     onChange={e => {
                       actualizarCampoPlaneacion('turno', toInt(e.target.value))
-                      consultarDisponibilidadTurno(toInt(e.target.value), planActual.fecha_planeacion)
+                      consultarDisponibilidadTurno(toInt(e.target.value), planActual.fecha_planeacion, planActual.id)
                     }}
                     disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
@@ -1382,18 +1406,14 @@ function PaginaEditarDom() {
                   <div>
                     <p className="text-xs text-gray-600">Capacidad total</p>
                     <p className="text-lg font-bold text-blue-600">
-                      {turnoDiaExistente
-                        ? turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales
-                        : (capacidadCalculo ?? '—')} min
+                      {capacidadTurnoActual ?? '—'} min
                     </p>
                   </div>
 
                   <div>
                     <p className="text-xs text-gray-600">Ya asignado</p>
                     <p className="text-lg font-bold text-amber-600">
-                      {turnoDiaExistente
-                        ? ((planActual?.sumatoria_tiempo_asignado_turnos ?? 0) - (planActual?.tiempo_proyectado ?? 0))
-                        : '0'} min
+                      {turnoDiaExistente ? asignadoOtras : '0'} min
                     </p>
                   </div>
 
@@ -1407,20 +1427,15 @@ function PaginaEditarDom() {
                   <div>
                     <p className="text-xs text-gray-600">Restante</p>
                     <p className={`text-lg font-bold ${
-                      turnoDiaExistente
-                        ? (planActual?.tiempo_restante_dia ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
-                        : (tiempoRestantePreview ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
+                      (restanteTurnoActual ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
                     }`}>
-                      {turnoDiaExistente
-                        ? planActual?.tiempo_restante_dia ?? '—'
-                        : tiempoRestantePreview ?? '—'} min
+                      {restanteTurnoActual ?? '—'} min
                     </p>
                   </div>
                 </div>
 
                 {/* Advertencia si no hay capacidad */}
-                {((turnoDiaExistente && (planActual?.tiempo_restante_dia ?? 0) < 0) ||
-                  (!turnoDiaExistente && (tiempoRestantePreview ?? 0) < 0)) && (
+                {(restanteTurnoActual ?? 0) < 0 && (
                   <p className="text-xs text-red-600 font-semibold mt-2">
                     ⚠️ No hay capacidad suficiente en este turno para esta planeación.
                   </p>
@@ -2000,13 +2015,13 @@ function PaginaEditarDom() {
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>
               <CampoFormulario label="Vehículo">
-                <input type="text" value={datosDom.vehiculo ?? ''}
+                <input type="text" value={datosDom.vehiculo ?? ''} maxLength={50}
                   onChange={e => actualizarCampoDom('vehiculo', e.target.value)}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="Orden entrega">
-                <input type="text" value={datosDom.orden_entrega ?? ''}
+                <input type="text" value={datosDom.orden_entrega ?? ''} maxLength={50}
                   onChange={e => actualizarCampoDom('orden_entrega', e.target.value)}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
@@ -2132,6 +2147,9 @@ function PaginaEditarDom() {
           </div>
         </div>
       )}
+
+      <ModalMensaje abierto={!!error} mensaje={error} onCerrar={() => setError(null)} />
+      <Toast mensaje={exito} />
 
     </div>
   )

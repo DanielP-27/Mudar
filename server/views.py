@@ -79,10 +79,37 @@ def verificar_rol(request, roles_permitidos):
     try:
         perfil = get_perfil(request)
         return perfil.rol in roles_permitidos
-    except PerfilUsuario.DoesNotExist: 
+    except PerfilUsuario.DoesNotExist:
         return False
 
-# Función helper para determinar el nivel de cumplimiento de la planeación 
+# Reemplaza los mensajes por defecto de DRF por textos amigables, según el CÓDIGO
+# del error (no el texto, para no depender del idioma). null/blank/required se
+# unifican como "vacío", que es como el usuario percibe un campo obligatorio sin llenar.
+MENSAJES_AMIGABLES = {
+    'null':     'Este campo no puede quedar vacío.',
+    'blank':    'Este campo no puede quedar vacío.',
+    'required': 'Este campo no puede quedar vacío.',
+}
+
+def errores_con_labels(serializer):
+    # Remapea las claves de serializer.errors al label del campo (verbose_name),
+    # para que el usuario vea "Cliente" en vez de "nombre_cliente", y suaviza los
+    # mensajes por defecto. Deja non_field_errors, claves sin label y estructuras
+    # anidadas (listas de dicts) tal cual.
+    resultado = {}
+    for clave, valor in serializer.errors.items():
+        campo = serializer.fields.get(clave)
+        etiqueta = str(campo.label) if (campo is not None and campo.label) else clave
+        if isinstance(valor, list):
+            valor = [
+                MENSAJES_AMIGABLES.get(getattr(item, 'code', None), str(item))
+                if isinstance(item, str) else item
+                for item in valor
+            ]
+        resultado[etiqueta] = valor
+    return resultado
+
+# Función helper para determinar el nivel de cumplimiento de la planeación
 # Retorna:
 # 'CUMPLIÓ'     — todos los registros cumplieron
 # 'PARCIAL'     — algunos registros cumplieron y otros no
@@ -1395,12 +1422,12 @@ class DomListView(APIView):
             return Response(
                 {
                     'error': 'Datos invalidos',
-                    'detalle': serializer.errors
+                    'detalle': errores_con_labels(serializer)
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Validación individua de cada producto antes de iniciar la transacción 
+
+        # Validación individua de cada producto antes de iniciar la transacción
         productos_serializers=[]
         for producto_data in productos_data:
             producto_serializer = ProductosDomSerializer(data=producto_data)
@@ -2872,16 +2899,36 @@ class RegistroTurnoDiaListView(APIView):
         registros = RegistroTurnoDia.objects.select_related('turno').all()
         turno_id = request.query_params.get('turno', None)
         fecha = request.query_params.get('fecha', None)
+        excluir = request.query_params.get('excluir_planeacion', None)
         if turno_id:
             registros = registros.filter(turno__turno_id=turno_id)
         if fecha:
             registros = registros.filter(fecha=fecha)
         serializer = RegistroTurnoDiaSerializer(registros, many=True)
+
+        # Tiempo ya asignado por OTRAS planeaciones de este turno+fecha. Permite
+        # previsualizar "ya asignado"/"restante" en el 2º registro ANTES del PUT
+        # que liga la planeación actual al turno. Excluye la planeación en edición
+        # (excluir_planeacion) para no contarla dos veces. Misma lógica que
+        # RegistroPlaneacion.sumatoria_tiempo_asignado_turnos (models.py).
+        tiempo_asignado_otras = 0
+        if turno_id and fecha:
+            planeaciones = RegistroPlaneacion.objects.filter(
+                fecha_planeacion=fecha, turno__turno_id=turno_id,
+            ).prefetch_related('productos_planeacion__dom_producto__tipo_producto')
+            if excluir:
+                planeaciones = planeaciones.exclude(id=excluir)
+            for p in planeaciones:
+                for pp in p.productos_planeacion.all():
+                    if pp.cantidad_proyectada and pp.dom_producto:
+                        tiempo_asignado_otras += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+
         return Response(
             {
                 'mensaje': 'Registros de turno del día obtenidos correctamente',
                 'total': registros.count(),
-                'registros': serializer.data
+                'registros': serializer.data,
+                'tiempo_asignado_otras': tiempo_asignado_otras,
             },
             status=status.HTTP_200_OK
         )

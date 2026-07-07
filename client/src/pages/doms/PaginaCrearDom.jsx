@@ -10,6 +10,7 @@ import { extraerMensajeError } from '../../utils/errores'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import SelectSiNo from '../../components/common/SelectSiNo'
+import ModalMensaje from '../../components/common/ModalMensaje'
 
 // Tipos de DOM que no llevan productos ni etapas de producción
 const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
@@ -57,6 +58,7 @@ function PaginaCrearDom() {
   const [tiposEstadoDom, setTiposEstadoDom] = useState([])
   const [responsables, setResponsables]     = useState([])
   const [cargandoListas, setCargandoListas] = useState(true)
+  const [errorCarga, setErrorCarga]         = useState(null)
 
   // Typeahead cliente
   const [busquedaCliente, setBusquedaCliente]       = useState('')
@@ -89,7 +91,7 @@ function PaginaCrearDom() {
         setTiposEstadoDom(resTipos.data.listas)
         setResponsables(resResponsables.data.listas)
       } catch {
-        setError('Error al cargar los datos del formulario.')
+        setErrorCarga('Error al cargar los datos del formulario.')
       } finally {
         setCargandoListas(false)
       }
@@ -172,6 +174,9 @@ function PaginaCrearDom() {
         ...datosEtapa0,
         ...(!esDomAdministrativo ? datosEtapa1 : {}),
         nombre_cliente:        toInt(datosEtapa0.nombre_cliente),
+        // Fecha vacía → null (no ''), para que el backend la trate como campo
+        // vacío ("no puede quedar vacío") y no como fecha con formato inválido.
+        fecha_solicitada_cliente: datosEtapa0.fecha_solicitada_cliente || null,
         tiempo_salida_almacen: toInt(datosEtapa1.tiempo_salida_almacen),
         rentabilidad:          toInt(datosEtapa1.rentabilidad),
         campana_venta:         datosEtapa1.campana_venta === '' ? null : datosEtapa1.campana_venta === 'true',
@@ -202,6 +207,12 @@ function PaginaCrearDom() {
   if (cargandoListas) return (
     <div className="flex items-center justify-center h-64 text-gray-500 text-sm">
       Cargando formulario...
+    </div>
+  )
+
+  if (errorCarga) return (
+    <div className="flex items-center justify-center h-64 text-red-600 text-sm">
+      {errorCarga}
     </div>
   )
 
@@ -588,9 +599,6 @@ function PaginaCrearDom() {
         </>
       )}
 
-      {/* Mensaje de error */}
-      {error && <p className="text-sm text-red-600 mt-4">{error}</p>}
-
       {/* Botones de acción */}
       <div className="flex gap-3 mt-6">
         <button onClick={manejarCrear} disabled={guardando}
@@ -668,6 +676,8 @@ function PaginaCrearDom() {
           </div>
         </div>
       )}
+
+      <ModalMensaje abierto={!!error} mensaje={error} onCerrar={() => setError(null)} />
 
     </div>
   )

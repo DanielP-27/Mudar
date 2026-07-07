@@ -89,6 +89,8 @@ export const obtenerLista = (listaId) =>
 export const obtenerListasPorTipo = (tipo) =>
   api.get('/api/listas/', { params: { tipo, activo: true } })
 
-// Consulta si existe un RegistroTurnoDia para un turno y fecha dados
-export const consultarTurnoDia = (turnoId, fecha) =>
-  api.get('/api/turnos-dia/', { params: { turno: turnoId, fecha } })
+// Consulta si existe un RegistroTurnoDia para un turno y fecha dados.
+// excluirPlaneacion (opcional): id de la planeación en edición, para que el
+// backend no la cuente al calcular el tiempo ya asignado por otras planeaciones.
+export const consultarTurnoDia = (turnoId, fecha, excluirPlaneacion) =>
+  api.get('/api/turnos-dia/', { params: { turno: turnoId, fecha, excluir_planeacion: excluirPlaneacion } })
