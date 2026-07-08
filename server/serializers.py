@@ -439,6 +439,8 @@ class RegistroTratamientoSerializer(serializers.ModelSerializer):
             },
             'dom_con_tratamiento':       {'allow_null': True, 'required': False},
             'tratamiento_segun_planeacion': {'allow_null': True, 'required': False},
+            # numero_tratamiento pasó a CharField (código de texto libre): acepta vacío/nulo
+            'numero_tratamiento': {'allow_null': True, 'allow_blank': True, 'required': False},
         }
 
 # Serializer: ProductoPlaneacion
@@ -608,6 +610,10 @@ class RegistroPlaneacionSerializer(serializers.ModelSerializer):
 
 class AuditoriaDomSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='usuario.username', read_only = True)
+    # Rol del usuario que ejecutó la acción, en su forma legible (get_rol_display).
+    # Se resuelve con método porque el usuario pudo ser eliminado (SET_NULL) o
+    # no tener PerfilUsuario asignado.
+    rol = serializers.SerializerMethodField(read_only = True)
 
     class Meta:
         model = AuditoriaDom
@@ -616,6 +622,7 @@ class AuditoriaDomSerializer(serializers.ModelSerializer):
             'dom',
             'usuario',
             'username',
+            'rol',
             'accion',
             'etapa',
             'campos_modificados',
@@ -623,6 +630,17 @@ class AuditoriaDomSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = fields # Auditoria siempre solo lectura
+
+    def get_rol(self, obj):
+        usuario = obj.usuario
+        if usuario is None:
+            return None
+        # El descriptor OneToOne inverso de Django hereda de AttributeError,
+        # por lo que getattr(..., None) devuelve None si no hay perfil asociado.
+        perfil = getattr(usuario, 'perfil', None)
+        if perfil is None:
+            return None
+        return perfil.get_rol_display()
 
 # Serializer: Login 
 # Uso: recibir username + password del Front, valide y devuelve token de acceso

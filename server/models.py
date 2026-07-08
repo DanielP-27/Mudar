@@ -858,7 +858,7 @@ class RegistroTratamiento(models.Model):
     # atributos correspondientes a los campos de la etapa de tratamiento fitosanitario 
 
     dom_con_tratamiento = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Tratamiento Fitosanitario realizado respecto de este DOM?')
-    numero_tratamiento = models.IntegerField(blank=True, null=True, verbose_name='Número de tratamiento termico fitosanitario asignado a este DOM')
+    numero_tratamiento = models.CharField(max_length=50, blank=True, null=True, verbose_name='Número de tratamiento termico fitosanitario asignado a este DOM')
     novedad_cumplimiento_tratamiento = models.TextField(blank=True, null=True, verbose_name='Novedades en la realización o cumplimiento del tratamiento termico', help_text='Incluya en este campo cualquier novedad o hecho relevante relativo al cumplimiento del tratamiento fitosanitario respecto de este DOM')
     tratamiento_segun_planeacion = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Tratamiento termico realizado según planeación para este DOM?')
 

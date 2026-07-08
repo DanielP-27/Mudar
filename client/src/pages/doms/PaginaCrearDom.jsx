@@ -471,7 +471,7 @@ function PaginaCrearDom() {
                 </CampoFormulario>
 
                 {/* Bloque de productos */}
-                <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                <div className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
                   <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
                     Productos <span className="text-red-500">*</span>
                   </h3>

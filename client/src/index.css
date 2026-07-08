@@ -6,3 +6,17 @@
     opacity: 1;
   }
 }
+
+@layer components {
+  /* Fuente única de estilo de los campos de formulario (P21).
+     El borde gris-300 delimita el área editable un paso por encima del
+     gris-200 de las tarjetas; el azul queda reservado para el foco.
+     Al ser la clase compartida por todos los inputs/select/textarea del
+     sistema, cualquier ajuste aquí se propaga a toda la app. */
+  .campo-input {
+    @apply w-full px-3 py-2 text-sm rounded-md
+           border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400
+           focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20
+           disabled:border-gray-200 disabled:cursor-not-allowed;
+  }
+}

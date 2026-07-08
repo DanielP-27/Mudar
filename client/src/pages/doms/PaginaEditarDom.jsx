@@ -4,7 +4,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   FiEye, FiFileText, FiBriefcase, FiPackage,
   FiSettings, FiThermometer, FiTruck, FiPlus,
-  FiChevronRight, FiChevronDown
+  FiChevronRight, FiChevronDown, FiLock
 } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { puedeEditarEtapa, esSoloLectura } from '../../utils/permisos'
@@ -322,6 +322,12 @@ function PaginaEditarDom() {
   const pedidoTotalmenteProyectado = () =>
     (datosDom?.productos ?? []).length > 0 &&
     datosDom.productos.every(prod => proyectadaPorProducto(prod.id) >= (prod.cantidad_pedido ?? 0))
+
+  // Restricción producción (análoga a P11): true si TODOS los productos del DOM ya tienen
+  // su cantidad pedida totalmente elaborada. Bloquea la creación de nuevos registros de producción.
+  const pedidoTotalmenteProducido = () =>
+    (datosDom?.productos ?? []).length > 0 &&
+    datosDom.productos.every(prod => elaboradaPorProducto(prod.id) >= (prod.cantidad_pedido ?? 0))
 
   // Consulta RegistroTurnoDia cuando cambia turno o fecha en etapa 3
   const consultarDisponibilidadTurno = async (turnoId, fecha, excluirId) => {
@@ -906,23 +912,25 @@ function PaginaEditarDom() {
         </p>
       </div>
 
-      {/* Sistema de pestañas */}
-      <div className="border-b border-gray-200 mb-6 overflow-x-auto">
-        <div className="flex gap-0 min-w-max">
-          {pestanas.map(p => (
-            <button key={p.id} onClick={() => setPestanaActiva(p.id)}
-              className={`
-                flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2
-                transition-colors whitespace-nowrap
-                ${pestanaActiva === p.id
-                  ? 'border-[#1A56A0] text-[#1A56A0]'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }
-              `}>
-              {p.icono}{p.label}
-            </button>
-          ))}
-        </div>
+      {/* Sistema de pestañas — cuadrícula 4×2 (P23): las 8 etapas quedan siempre
+          visibles en dos filas de cuatro, sin scroll horizontal. Estilo de recuadro
+          (activo azul relleno / inactivo con borde gris) en lugar del subrayado, que
+          no traduce bien entre dos filas. */}
+      <div className="grid grid-cols-4 gap-2 mb-6">
+        {pestanas.map(p => (
+          <button key={p.id} onClick={() => setPestanaActiva(p.id)}
+            className={`
+              flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border text-left
+              transition-colors
+              ${pestanaActiva === p.id
+                ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
+                : 'bg-white text-gray-600 border-gray-200 hover:text-gray-800 hover:border-gray-300'
+              }
+            `}>
+            <span className="shrink-0">{p.icono}</span>
+            <span className="leading-tight">{p.label}</span>
+          </button>
+        ))}
       </div>
 
       {/* Barra de contexto */}
@@ -1246,6 +1254,8 @@ function PaginaEditarDom() {
                   onChange={v => actualizarCampoDom('campana_venta', strToBool(v))}
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
               </CampoFormulario>
+            </div>
+            <BloqueoEtapa>
               <CampoFormulario label="¿DOM relacionado con producción?">
                 <SelectSiNo name="dom_relacionado_produccion" value={boolToStr(datosDom.dom_relacionado_produccion)}
                   onChange={v => actualizarCampoDom('dom_relacionado_produccion', strToBool(v))}
@@ -1255,7 +1265,7 @@ function PaginaEditarDom() {
                   y no podrá realizar modificaciones posteriores.
                 </p>
               </CampoFormulario>
-            </div>
+            </BloqueoEtapa>
           </FormEtapa>
         )}
 
@@ -1615,7 +1625,7 @@ function PaginaEditarDom() {
 
             {/* BLOQUE 4: Bloqueo de etapa */}
             {planActual && (
-              <div className="grid grid-cols-2 gap-4">
+              <BloqueoEtapa>
                 <CampoFormulario label="¿Registro de planeación completo y relacionado con producción?">
                   <SelectSiNo name="planeacion_completa" mostrarCandado value={boolToStr(planActual.planeacion_completa)}
                     onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
@@ -1625,7 +1635,7 @@ function PaginaEditarDom() {
                     modificaciones posteriores a esta etapa.
                   </p>
                 </CampoFormulario>
-              </div>
+              </BloqueoEtapa>
             )}
           </FormEtapa>
           </>
@@ -1657,6 +1667,7 @@ function PaginaEditarDom() {
               sinRegistro={!almacenActual}
             >
               {almacenActual && (
+                <>
                 <div className="grid grid-cols-2 gap-4">
                   <CampoFormulario label="¿Materias primas internas procesadas?">
                     <SelectSiNo name="almacen_materias_primas" value={boolToStr(almacenActual.materias_primas)}
@@ -1675,6 +1686,13 @@ function PaginaEditarDom() {
                       rows={2}
                       className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
+                  <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
+                    <SelectSiNo name="almacen_dom_realizado_planeacion" value={boolToStr(almacenActual.dom_realizado_planeacion)}
+                      onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
+                      disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
+                  </CampoFormulario>
+                </div>
+                <BloqueoEtapa>
                   <CampoFormulario label="¿Materias primas liberadas para producción?">
                     <SelectSiNo name="almacen_materias_liberadas" value={boolToStr(almacenActual.materias_liberadas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_liberadas', strToBool(v), idxAlmacen)}
@@ -1684,12 +1702,8 @@ function PaginaEditarDom() {
                       modificaciones posteriores a este registro.
                     </p>
                   </CampoFormulario>
-                  <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
-                    <SelectSiNo name="almacen_dom_realizado_planeacion" value={boolToStr(almacenActual.dom_realizado_planeacion)}
-                      onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
-                      disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
-                  </CampoFormulario>
-                </div>
+                </BloqueoEtapa>
+                </>
               )}
             </FormEtapa>
           </div>
@@ -1777,10 +1791,15 @@ function PaginaEditarDom() {
               etiqueta="Producción"
               campoCierre="cierre_produccion"
               ultimoCerrado={ultimaProduccionCerrada}
-              puedeCrear={esEditable('etapa_4') && (produccionesActuales.length === 0 || ultimaProduccionCerrada)}
+              puedeCrear={esEditable('etapa_4') && (produccionesActuales.length === 0 || ultimaProduccionCerrada) && !pedidoTotalmenteProducido()}
               onNuevo={() => crearNuevoHijo('produccion', crearProduccion, setIdxProduccion)}
               guardando={guardando}
             />
+            {esEditable('etapa_4') && pedidoTotalmenteProducido() && (
+              <p className="text-xs text-amber-600">
+                Las unidades elaboradas ya cubren el total pedido; no es necesario crear más registros de producción.
+              </p>
+            )}
             <FormEtapa
               titulo="Etapa 5 — Producción"
               editable={esEditable('etapa_4') && !produccionActualOriginal?.cierre_produccion}
@@ -1856,6 +1875,8 @@ function PaginaEditarDom() {
                       onChange={v => actualizarCampoHijo('produccion', 'produccion_no_completada', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
                   </CampoFormulario>
+                </div>
+                <BloqueoEtapa>
                   <CampoFormulario label="¿Este DOM ya ha sido liberado desde producción?">
                     <SelectSiNo name="produccion_cierre_produccion" value={boolToStr(produccionActual.cierre_produccion)}
                       onChange={v => actualizarCampoHijo('produccion', 'cierre_produccion', strToBool(v), idxProduccion)}
@@ -1872,7 +1893,7 @@ function PaginaEditarDom() {
                       </p>
                     )}
                   </CampoFormulario>
-                </div>
+                </BloqueoEtapa>
                 </>
               )}
             </FormEtapa>
@@ -1899,13 +1920,12 @@ function PaginaEditarDom() {
               titulo="Etapa 6 — Tratamiento"
               editable={esEditable('etapa_5') && !tratamientoActualOriginal?.tratamiento_completado}
               guardando={guardando}
-              onGuardar={() => guardarHijo('tratamiento', idxTratamiento, actualizarTratamiento, {
-                numero_tratamiento: toInt(tratamientoActual?.numero_tratamiento),
-              })}
+              onGuardar={() => guardarHijo('tratamiento', idxTratamiento, actualizarTratamiento)}
               onCancelar={() => setMostrarModalCancelar(true)}
               sinRegistro={!tratamientoActual}
             >
               {tratamientoActual && (
+                <>
                 <div className="grid grid-cols-2 gap-4">
                   <CampoFormulario label="DOM con tratamiento">
                     <SelectSiNo name="tratamiento_dom_con_tratamiento" value={boolToStr(tratamientoActual.dom_con_tratamiento)}
@@ -1913,7 +1933,9 @@ function PaginaEditarDom() {
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
                   <CampoFormulario label="Número de tratamiento fitosanitario asignado">
-                    <input type="number" value={tratamientoActual.numero_tratamiento ?? ''}
+                    {/* Código de texto libre (acepta ceros a la izquierda, letras, guiones):
+                        el modelo pasó de IntegerField a CharField, ver migración 0018. */}
+                    <input type="text" value={tratamientoActual.numero_tratamiento ?? ''} maxLength={50}
                       onChange={e => actualizarCampoHijo('tratamiento', 'numero_tratamiento', e.target.value, idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado}
                       className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
@@ -1935,6 +1957,8 @@ function PaginaEditarDom() {
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_segun_planeacion', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
+                </div>
+                <BloqueoEtapa>
                   <CampoFormulario label="¿Actividades de tratamiento termico realizadas según planeación?">
                     <SelectSiNo name="tratamiento_completado" value={boolToStr(tratamientoActual.tratamiento_completado)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_completado', strToBool(v), idxTratamiento)}
@@ -1944,7 +1968,8 @@ function PaginaEditarDom() {
                       modificaciones posteriores a este registro.
                     </p>
                   </CampoFormulario>
-                </div>
+                </BloqueoEtapa>
+                </>
               )}
             </FormEtapa>
           </div>
@@ -2045,6 +2070,8 @@ function PaginaEditarDom() {
                   onChange={v => actualizarCampoDom('dom_entregado_ok', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>
+            </div>
+            <BloqueoEtapa>
               <CampoFormulario label="DOM liberado cierre">
                 <SelectSiNo name="dom_liberado_cierre" value={boolToStr(datosDom.dom_liberado_cierre)}
                   onChange={v => actualizarCampoDom('dom_liberado_cierre', strToBool(v))}
@@ -2054,7 +2081,7 @@ function PaginaEditarDom() {
                   cerrado definitivamente.
                 </p>
               </CampoFormulario>
-            </div>
+            </BloqueoEtapa>
           </FormEtapa>
         )}
 
@@ -2252,6 +2279,24 @@ function FormEtapa({ titulo, editable, guardando, onGuardar, onCancelar, sinRegi
           CANCELAR
         </button>
       </div>
+    </div>
+  )
+}
+
+// Bloque destacado de bloqueo de etapa: agrupa al FINAL del formulario el campo
+// que, al marcarse "Sí" y guardar, cierra la etapa para edición. Fondo ámbar +
+// ícono de candado + título, para que el usuario identifique sin ambigüedad cuál
+// es el control de bloqueo (antes se confundía con un campo más del formulario).
+function BloqueoEtapa({ children }) {
+  return (
+    <div className="mt-1 p-4 rounded-lg border border-amber-300 bg-amber-50">
+      <div className="flex items-center gap-2 mb-3 text-amber-800">
+        <FiLock size={15} />
+        <h3 className="text-xs font-semibold uppercase tracking-wide">
+          Bloqueo de la etapa
+        </h3>
+      </div>
+      {children}
     </div>
   )
 }

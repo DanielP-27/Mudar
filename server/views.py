@@ -3774,7 +3774,10 @@ class DomReporteView(APIView):
             ).prefetch_related(
                 'productos__tipo_producto',
                 'registro_planeacion__turno',
-                'registro_planeacion__dom_producto__tipo_producto',
+                # Antes: 'registro_planeacion__dom_producto__tipo_producto' — ruta previa al
+                # refactor N productos. RegistroPlaneacion ya no tiene 'dom_producto' directo;
+                # sus productos viven en el hijo 'productos_planeacion' (models.py:512).
+                'registro_planeacion__productos_planeacion__dom_producto__tipo_producto',
                 'registro_planeacion__registros_almacen',
                 'registro_planeacion__registros_produccion__registros_tiempo',
                 'registro_planeacion__registros_produccion__registros_tiempo__pausas',
@@ -3915,7 +3918,7 @@ class InformeAuditoriaView(APIView):
         # Filtro base: la consulta para auditoria este es el filtro base
         acciones = AuditoriaDom.objects.filter(
             timestamp__date__range=[fecha_inicio, fecha_fin]
-        ).select_related('dom__nombre_cliente', 'usuario').order_by('-timestamp')
+        ).select_related('dom__nombre_cliente', 'usuario', 'usuario__perfil').order_by('-timestamp')
 
         # Filtro opcional por DOM especifico 
         dom_id = request.query_params.get('dom_id', None)
