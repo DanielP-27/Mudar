@@ -27,6 +27,7 @@ import CampoFormulario from '../../components/common/CampoFormulario'
 import SelectSiNo from '../../components/common/SelectSiNo'
 import CronometroProduccion from '../../components/common/CronometroProduccion'
 import ModalMensaje from '../../components/common/ModalMensaje'
+import ModalBase from '../../components/common/ModalBase'
 import Toast from '../../components/common/Toast'
 
 // Tipos de DOM administrativos — no llevan etapas de producción
@@ -459,7 +460,7 @@ function PaginaEditarDom() {
     const cantidad = proyectadaLocal[localKey]
     if (!planActual) return
     if (cantidad === undefined || cantidad === '') {
-      setError('Debe ingresar una cantidad proyectada antes de continuar.')
+      setError('Debe ingresar una cantidad planeada antes de continuar.')
       return
     }
     const errorCapacidad = validarCapacidadLocal(productoDomId, toInt(cantidad))
@@ -498,7 +499,7 @@ function PaginaEditarDom() {
   const guardarCantidadProyectada = async (productoPlaneacion) => {
     const valor = proyectadaLocal[productoPlaneacion.id]
     if (valor === undefined || valor === '') {
-      setError('Debe ingresar una cantidad proyectada antes de continuar.')
+      setError('Debe ingresar una cantidad planeada antes de continuar.')
       return
     }
     const errorCapacidad = validarCapacidadLocal(productoPlaneacion.dom_producto, toInt(valor))
@@ -521,9 +522,9 @@ function PaginaEditarDom() {
           : p
       ))
       setProyectadaLocal(prev => { const n = { ...prev }; delete n[productoPlaneacion.id]; return n })
-      mostrarExito('Cantidad proyectada actualizada.')
+      mostrarExito('Cantidad planeada actualizada.')
     } catch (err) {
-      setError(extraerMensajeError(err, 'Error al guardar la cantidad proyectada.'))
+      setError(extraerMensajeError(err, 'Error al guardar la cantidad planeada.'))
     } finally {
       setGuardando(false)
     }
@@ -595,7 +596,7 @@ function PaginaEditarDom() {
   const crearNuevaPlaneacion = async () => {
     // P11: no permitir nuevas planeaciones si el pedido ya está totalmente proyectado
     if (pedidoTotalmenteProyectado()) {
-      setError('No se pueden crear más planeaciones: la cantidad proyectada ya cubre el total pedido para todos los productos.')
+      setError('No se pueden crear más planeaciones: la cantidad planeada ya cubre el total pedido para todos los productos.')
       return
     }
     setGuardando(true)
@@ -631,19 +632,25 @@ function PaginaEditarDom() {
       return
     }
 
-    // Validación 2: Verificar capacidad disponible
-    if (turnoDiaExistente) {
-      // Segunda planeación — validar que hay capacidad en BD
-      if (plan.tiempo_restante_dia !== null && plan.tiempo_restante_dia < 0) {
-        setError(`No hay capacidad suficiente. Disponible: ${plan.tiempo_restante_dia} min (negativo = exceso).`)
-        return
-      }
-    } else {
-      // Primera planeación — validar capacidad local
-      if (capacidadCalculo && plan.tiempo_proyectado && capacidadCalculo < plan.tiempo_proyectado) {
-        setError(`No hay capacidad suficiente. Disponible: ${capacidadCalculo} min, Requerido: ${plan.tiempo_proyectado} min.`)
-        return
-      }
+    // Validación 2 (pre-chequeo de capacidad TOTAL, buffer-aware): suma el tiempo de
+    // TODAS las cantidades intencionadas (la del buffer si el usuario la cambió, o la
+    // persistida si no) y valida contra la capacidad ANTES de escribir nada. Evita
+    // guardados parciales por exceso de capacidad. Reutiliza la fórmula de validarCapacidadLocal.
+    const unitarioDe = (id) =>
+      datosDom.productos?.find(p => p.id === id)?.tipo_producto_detalle?.tiempo_produccion_unitario ?? 0
+    const capacidad = turnoDiaExistente
+      ? (turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales) - asignadoOtras
+      : capacidadCalculo
+    const tiempoTotalIntencionado = (datosDom.productos ?? []).reduce((acc, prod) => {
+      const pp  = plan.productos_planeacion?.find(p => p.dom_producto === prod.id)
+      const key = pp ? pp.id : `new_${prod.id}`
+      const buf = proyectadaLocal[key]
+      const cant = (buf !== undefined && buf !== '') ? toInt(buf) : (pp?.cantidad_proyectada ?? 0)
+      return acc + cant * unitarioDe(prod.id)
+    }, 0)
+    if (capacidad && tiempoTotalIntencionado > capacidad) {
+      setError(`No hay capacidad suficiente en el turno. Disponible: ${capacidad} min, Requerido: ${tiempoTotalIntencionado} min.`)
+      return
     }
 
     // Confirmación de bloqueo — solo si esta acción es la que activa el bloqueo
@@ -655,6 +662,8 @@ function PaginaEditarDom() {
     setGuardando(true)
     setError(null)
     try {
+      // 1) PUT del RegistroPlaneacion — crea/liga el turno-día. Va PRIMERO para que el
+      //    turno-día exista antes de mandar las cantidades (resuelve la dependencia de orden).
       await actualizarPlaneacion(plan.id, {
         ...plan,
         orden_produccion:  toInt(plan.orden_produccion),
@@ -665,25 +674,45 @@ function PaginaEditarDom() {
           minutos_totales:  toInt(datosTurnoDia.minutos_totales),
         }),
       })
-      await consultarDisponibilidadTurno(plan.turno, plan.fecha_planeacion, plan.id)
 
+      // 2) Flush del buffer de cantidades proyectadas: por cada producto con cantidad en
+      //    el buffer, PUT si ya existe su ProductoPlaneacion, o POST si es nuevo. Secuencial
+      //    (se detiene en el primer error). Vacío / sin cambio → no se toca.
+      for (const prod of (datosDom.productos ?? [])) {
+        const pp  = plan.productos_planeacion?.find(p => p.dom_producto === prod.id)
+        const key = pp ? pp.id : `new_${prod.id}`
+        const buf = proyectadaLocal[key]
+        if (buf === undefined || buf === '') continue
+        if (pp) {
+          await actualizarProductoPlaneacion(pp.id, { cantidad_proyectada: toInt(buf) })
+        } else {
+          await crearProductoPlaneacion({
+            registro_planeacion: plan.id,
+            dom_producto: prod.id,
+            cantidad_proyectada: toInt(buf),
+          })
+        }
+      }
+
+      // 3) Un solo refresh desde el servidor + limpiar buffer + refrescar disponibilidad de turno.
       const res = await obtenerPlaneacion({ dom_id: domId })
       const nuevosRegistros = res.data.registros ?? []
-      setPlaneaciones(prev => prev.map((p, i) =>
-        i === idxPlaneacion
-          ? {
-              ...p,
-              tiempo_proyectado:    nuevosRegistros[idxPlaneacion]?.tiempo_proyectado    ?? p.tiempo_proyectado,
-              tiempo_restante_dia:  nuevosRegistros[idxPlaneacion]?.tiempo_restante_dia  ?? p.tiempo_restante_dia,
-              sumatoria_tiempo_asignado_turnos: nuevosRegistros[idxPlaneacion]?.sumatoria_tiempo_asignado_turnos ?? p.sumatoria_tiempo_asignado_turnos,
-            }
-          : p
-      ))
+      setPlaneaciones(nuevosRegistros)
       setPlaneacionesOriginal(nuevosRegistros)
+      setProyectadaLocal({})
+      await consultarDisponibilidadTurno(plan.turno, plan.fecha_planeacion, plan.id)
 
-      mostrarExito('Planeación guardada correctamente.')
+      mostrarExito('Planeación y cantidades guardadas correctamente.')
     } catch (err) {
-      setError(extraerMensajeError(err, 'Error al guardar la planeación.'))
+      // Fallo parcial: refrescar para reflejar el estado REAL de la BD (algunas cantidades
+      // pudieron guardarse antes del error) y mostrar el modal de error.
+      try {
+        const res = await obtenerPlaneacion({ dom_id: domId })
+        const nuevosRegistros = res.data.registros ?? []
+        setPlaneaciones(nuevosRegistros)
+        setPlaneacionesOriginal(nuevosRegistros)
+      } catch { /* si el refresh también falla, se conserva el estado actual */ }
+      setError(extraerMensajeError(err, 'Error al guardar. Revise qué cantidades quedaron registradas.'))
     } finally {
       setGuardando(false)
     }
@@ -782,6 +811,70 @@ function PaginaEditarDom() {
       mostrarExito(`Registro de ${tipo} guardado correctamente.`)
     } catch (err) {
       setError(extraerMensajeError(err, `Error al guardar el registro de ${tipo}.`))
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  // Guarda etapa 5 — producción: registro + cantidades elaboradas en un solo botón.
+  // Orquesta (no atómico en BD): PUT del RegistroProduccion → flush del buffer de cantidades
+  // elaboradas (POST/PUT ProductoProduccion) → un refresh. La restricción del cronómetro se
+  // respeta sola: si no finalizó, los inputs están deshabilitados y el buffer queda vacío.
+  // Dedicada (no toca guardarHijo, que comparten almacén/tratamiento).
+  const guardarProduccionCompleta = async () => {
+    const registro = produccionesActuales[idxProduccion]
+    if (!registro) return
+
+    // Confirmación de bloqueo — solo si esta acción es la que activa el cierre
+    const yaEstabaBloqueado = produccionesActualesOriginal?.[idxProduccion]?.cierre_produccion === true
+    if (!yaEstabaBloqueado && registro.cierre_produccion === true) {
+      if (!await confirmarBloqueo(mensajeConfirmacionBloqueo('Cierre producción', 'Producción'))) return
+    }
+
+    setGuardando(true)
+    setError(null)
+    try {
+      // 1) PUT del RegistroProduccion (novedad, personas, según planeación, cierre…)
+      await actualizarProduccion(registro.id, {
+        ...registro,
+        numero_personas_asignadas: toInt(registro.numero_personas_asignadas),
+      })
+
+      // 2) Flush del buffer de cantidades elaboradas. Solo productos con proyección (pp):
+      //    PUT si ya existe su ProductoProduccion, o POST si es nuevo. Vacío / sin cambio → no se toca.
+      for (const prod of (datosDom.productos ?? [])) {
+        const pp = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
+        if (!pp) continue
+        const buf = elaboradaLocal[pp.id]
+        if (buf === undefined || buf === '') continue
+        const existente = productoProduccionActivo(pp.id)
+        if (existente) {
+          await actualizarProductoProduccion(existente.id, { cantidad_elaborada: toInt(buf) })
+        } else {
+          await crearProductoProduccion({
+            registro_produccion: registro.id,
+            producto_planeacion: pp.id,
+            cantidad_elaborada: toInt(buf),
+          })
+        }
+      }
+
+      // 3) Un solo refresh desde el servidor + limpiar buffer + toast
+      const res = await obtenerPlaneacion({ dom_id: domId })
+      const nuevosRegistros = res.data.registros ?? []
+      setPlaneaciones(nuevosRegistros)
+      setPlaneacionesOriginal(nuevosRegistros)
+      setElaboradaLocal({})
+      mostrarExito('Producción y cantidades guardadas correctamente.')
+    } catch (err) {
+      // Fallo parcial: refrescar para reflejar el estado REAL de la BD y mostrar el modal.
+      try {
+        const res = await obtenerPlaneacion({ dom_id: domId })
+        const nuevosRegistros = res.data.registros ?? []
+        setPlaneaciones(nuevosRegistros)
+        setPlaneacionesOriginal(nuevosRegistros)
+      } catch { /* si el refresh también falla, se conserva el estado actual */ }
+      setError(extraerMensajeError(err, 'Error al guardar. Revise qué cantidades quedaron registradas.'))
     } finally {
       setGuardando(false)
     }
@@ -1249,7 +1342,7 @@ function PaginaEditarDom() {
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
-              <CampoFormulario label="Campaña de venta">
+              <CampoFormulario label="¿DOM resultado de campaña de venta?">
                 <SelectSiNo name="dom_campana_venta" value={boolToStr(datosDom.campana_venta)}
                   onChange={v => actualizarCampoDom('campana_venta', strToBool(v))}
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
@@ -1257,7 +1350,7 @@ function PaginaEditarDom() {
             </div>
             <BloqueoEtapa>
               <CampoFormulario label="¿DOM relacionado con producción?">
-                <SelectSiNo name="dom_relacionado_produccion" value={boolToStr(datosDom.dom_relacionado_produccion)}
+                <SelectSiNo name="dom_relacionado_produccion" soloLectura={!esEditable('etapa_1')} value={boolToStr(datosDom.dom_relacionado_produccion)}
                   onChange={v => actualizarCampoDom('dom_relacionado_produccion', strToBool(v))}
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
                 <p className="text-xs text-amber-600 mt-1">
@@ -1313,7 +1406,7 @@ function PaginaEditarDom() {
               </button>
               {pedidoTotalmenteProyectado() && (
                 <p className="text-xs text-amber-600 mt-1">
-                  La cantidad proyectada ya cubre el total pedido; no es necesario crear más planeaciones.
+                  La cantidad planeada ya cubre el total pedido; no es necesario crear más planeaciones.
                 </p>
               )}
             </div>
@@ -1504,12 +1597,12 @@ function PaginaEditarDom() {
                 <CampoFormulario label="¿Productos deben pesarse?">
                   <SelectSiNo name="planeacion_peso" value={boolToStr(planActual.peso)}
                     onChange={v => actualizarCampoPlaneacion('peso', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Materias primas disponibles para fabricar este DOM?">
                   <SelectSiNo name="planeacion_materia_prima_disponible" value={boolToStr(planActual.materia_prima_disponible)}
                     onChange={v => actualizarCampoPlaneacion('materia_prima_disponible', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos se elaboran con tablilla o madera larga?">
                   <select value={planActual.tablilla_madera ?? ''}
@@ -1524,42 +1617,42 @@ function PaginaEditarDom() {
                 <CampoFormulario label="¿Productos van encartonados?">
                   <SelectSiNo name="planeacion_encartonar" value={boolToStr(planActual.encartonar)}
                     onChange={v => actualizarCampoPlaneacion('encartonar', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren grafado y elaboración de fundas">
                   <SelectSiNo name="planeacion_grafado_fundas" value={boolToStr(planActual.grafado_fundas)}
                     onChange={v => actualizarCampoPlaneacion('grafado_fundas', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Producto requiere Control de tiempo y ensamble en armadora?">
                   <SelectSiNo name="planeacion_control_tiempo" value={boolToStr(planActual.control_tiempo)}
                     onChange={v => actualizarCampoPlaneacion('control_tiempo', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Cliente recoge los productos?">
                   <SelectSiNo name="planeacion_cliente_recoge" value={boolToStr(planActual.cliente_recoge)}
                     onChange={v => actualizarCampoPlaneacion('cliente_recoge', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Mudar de Colombia entrega los productos?">
                   <SelectSiNo name="planeacion_mudar_entrega" value={boolToStr(planActual.mudar_entrega)}
                     onChange={v => actualizarCampoPlaneacion('mudar_entrega', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren tratamiento térmico?">
                   <SelectSiNo name="planeacion_tratamiento_termico" value={boolToStr(planActual.tratamiento_termico)}
                     onChange={v => actualizarCampoPlaneacion('tratamiento_termico', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben llevar Sello ICA?">
                   <SelectSiNo name="planeacion_sello_ica" value={boolToStr(planActual.sello_ica)}
                     onChange={v => actualizarCampoPlaneacion('sello_ica', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos llevan marcas o símbolos del cliente?">
                   <SelectSiNo name="planeacion_marcado_cliente" value={boolToStr(planActual.marcado_cliente)}
                     onChange={v => actualizarCampoPlaneacion('marcado_cliente', strToBool(v))}
-                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} mostrarCandado />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
               </div>
             )}
@@ -1568,7 +1661,7 @@ function PaginaEditarDom() {
             {planActual && datosDom.productos?.length > 0 && (
               <div className="mt-4 space-y-3">
                 <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                  Cantidad proyectada por producto
+                  Cantidad planeada por producto
                 </p>
                 {datosDom.productos.map(prod => {
                   const pp = planActual.productos_planeacion?.find(p => p.dom_producto === prod.id)
@@ -1585,35 +1678,18 @@ function PaginaEditarDom() {
                         <p className="text-xs text-gray-500">Total pedido</p>
                         <p className="text-sm text-gray-700">{prod.cantidad_pedido ?? '—'}</p>
                       </div>
-                      <CampoFormulario label="Cantidad proyectada">
-                        <div className="flex gap-2">
-                          <input type="number"
-                            value={proyectadaLocal[localKey] ?? pp?.cantidad_proyectada ?? ''}
-                            onChange={e => setProyectadaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
-                            disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
-                            placeholder="Ingrese cantidad"
-                            className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
-                          {esEditable('etapa_2') && !planActualOriginal?.planeacion_completa && (
-                            <button
-                              onClick={() => pp
-                                ? guardarCantidadProyectada(pp)
-                                : agregarProductoPlaneacion(prod.id, localKey)
-                              }
-                              disabled={guardando || !turnoDiaExistente || (proyectadaLocal[localKey] ?? '').toString().trim() === ''}
-                              className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
-                                         hover:bg-[#134080] disabled:opacity-60">
-                              {pp ? 'Guardar' : 'Agregar'}
-                            </button>
-                          )}
-                        </div>
-                        {esEditable('etapa_2') && !turnoDiaExistente && (
-                          <p className="text-xs text-amber-600 mt-1">
-                            Guarde primero la planeación (fecha, turno y operarios) para poder asignar cantidades.
-                          </p>
-                        )}
+                      <CampoFormulario label="Cantidad planeada">
+                        {/* El guardado lo hace el botón principal "Actualizar registro DOM"
+                            (guardarPlaneacion recorre este buffer). Sin botón por-producto. */}
+                        <input type="number"
+                          value={proyectadaLocal[localKey] ?? pp?.cantidad_proyectada ?? ''}
+                          onChange={e => setProyectadaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
+                          disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                          placeholder="Ingrese cantidad"
+                          className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                         {pp && (
                           <p className="text-xs text-gray-400 mt-1">
-                            Proyectado actual: {pp.cantidad_proyectada ?? '—'}
+                            Planeado actual: {pp.cantidad_proyectada ?? '—'}
                           </p>
                         )}
                       </CampoFormulario>
@@ -1627,7 +1703,8 @@ function PaginaEditarDom() {
             {planActual && (
               <BloqueoEtapa>
                 <CampoFormulario label="¿Registro de planeación completo y relacionado con producción?">
-                  <SelectSiNo name="planeacion_completa" mostrarCandado value={boolToStr(planActual.planeacion_completa)}
+                  {/* Editores → radios (control de acción). Solo-lectura por rol → pill ámbar. */}
+                  <SelectSiNo name="planeacion_completa" soloLectura={!esEditable('etapa_2')} value={boolToStr(planActual.planeacion_completa)}
                     onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
                     disabled={!esEditable('etapa_2')} />
                   <p className="text-xs text-amber-600 mt-1">
@@ -1694,7 +1771,7 @@ function PaginaEditarDom() {
                 </div>
                 <BloqueoEtapa>
                   <CampoFormulario label="¿Materias primas liberadas para producción?">
-                    <SelectSiNo name="almacen_materias_liberadas" value={boolToStr(almacenActual.materias_liberadas)}
+                    <SelectSiNo name="almacen_materias_liberadas" soloLectura={!esEditable('etapa_3')} value={boolToStr(almacenActual.materias_liberadas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_liberadas', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                     <p className="text-xs text-amber-600 mt-1">
@@ -1713,74 +1790,6 @@ function PaginaEditarDom() {
         {pestanaActiva === 'etapa4' && (
           <div className="space-y-4">
             <SelectorPlaneacion planeaciones={planeaciones} idxActivo={idxPlaneacion} onCambiar={cambiarPlaneacion} />
-
-            {/* Sección cantidad elaborada por producto — solo se muestra si hay RegistroProduccion activo */}
-            {produccionActual && datosDom.productos?.length > 0 && (
-              <div className="space-y-3">
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                  Cantidad elaborada por producto
-                </p>
-                {(() => {
-                  return datosDom.productos.map(prod => {
-                    const pp                 = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
-                    const productoProduccion = pp ? productoProduccionActivo(pp.id) : null
-                    const localKey           = pp?.id ?? `new_${prod.id}`
-                    const bloqueado          = produccionActualOriginal?.cierre_produccion === true
-                    return (
-                      <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
-                        <div>
-                          <p className="text-xs text-gray-500">Producto</p>
-                          <p className="text-sm font-medium text-gray-800">
-                            {prod.tipo_producto_detalle?.nombre_producto ?? '—'}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Cantidad proyectada</p>
-                          <p className="text-sm text-gray-700">{pp?.cantidad_proyectada ?? '—'}</p>
-                        </div>
-                        <CampoFormulario label="Cantidad elaborada">
-                          {!pp ? (
-                            <p className="text-xs text-amber-600 mt-1">
-                              Sin proyección — asigne en etapa de planeación
-                            </p>
-                          ) : (
-                            <>
-                              {/* P6: el control queda visible pero deshabilitado hasta que
-                                  finalice el cronómetro (antes se ocultaba por completo). */}
-                              <div className="flex gap-2">
-                                <input type="number"
-                                  value={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada ?? ''}
-                                  onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
-                                  disabled={!esEditable('etapa_4') || bloqueado || !cronometroFinalizado}
-                                  placeholder="Ingrese cantidad"
-                                  className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
-                                {esEditable('etapa_4') && !bloqueado && (
-                                  <button
-                                    onClick={() => productoProduccion
-                                      ? actualizarProductoElaborada(productoProduccion.id, localKey)
-                                      : crearProductoElaborada(pp.id, localKey)
-                                    }
-                                    disabled={guardando || !cronometroFinalizado || (elaboradaLocal[localKey] ?? '').toString().trim() === ''}
-                                    className="px-3 py-1 bg-[#1A56A0] text-white text-xs rounded
-                                               hover:bg-[#134080] disabled:opacity-60">
-                                    {productoProduccion ? 'Guardar' : 'Agregar'}
-                                  </button>
-                                )}
-                              </div>
-                              {!cronometroFinalizado && (
-                                <p className="text-xs text-amber-600 mt-1">
-                                  Disponible una vez finalice el cronómetro de producción
-                                </p>
-                              )}
-                            </>
-                          )}
-                        </CampoFormulario>
-                      </div>
-                    )
-                  })
-                })()}
-              </div>
-            )}
 
             {/* Selector y formulario detallado — campos originales */}
             <SelectorRegistro
@@ -1804,14 +1813,29 @@ function PaginaEditarDom() {
               titulo="Etapa 5 — Producción"
               editable={esEditable('etapa_4') && !produccionActualOriginal?.cierre_produccion}
               guardando={guardando}
-              onGuardar={() => guardarHijo('produccion', idxProduccion, actualizarProduccion, {
-                numero_personas_asignadas: toInt(produccionActual?.numero_personas_asignadas),
-              })}
+              onGuardar={guardarProduccionCompleta}
               onCancelar={() => setMostrarModalCancelar(true)}
               sinRegistro={!produccionActual}
             >
               {produccionActual && (
                 <>
+                  {/* Paso 1 del flujo productivo: personas asignadas ANTES del cronómetro
+                      (el cronómetro requiere confirmar las personas para poder operar).
+                      A ancho completo del contenedor. */}
+                  <CampoFormulario label="Número personas asignadas">
+                    <input type="number" value={produccionActual.numero_personas_asignadas ?? ''}
+                      onChange={e => {
+                        actualizarCampoHijo('produccion', 'numero_personas_asignadas', e.target.value, idxProduccion)
+                        setPersonasConfirmadas(false)
+                      }}
+                      onBlur={() => {
+                        const val = produccionActual.numero_personas_asignadas
+                        if (val && parseInt(val) > 0) setMostrarModalPersonas(true)
+                      }}
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion}
+                      className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                  </CampoFormulario>
+
                   <CronometroProduccion
                     registrosTiempo={produccionActual.registro_tiempo ?? []}
                     registroProduccionId={produccionActual.id}
@@ -1819,6 +1843,60 @@ function PaginaEditarDom() {
                     puedeOperar={esEditable('etapa_4')}
                     personasAsignadas={personasConfirmadas}
                   />
+
+                  {/* Cantidad elaborada por producto — dentro del formulario, DESPUÉS del cronómetro
+                      (secuencia real: finalizar cronómetro → registrar cantidades). El guardado lo
+                      hace el botón principal (guardarProduccionCompleta); sin botón por-producto. */}
+                  {datosDom.productos?.length > 0 && (
+                    <div className="space-y-3">
+                      <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                        Cantidad elaborada por producto
+                      </p>
+                      {datosDom.productos.map(prod => {
+                        const pp                 = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
+                        const productoProduccion = pp ? productoProduccionActivo(pp.id) : null
+                        const localKey           = pp?.id ?? `new_${prod.id}`
+                        const bloqueado          = produccionActualOriginal?.cierre_produccion === true
+                        return (
+                          <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
+                            <div>
+                              <p className="text-xs text-gray-500">Producto</p>
+                              <p className="text-sm font-medium text-gray-800">
+                                {prod.tipo_producto_detalle?.nombre_producto ?? '—'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-500">Cantidad planeada</p>
+                              <p className="text-sm text-gray-700">{pp?.cantidad_proyectada ?? '—'}</p>
+                            </div>
+                            <CampoFormulario label="Cantidad elaborada">
+                              {!pp ? (
+                                <p className="text-xs text-amber-600 mt-1">
+                                  Sin proyección — asigne en etapa de planeación
+                                </p>
+                              ) : (
+                                <>
+                                  {/* P6: visible pero deshabilitado hasta que finalice el cronómetro. */}
+                                  <input type="number"
+                                    value={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada ?? ''}
+                                    onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
+                                    disabled={!esEditable('etapa_4') || bloqueado || !cronometroFinalizado}
+                                    placeholder="Ingrese cantidad"
+                                    className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                                  {!cronometroFinalizado && (
+                                    <p className="text-xs text-amber-600 mt-1">
+                                      Disponible una vez finalice el cronómetro de producción
+                                    </p>
+                                  )}
+                                </>
+                              )}
+                            </CampoFormulario>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
                   <CampoLectura
                     label="Tiempo proyectado (min)"
@@ -1840,19 +1918,6 @@ function PaginaEditarDom() {
                     label="Cumplimiento producción"
                     valor={produccionActual.cumplimiento_produccion}
                   />
-                  <CampoFormulario label="Número personas asignadas">
-                    <input type="number" value={produccionActual.numero_personas_asignadas ?? ''}
-                      onChange={e => {
-                        actualizarCampoHijo('produccion', 'numero_personas_asignadas', e.target.value, idxProduccion)
-                        setPersonasConfirmadas(false)
-                      }}
-                      onBlur={() => {
-                        const val = produccionActual.numero_personas_asignadas
-                        if (val && parseInt(val) > 0) setMostrarModalPersonas(true)
-                      }}
-                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion}
-                      className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
-                  </CampoFormulario>
                   <CampoFormulario label="Tarea asignada de planeación">
                     <input type="text" value={planActual?.objetivo_planeacion ?? '—'}
                       disabled
@@ -1878,7 +1943,7 @@ function PaginaEditarDom() {
                 </div>
                 <BloqueoEtapa>
                   <CampoFormulario label="¿Este DOM ya ha sido liberado desde producción?">
-                    <SelectSiNo name="produccion_cierre_produccion" value={boolToStr(produccionActual.cierre_produccion)}
+                    <SelectSiNo name="produccion_cierre_produccion" soloLectura={!esEditable('etapa_4')} value={boolToStr(produccionActual.cierre_produccion)}
                       onChange={v => actualizarCampoHijo('produccion', 'cierre_produccion', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || !cronometroFinalizado} />
                     {!cronometroFinalizado && !produccionActualOriginal?.cierre_produccion && (
@@ -1960,7 +2025,7 @@ function PaginaEditarDom() {
                 </div>
                 <BloqueoEtapa>
                   <CampoFormulario label="¿Actividades de tratamiento termico realizadas según planeación?">
-                    <SelectSiNo name="tratamiento_completado" value={boolToStr(tratamientoActual.tratamiento_completado)}
+                    <SelectSiNo name="tratamiento_completado" soloLectura={!esEditable('etapa_5')} value={boolToStr(tratamientoActual.tratamiento_completado)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_completado', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                     <p className="text-xs text-amber-600 mt-1">
@@ -2072,8 +2137,8 @@ function PaginaEditarDom() {
               </CampoFormulario>
             </div>
             <BloqueoEtapa>
-              <CampoFormulario label="DOM liberado cierre">
-                <SelectSiNo name="dom_liberado_cierre" value={boolToStr(datosDom.dom_liberado_cierre)}
+              <CampoFormulario label="¿DOM se libera para cierre definitivo?">
+                <SelectSiNo name="dom_liberado_cierre" soloLectura={!esEditable('etapa_6')} value={boolToStr(datosDom.dom_liberado_cierre)}
                   onChange={v => actualizarCampoDom('dom_liberado_cierre', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
                 <p className="text-xs text-amber-600 mt-1">
@@ -2088,92 +2153,57 @@ function PaginaEditarDom() {
       </div>
 
       {/* Modal confirmación número de personas asignadas */}
-      {mostrarModalPersonas && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
-            <h3 className="text-sm font-semibold text-gray-800 mb-3">
-              Confirmar personas asignadas
-            </h3>
-            <p className="text-sm text-gray-600 mb-1">
-              Este dato es necesario para calcular los <strong>minutos hombre de producción</strong> y
-              los <strong>minutos restantes</strong> al finalizar el cronómetro.
-            </p>
-            <p className="text-sm text-gray-800 font-medium mt-3 mb-5">
-              ¿Confirmar{' '}
-              <span className="text-[#1A56A0] font-bold">
-                {produccionActual?.numero_personas_asignadas} persona{produccionActual?.numero_personas_asignadas !== 1 ? 's' : ''}
-              </span>{' '}
-              asignadas a esta producción?
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setMostrarModalPersonas(false)}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
-                Cancelar
-              </button>
-              <button
-                onClick={confirmarPersonasAsignadas}
-                disabled={guardando}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080] disabled:opacity-60">
-                {guardando ? 'Confirmando...' : 'Confirmar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalBase
+        abierto={mostrarModalPersonas}
+        variante="confirmacion"
+        titulo="Confirmar personas asignadas"
+        onCerrar={() => setMostrarModalPersonas(false)}
+        acciones={[
+          { texto: 'Cancelar', estilo: 'peligro', onClick: () => setMostrarModalPersonas(false) },
+          {
+            texto: guardando ? 'Confirmando...' : 'Confirmar',
+            estilo: 'primario',
+            onClick: confirmarPersonasAsignadas,
+            deshabilitado: guardando,
+          },
+        ]}
+      >
+        Este dato es necesario para calcular los <strong>minutos hombre de producción</strong> y
+        los <strong>minutos restantes</strong> al finalizar el cronómetro.
+        <span className="block mt-3 text-gray-800 font-medium">
+          ¿Confirmar{' '}
+          <span className="text-[#1A56A0] font-bold">
+            {produccionActual?.numero_personas_asignadas} persona{produccionActual?.numero_personas_asignadas !== 1 ? 's' : ''}
+          </span>{' '}
+          asignadas a esta producción?
+        </span>
+      </ModalBase>
 
       {/* Modal confirmación de bloqueo de etapa */}
-      {confirmacionBloqueo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
-            <h3 className="text-sm font-semibold text-gray-800 mb-3">
-              Confirmar bloqueo de etapa
-            </h3>
-            <p className="text-sm text-gray-800 font-medium mt-3 mb-5">
-              {confirmacionBloqueo.mensaje}
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => { confirmacionBloqueo.resolve(false); setConfirmacionBloqueo(null) }}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
-                Cancelar
-              </button>
-              <button
-                onClick={() => { confirmacionBloqueo.resolve(true); setConfirmacionBloqueo(null) }}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080]">
-                Confirmar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalBase
+        abierto={!!confirmacionBloqueo}
+        variante="confirmacion"
+        titulo="Confirmar bloqueo de etapa"
+        mensaje={confirmacionBloqueo?.mensaje}
+        onCerrar={() => { confirmacionBloqueo?.resolve(false); setConfirmacionBloqueo(null) }}
+        acciones={[
+          { texto: 'Cancelar', estilo: 'peligro', onClick: () => { confirmacionBloqueo?.resolve(false); setConfirmacionBloqueo(null) } },
+          { texto: 'Confirmar', estilo: 'primario', onClick: () => { confirmacionBloqueo?.resolve(true); setConfirmacionBloqueo(null) } },
+        ]}
+      />
 
       {/* Modal confirmación de cancelación */}
-      {mostrarModalCancelar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
-            <h3 className="text-sm font-semibold text-gray-800 mb-3">
-              Cancelar edición
-            </h3>
-            <p className="text-sm text-gray-600 mb-5">
-              Si cancela, saldrá de la edición del DOM y volverá a la página principal.
-              Los cambios que no haya guardado se perderán. ¿Desea continuar?
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setMostrarModalCancelar(false)}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080]">
-                Seguir editando
-              </button>
-              <button
-                onClick={() => navegar('/dashboard')}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded hover:bg-red-700">
-                Sí, cancelar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalBase
+        abierto={mostrarModalCancelar}
+        variante="peligro"
+        titulo="Cancelar edición"
+        mensaje="Si cancela, saldrá de la edición del DOM y volverá a la página principal. Los cambios que no haya guardado se perderán. ¿Desea continuar?"
+        onCerrar={() => setMostrarModalCancelar(false)}
+        acciones={[
+          { texto: 'Seguir editando', estilo: 'primario', onClick: () => setMostrarModalCancelar(false) },
+          { texto: 'Sí, cancelar', estilo: 'peligro', onClick: () => navegar('/dashboard') },
+        ]}
+      />
 
       <ModalMensaje abierto={!!error} mensaje={error} onCerrar={() => setError(null)} />
       <Toast mensaje={exito} />
@@ -2376,10 +2406,10 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
             <th className="px-2 py-2 w-6"></th>
             <th className="text-left px-3 py-2 font-medium">Producto</th>
             <th className="text-center px-3 py-2 font-medium">Tiempo unit. (min)</th>
-            <th className="text-center px-3 py-2 font-medium">Cant. pedido</th>
-            <th className="text-center px-3 py-2 font-medium">Cant. proyectada</th>
+            <th className="text-center px-3 py-2 font-medium">Cantidad pedido</th>
+            <th className="text-center px-3 py-2 font-medium">Cantidad planeada</th>
             <th className="text-center px-3 py-2 font-medium">Pendiente por planear</th>
-            <th className="text-center px-3 py-2 font-medium">Cant. elaborada</th>
+            <th className="text-center px-3 py-2 font-medium">Cantidad elaborada</th>
             <th className="text-center px-3 py-2 font-medium">Pendiente por producir</th>
           </tr>
         </thead>
@@ -2410,11 +2440,11 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
                   <td className="px-3 py-2 text-center text-gray-600">{p.cantidad_pedido ?? '—'}</td>
                   <td className="px-3 py-2 text-center text-gray-600">{proyectada || '—'}</td>
                   <td className={`px-3 py-2 text-center font-medium ${pendientePorProyectar > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                    {pendientePorProyectar > 0 ? pendientePorProyectar : '—'}
+                    {Math.max(0, pendientePorProyectar)}
                   </td>
                   <td className="px-3 py-2 text-center text-gray-600">{elaborada}</td>
                   <td className={`px-3 py-2 text-center font-medium ${proyectadaPendiente > 0 ? 'text-amber-600' : 'text-green-600'}`}>
-                    {proyectadaPendiente > 0 ? proyectadaPendiente : '—'}
+                    {Math.max(0, proyectadaPendiente)}
                   </td>
                 </tr>
                 {expandido && (
@@ -2426,7 +2456,7 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
                           <tr>
                             <th className="text-left py-1 pl-3">Planeación</th>
                             <th className="text-left py-1">Turno · Fecha</th>
-                            <th className="text-center py-1">Proyectada</th>
+                            <th className="text-center py-1">Planeada</th>
                             <th className="text-center py-1">Elaborada</th>
                             <th className="text-center py-1">Pendiente</th>
                           </tr>

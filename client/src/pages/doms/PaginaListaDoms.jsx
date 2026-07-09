@@ -144,7 +144,15 @@ function PaginaListaDoms() {
       </div>
 
       {/* Filtros */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+      <div className="bg-white rounded-lg border border-gray-200 mb-4 overflow-hidden">
+        {/* Encabezado del panel */}
+        <div className="bg-[#1A56A0] px-4 py-2.5">
+          <h2 className="text-sm font-semibold text-white uppercase tracking-wide">
+            Filtros de búsqueda
+          </h2>
+        </div>
+        {/* Cuerpo */}
+        <div className="p-4">
         <div className="grid grid-cols-2 gap-3 mb-3">
 
           {/* Typeahead cliente */}
@@ -230,30 +238,31 @@ function PaginaListaDoms() {
               className="campo-input" />
           </div>
 
-        </div>
+          {/* Ordenar por — misma fila que Fecha de planeación */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+              Ordenar por
+            </label>
+            <select value={ordenamiento}
+              onChange={e => setOrdenamiento(e.target.value)}
+              className="campo-input">
+              <option value="fecha_entrega:asc">Fecha de entrega (más próxima primero)</option>
+              <option value="fecha_entrega:desc">Fecha de entrega (más lejana primero)</option>
+              <option value="cliente:asc">Cliente (A → Z)</option>
+              <option value="cliente:desc">Cliente (Z → A)</option>
+              <option value="dom:asc">N.º DOM (ascendente)</option>
+              <option value="dom:desc">N.º DOM (descendente)</option>
+            </select>
+          </div>
 
-        {/* Ordenar por */}
-        <div className="flex items-center gap-2 mb-3">
-          <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
-            Ordenar por
-          </label>
-          <select value={ordenamiento}
-            onChange={e => setOrdenamiento(e.target.value)}
-            className="campo-input w-auto">
-            <option value="fecha_entrega:asc">Fecha de entrega (más próxima primero)</option>
-            <option value="fecha_entrega:desc">Fecha de entrega (más lejana primero)</option>
-            <option value="cliente:asc">Cliente (A → Z)</option>
-            <option value="cliente:desc">Cliente (Z → A)</option>
-            <option value="dom:asc">N.º DOM (ascendente)</option>
-            <option value="dom:desc">N.º DOM (descendente)</option>
-          </select>
         </div>
 
         {/* Botón limpiar filtros */}
         <button onClick={limpiarFiltros}
-          className="text-sm text-gray-500 hover:text-gray-700 underline">
+          className="text-sm text-[#1A56A0] hover:text-[#134478] font-medium hover:underline">
           Limpiar filtros
         </button>
+        </div>
       </div>
 
       {/* Error */}

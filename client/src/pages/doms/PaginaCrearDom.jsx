@@ -1,7 +1,7 @@
 // src/pages/doms/PaginaCrearDom.jsx
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiEye, FiFileText, FiBriefcase, FiPlus, FiTrash2, FiCheckCircle } from 'react-icons/fi'
+import { FiEye, FiFileText, FiBriefcase, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { crearDom } from '../../api/doms'
 import { obtenerClientes, obtenerProductos, obtenerListasPorTipo } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
@@ -11,6 +11,7 @@ import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import SelectSiNo from '../../components/common/SelectSiNo'
 import ModalMensaje from '../../components/common/ModalMensaje'
+import ModalBase from '../../components/common/ModalBase'
 
 // Tipos de DOM que no llevan productos ni etapas de producción
 const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
@@ -614,68 +615,36 @@ function PaginaCrearDom() {
       </div>
 
       {/* ── Modal de confirmación de cancelación ───────────────── */}
-      {mostrarModalCancelar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
-            <h3 className="text-sm font-semibold text-gray-800 mb-3">
-              Cancelar creación
-            </h3>
-            <p className="text-sm text-gray-600 mb-5">
-              Si cancela, saldrá de la creación del DOM y volverá a la página principal.
-              Los datos que haya ingresado se perderán. ¿Desea continuar?
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setMostrarModalCancelar(false)}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#1A56A0] rounded hover:bg-[#134080]">
-                Seguir editando
-              </button>
-              <button
-                onClick={() => navegar('/dashboard')}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded hover:bg-red-700">
-                Sí, cancelar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalBase
+        abierto={mostrarModalCancelar}
+        variante="peligro"
+        titulo="Cancelar creación"
+        mensaje="Si cancela, saldrá de la creación del DOM y volverá a la página principal. Los datos que haya ingresado se perderán. ¿Desea continuar?"
+        onCerrar={() => setMostrarModalCancelar(false)}
+        acciones={[
+          { texto: 'Seguir editando', estilo: 'primario', onClick: () => setMostrarModalCancelar(false) },
+          { texto: 'Sí, cancelar', estilo: 'peligro', onClick: () => navegar('/dashboard') },
+        ]}
+      />
 
       {/* ── Modal de éxito tras crear el DOM (P1) ───────────────── */}
-      {domCreado && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <div className="flex flex-col items-center text-center mb-5">
-              <FiCheckCircle className="text-green-500 mb-3" size={44} />
-              <h2 className="text-lg font-semibold text-gray-800">
-                Registro DOM creado
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                El DOM <span className="font-semibold text-gray-800">#{domCreado.dom_id}</span> para
-                el cliente <span className="font-semibold text-gray-800">{domCreado.nombre_cliente_detalle}</span> ha
-                sido creado correctamente.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <button autoFocus
-                onClick={() => navegar(`/doms/${domCreado.dom_id}/editar`)}
-                className="w-full px-4 py-2 bg-[#1A56A0] text-white text-sm font-medium rounded
-                           hover:bg-[#134080]">
-                Continuar editando este DOM
-              </button>
-              <button onClick={() => navegar('/dashboard')}
-                className="w-full px-4 py-2 border border-gray-300 text-gray-600 text-sm
-                           font-medium rounded hover:bg-gray-50">
-                Ir a la página principal
-              </button>
-            </div>
-
-            <p className="text-xs text-gray-400 text-center mt-4">
-              Enter para editar · Esc para ir al inicio
-            </p>
-          </div>
-        </div>
-      )}
+      {/* Esc → inicio (onCerrar); Enter dispara el botón enfocado (primario) → editar. */}
+      <ModalBase
+        abierto={!!domCreado}
+        variante="exito"
+        titulo="Registro DOM creado"
+        nota="Enter para editar · Esc para ir al inicio"
+        apilarBotones
+        onCerrar={() => navegar('/dashboard')}
+        acciones={[
+          { texto: 'Continuar editando este DOM', estilo: 'primario', onClick: () => navegar(`/doms/${domCreado?.dom_id}/editar`) },
+          { texto: 'Ir a la página principal', estilo: 'secundario', onClick: () => navegar('/dashboard') },
+        ]}
+      >
+        El DOM <span className="font-semibold text-gray-800">#{domCreado?.dom_id}</span> para
+        el cliente <span className="font-semibold text-gray-800">{domCreado?.nombre_cliente_detalle}</span> ha
+        sido creado correctamente.
+      </ModalBase>
 
       <ModalMensaje abierto={!!error} mensaje={error} onCerrar={() => setError(null)} />
 
