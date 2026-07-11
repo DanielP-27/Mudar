@@ -100,19 +100,20 @@ class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
         model = RegistroTurnoDia
         fields = ['id', 'turno', 'turno_nombre', 'fecha', 'numero_operarios', 'minutos_totales', 'registrado_por', 'fecha_creacion']
         read_only_fields = ['registrado_por', 'fecha_creacion']
+        # minutos_totales lo valida DRF de forma nativa contra choices=OPCIONES_MINUTOS
+        # (models.py) — fuente única de verdad. Aquí solo personalizamos el mensaje.
+        extra_kwargs = {
+            'minutos_totales': {
+                'error_messages': {
+                    'invalid_choice': 'La duración del turno seleccionada no es válida; recibido: "{input}".'
+                }
+            }
+        }
 
     def validate_numero_operarios(self, value):
         if value <= 0:
             raise serializers.ValidationError(
                 'El número de operarios debe ser mayor a 0'
-            )
-        return value
-
-    def validate_minutos_totales(self, value):
-        opciones_validas = [480, 600]
-        if value not in opciones_validas:
-            raise serializers.ValidationError(
-                f'Los minutos totales deben ser 480 (8 horas) o 600 (10 horas), recibido: {value}'
             )
         return value
 
@@ -156,10 +157,30 @@ class DomListSerializer(serializers.ModelSerializer):
     # consulta del listado de productos del dom con nombre y cantidad
     productos = ProductosDomSerializer(many=True, read_only=True)
 
-    # propiedades calculadas del modelo, necesario para visualización en fron igualmente 
+    # propiedades calculadas del modelo, necesario para visualización en fron igualmente
     cantidad_elaborada_total = serializers.ReadOnlyField()
     cantidad_pedida_total = serializers.ReadOnlyField()
     cantidad_pendiente_total = serializers.ReadOnlyField()
+
+    # Fecha de entrega efectiva y nivel de urgencia — criterio ÚNICO de vencimiento.
+    # Se calculan en el backend (annotation en la vista) y se exponen aquí para que
+    # el frontend MUESTRE y CLASIFIQUE con lo mismo, sin recalcular fechas en JS.
+    fecha_criterio = serializers.SerializerMethodField()
+    nivel_urgencia = serializers.SerializerMethodField()
+
+    def get_fecha_criterio(self, obj):
+        # Respaldo en Python con la misma regla del Coalesce del backend: proyectada,
+        # o solicitada si no hay. Si la vista ya anotó 'fecha_criterio', se usa esa.
+        return (
+            getattr(obj, 'fecha_criterio', None)
+            or obj.fecha_entrega_proyectada
+            or obj.fecha_solicitada_cliente
+        )
+
+    def get_nivel_urgencia(self, obj):
+        # Solo lo anota ListaDoms (0 vencido · 1 próximo · 2 activo). En el dashboard
+        # las listas ya vienen separadas (vencidos/próximos), así que puede no existir.
+        return getattr(obj, 'nivel_urgencia', None)
 
     class Meta:
         model = Dom
@@ -172,6 +193,8 @@ class DomListSerializer(serializers.ModelSerializer):
             'responsable',
             'fecha_solicitada_cliente',
             'fecha_entrega_pactada',
+            'fecha_criterio',           # fecha de entrega efectiva (para mostrar)
+            'nivel_urgencia',           # clasificación de vencimiento (para el badge)
             'dom_relacionado_produccion',
             'dom_liberado_cierre',
             'productos',

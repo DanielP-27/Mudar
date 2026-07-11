@@ -121,12 +121,12 @@ class Turno(models.Model):
 # Clase donde se valida numero de operarios por turno y si se trabajan horas extras (+120 minutos en turno)
 
 class RegistroTurnoDia(models.Model):
-    OPCIONES_MINUTOS = [(480, '8 horas (480 min)'), (600, '10 horas (600 min)')]
+    OPCIONES_MINUTOS = [(420, '7 horas (420 min)'), (540, '9 horas (540 min)')]
 
     turno = models.ForeignKey(Turno, on_delete=models.RESTRICT, related_name='registros_diarios', verbose_name='Turno')
     fecha = models.DateField(verbose_name='Fecha del turno', help_text='Fecha en que se registran los operarios para este turno')
     numero_operarios = models.IntegerField(verbose_name='Número de operarios', help_text='Total de operarios disponibles en este turno para esta fecha')
-    minutos_totales = models.IntegerField(choices=OPCIONES_MINUTOS, default=480, verbose_name='Duración del turno', help_text='Duración total del turno en minutos')
+    minutos_totales = models.IntegerField(choices=OPCIONES_MINUTOS, default=420, verbose_name='Duración del turno', help_text='Duración total del turno en minutos')
     registrado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='turnos_dia_registrados')
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 

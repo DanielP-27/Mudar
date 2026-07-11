@@ -1,7 +1,7 @@
 // src/pages/doms/PaginaListaDoms.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiSearch, FiEdit2, FiEye, FiChevronLeft, FiChevronRight } from 'react-icons/fi'
+import { FiSearch, FiEdit2, FiEye, FiChevronLeft, FiChevronRight, FiRotateCcw } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { obtenerDoms } from '../../api/doms'
 import { obtenerClientes, obtenerListasPorTipo } from '../../api/catalogos'
@@ -123,11 +123,10 @@ function PaginaListaDoms() {
     setOrdenamiento('fecha_entrega:asc')
   }
 
-  // Determina si un DOM está vencido
-  const estaVencido = (dom) => {
-    if (!dom.fecha_entrega_pactada) return false
-    return new Date(dom.fecha_entrega_pactada) < new Date()
-  }
+  // Vencimiento clasificado por el backend (nivel_urgencia): 0 vencido · 1 próximo · 2 activo.
+  // Ya no se recalcula con fechas en JS — el backend es la única fuente de verdad
+  // (mismo criterio que el orden y el dashboard; evita bugs de zona horaria).
+  const estaVencido = (dom) => dom.nivel_urgencia === 0
 
   // Determina si el usuario puede editar DOMs
   const puedeEditar = ROLES_EDITAR.includes(usuario?.rol)
@@ -257,9 +256,10 @@ function PaginaListaDoms() {
 
         </div>
 
-        {/* Botón limpiar filtros */}
+        {/* Botón limpiar filtros — outline/secundario, no compite con acciones primarias */}
         <button onClick={limpiarFiltros}
-          className="text-sm text-[#1A56A0] hover:text-[#134478] font-medium hover:underline">
+          className="inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium rounded-full border border-gray-300 text-gray-600 hover:text-[#1A56A0] hover:border-[#1A56A0]">
+          <FiRotateCcw size={14} />
           Limpiar filtros
         </button>
         </div>
@@ -326,25 +326,21 @@ function PaginaListaDoms() {
                       </span>
                     </td>
 
-                    {/* Fecha entrega */}
+                    {/* Fecha entrega — fecha efectiva (proyectada, o solicitada si no hay) */}
                     <td className={`px-4 py-3 text-sm
                       ${vencido ? 'text-red-600 font-medium' : 'text-gray-600'}`}>
-                      {dom.fecha_entrega_pactada
-                        ? new Date(dom.fecha_entrega_pactada).toLocaleDateString('es-CO')
+                      {dom.fecha_criterio
+                        ? new Date(dom.fecha_criterio).toLocaleDateString('es-CO')
                         : '—'}
                     </td>
 
-                    {/* Estado vencimiento */}
+                    {/* Estado vencimiento — clasificación del backend (nivel_urgencia) */}
                     <td className="px-4 py-3">
                       {vencido ? (
                         <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-medium">
                           Vencido
                         </span>
-                      ) : !dom.fecha_entrega_pactada ? (
-                        <span className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600">
-                          Sin fecha
-                        </span>
-                      ) : (new Date(dom.fecha_entrega_pactada) - new Date()) / (1000 * 60 * 60 * 24) <= 7 ? (
+                      ) : dom.nivel_urgencia === 1 ? (
                         <span className="px-2 py-1 text-xs rounded-full bg-amber-100 text-amber-700">
                           Vence pronto
                         </span>
@@ -360,16 +356,16 @@ function PaginaListaDoms() {
                       <div className="flex items-center justify-center gap-2">
                         <button
                           onClick={() => navegar(`/doms/${dom.dom_id}`)}
-                          className="p-1.5 text-gray-500 hover:text-[#1A56A0] hover:bg-blue-50 rounded"
-                          title="Ver DOM">
-                          <FiEye size={15} />
+                          className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border border-violet-100 bg-violet-50 text-violet-700 hover:bg-violet-100">
+                          <FiEye size={14} />
+                          Ver
                         </button>
                         {puedeEditar && (
                           <button
                             onClick={() => navegar(`/doms/${dom.dom_id}/editar`)}
-                            className="p-1.5 text-gray-500 hover:text-[#1A56A0] hover:bg-blue-50 rounded"
-                            title="Editar DOM">
-                            <FiEdit2 size={15} />
+                            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100">
+                            <FiEdit2 size={14} />
+                            Editar
                           </button>
                         )}
                       </div>

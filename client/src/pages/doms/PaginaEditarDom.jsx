@@ -36,8 +36,8 @@ const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
 // Opciones de duración de turno
 const OPCIONES_MINUTOS = [
   { value: '', label: 'Seleccione duración' },
-  { value: 480, label: '8 horas (480 min)' },
-  { value: 600, label: '10 horas (600 min)' },
+  { value: 420, label: '7 horas (420 min)' },
+  { value: 540, label: '9 horas (540 min)' },
 ]
 
 // Convierte booleano del backend a string para el select
@@ -1343,7 +1343,7 @@ function PaginaEditarDom() {
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="¿DOM resultado de campaña de venta?">
-                <SelectSiNo name="dom_campana_venta" value={boolToStr(datosDom.campana_venta)}
+                <SelectSiNo name="dom_campana_venta" soloLectura={!esEditable('etapa_1')} variante="lectura" value={boolToStr(datosDom.campana_venta)}
                   onChange={v => actualizarCampoDom('campana_venta', strToBool(v))}
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
               </CampoFormulario>
@@ -1595,12 +1595,12 @@ function PaginaEditarDom() {
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben pesarse?">
-                  <SelectSiNo name="planeacion_peso" value={boolToStr(planActual.peso)}
+                  <SelectSiNo name="planeacion_peso" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.peso)}
                     onChange={v => actualizarCampoPlaneacion('peso', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Materias primas disponibles para fabricar este DOM?">
-                  <SelectSiNo name="planeacion_materia_prima_disponible" value={boolToStr(planActual.materia_prima_disponible)}
+                  <SelectSiNo name="planeacion_materia_prima_disponible" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.materia_prima_disponible)}
                     onChange={v => actualizarCampoPlaneacion('materia_prima_disponible', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
@@ -1615,42 +1615,42 @@ function PaginaEditarDom() {
                   </select>
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos van encartonados?">
-                  <SelectSiNo name="planeacion_encartonar" value={boolToStr(planActual.encartonar)}
+                  <SelectSiNo name="planeacion_encartonar" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.encartonar)}
                     onChange={v => actualizarCampoPlaneacion('encartonar', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren grafado y elaboración de fundas">
-                  <SelectSiNo name="planeacion_grafado_fundas" value={boolToStr(planActual.grafado_fundas)}
+                  <SelectSiNo name="planeacion_grafado_fundas" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.grafado_fundas)}
                     onChange={v => actualizarCampoPlaneacion('grafado_fundas', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Producto requiere Control de tiempo y ensamble en armadora?">
-                  <SelectSiNo name="planeacion_control_tiempo" value={boolToStr(planActual.control_tiempo)}
+                  <SelectSiNo name="planeacion_control_tiempo" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.control_tiempo)}
                     onChange={v => actualizarCampoPlaneacion('control_tiempo', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Cliente recoge los productos?">
-                  <SelectSiNo name="planeacion_cliente_recoge" value={boolToStr(planActual.cliente_recoge)}
+                  <SelectSiNo name="planeacion_cliente_recoge" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.cliente_recoge)}
                     onChange={v => actualizarCampoPlaneacion('cliente_recoge', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Mudar de Colombia entrega los productos?">
-                  <SelectSiNo name="planeacion_mudar_entrega" value={boolToStr(planActual.mudar_entrega)}
+                  <SelectSiNo name="planeacion_mudar_entrega" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.mudar_entrega)}
                     onChange={v => actualizarCampoPlaneacion('mudar_entrega', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos requieren tratamiento térmico?">
-                  <SelectSiNo name="planeacion_tratamiento_termico" value={boolToStr(planActual.tratamiento_termico)}
+                  <SelectSiNo name="planeacion_tratamiento_termico" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.tratamiento_termico)}
                     onChange={v => actualizarCampoPlaneacion('tratamiento_termico', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben llevar Sello ICA?">
-                  <SelectSiNo name="planeacion_sello_ica" value={boolToStr(planActual.sello_ica)}
+                  <SelectSiNo name="planeacion_sello_ica" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.sello_ica)}
                     onChange={v => actualizarCampoPlaneacion('sello_ica', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos llevan marcas o símbolos del cliente?">
-                  <SelectSiNo name="planeacion_marcado_cliente" value={boolToStr(planActual.marcado_cliente)}
+                  <SelectSiNo name="planeacion_marcado_cliente" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.marcado_cliente)}
                     onChange={v => actualizarCampoPlaneacion('marcado_cliente', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
@@ -1747,7 +1747,7 @@ function PaginaEditarDom() {
                 <>
                 <div className="grid grid-cols-2 gap-4">
                   <CampoFormulario label="¿Materias primas internas procesadas?">
-                    <SelectSiNo name="almacen_materias_primas" value={boolToStr(almacenActual.materias_primas)}
+                    <SelectSiNo name="almacen_materias_primas" soloLectura={!esEditable('etapa_3')} variante="lectura" value={boolToStr(almacenActual.materias_primas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_primas', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                   </CampoFormulario>
@@ -1764,7 +1764,7 @@ function PaginaEditarDom() {
                       className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
-                    <SelectSiNo name="almacen_dom_realizado_planeacion" value={boolToStr(almacenActual.dom_realizado_planeacion)}
+                    <SelectSiNo name="almacen_dom_realizado_planeacion" soloLectura={!esEditable('etapa_3')} variante="lectura" value={boolToStr(almacenActual.dom_realizado_planeacion)}
                       onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                   </CampoFormulario>
@@ -1931,12 +1931,12 @@ function PaginaEditarDom() {
                       className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="¿Actividades de producción realizadas según registro de planeación?">
-                    <SelectSiNo name="produccion_segun_planeacion" value={boolToStr(produccionActual.segun_planeacion)}
+                    <SelectSiNo name="produccion_segun_planeacion" soloLectura={!esEditable('etapa_4')} variante="lectura" value={boolToStr(produccionActual.segun_planeacion)}
                       onChange={v => actualizarCampoHijo('produccion', 'segun_planeacion', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
                   </CampoFormulario>
                   <CampoFormulario label="Producción no completada">
-                    <SelectSiNo name="produccion_no_completada" value={boolToStr(produccionActual.produccion_no_completada)}
+                    <SelectSiNo name="produccion_no_completada" soloLectura={!esEditable('etapa_4')} variante="lectura" value={boolToStr(produccionActual.produccion_no_completada)}
                       onChange={v => actualizarCampoHijo('produccion', 'produccion_no_completada', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
                   </CampoFormulario>
@@ -1993,7 +1993,7 @@ function PaginaEditarDom() {
                 <>
                 <div className="grid grid-cols-2 gap-4">
                   <CampoFormulario label="DOM con tratamiento">
-                    <SelectSiNo name="tratamiento_dom_con_tratamiento" value={boolToStr(tratamientoActual.dom_con_tratamiento)}
+                    <SelectSiNo name="tratamiento_dom_con_tratamiento" soloLectura={!esEditable('etapa_5')} variante="lectura" value={boolToStr(tratamientoActual.dom_con_tratamiento)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'dom_con_tratamiento', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
@@ -2018,7 +2018,7 @@ function PaginaEditarDom() {
                       className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
                   <CampoFormulario label="Tratamiento según planeación">
-                    <SelectSiNo name="tratamiento_segun_planeacion" value={boolToStr(tratamientoActual.tratamiento_segun_planeacion)}
+                    <SelectSiNo name="tratamiento_segun_planeacion" soloLectura={!esEditable('etapa_5')} variante="lectura" value={boolToStr(tratamientoActual.tratamiento_segun_planeacion)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_segun_planeacion', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
@@ -2100,7 +2100,7 @@ function PaginaEditarDom() {
                 </select>
               </CampoFormulario>
               <CampoFormulario label="¿Este DOM requiere materiales externos?">
-                <SelectSiNo name="dom_materiales_externos" value={boolToStr(datosDom.materiales_externos)}
+                <SelectSiNo name="dom_materiales_externos" soloLectura={!esEditable('etapa_6')} variante="lectura" value={boolToStr(datosDom.materiales_externos)}
                   onChange={v => actualizarCampoDom('materiales_externos', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>
@@ -2131,7 +2131,7 @@ function PaginaEditarDom() {
                   className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
               <CampoFormulario label="DOM entregado OK">
-                <SelectSiNo name="dom_entregado_ok" value={boolToStr(datosDom.dom_entregado_ok)}
+                <SelectSiNo name="dom_entregado_ok" soloLectura={!esEditable('etapa_6')} variante="lectura" value={boolToStr(datosDom.dom_entregado_ok)}
                   onChange={v => actualizarCampoDom('dom_entregado_ok', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>

@@ -9,6 +9,7 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.utils import timezone
 from datetime import timedelta
+from django.db.models.functions import Coalesce
 
 from .models import (
     Cliente,
@@ -68,7 +69,20 @@ from .serializers import (
 )
 
 
-# INICIO HELPERS - Funciones reutilizables en todas las vistas, mayor eficiencia 
+# INICIO HELPERS - Funciones reutilizables en todas las vistas, mayor eficiencia
+
+# ── Criterio ÚNICO de vencimiento (fechas de entrega) ─────────────────────────
+# Umbrales de negocio definidos UNA sola vez para que el dashboard y ListaDoms
+# usen exactamente el mismo horizonte (si cambia el número, cambia en un solo lugar).
+DIAS_PROXIMO_VENCER = 7          # ventana de "próximo a vencer"
+DIAS_HORIZONTE_PRODUCCION = 15   # horizonte del cuadro de productos pendientes
+
+# Fecha de entrega EFECTIVA del DOM: la proyectada en planeación es el criterio
+# principal y, en su ausencia, la solicitada por el cliente (obligatoria, nunca
+# null → la fecha efectiva nunca es null). Es el criterio de vencimiento del
+# sistema; lo consumen el dashboard y ListaDoms para clasificar/ordenar por urgencia.
+def fecha_entrega_efectiva():
+    return Coalesce('fecha_entrega_proyectada', 'fecha_solicitada_cliente')
 
 #  retorna el PerfilUsuario autenticado / referencia PerfilUsuario
 def get_perfil(request):
@@ -125,6 +139,16 @@ def calcular_cumplimiento(registros_ok, total_registros):
         return 'NO_CUMPLIÓ'
     else:
         return 'PARCIAL'
+
+# Igual que calcular_cumplimiento pero además expone el conteo y el porcentaje,
+# para que el dashboard muestre el ratio (ej. "66.7% (8 de 12)") junto a la etiqueta.
+def calcular_ratio_cumplimiento(registros_ok, total_registros):
+    return {
+        'nivel': calcular_cumplimiento(registros_ok, total_registros),
+        'ok': registros_ok,
+        'total': total_registros,
+        'porcentaje': round(registros_ok / total_registros * 100, 1) if total_registros else None,
+    }
 
 # Centraliza que  la creación de registros de AuditoriaDom ante accciones relevantes (creacion, edicion, bloqueo o desbloqueo etapa, eliminación)
 def registrar_auditoria(dom, usuario, accion, etapa=None, campos_modificados=None):
@@ -1305,7 +1329,11 @@ class DomListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        doms = Dom.objects.select_related('nombre_cliente').prefetch_related('productos')
+        # Fecha de entrega efectiva anotada de entrada: la usan el filtro de rango,
+        # el nivel de urgencia y el orden por fecha (criterio único de vencimiento).
+        doms = Dom.objects.select_related('nombre_cliente').prefetch_related(
+            'productos'
+        ).annotate(fecha_criterio=fecha_entrega_efectiva())
 
         # Filtros existentes
         cliente_id = request.query_params.get('cliente', None)
@@ -1327,11 +1355,11 @@ class DomListView(APIView):
 
         fecha_inicio = request.query_params.get('fecha_inicio', None)
         if fecha_inicio is not None:
-            doms = doms.filter(fecha_entrega_pactada__gte=fecha_inicio)
+            doms = doms.filter(fecha_criterio__gte=fecha_inicio)
 
         fecha_fin = request.query_params.get('fecha_fin', None)
         if fecha_fin is not None:
-            doms = doms.filter(fecha_entrega_pactada__lte=fecha_fin)
+            doms = doms.filter(fecha_criterio__lte=fecha_fin)
 
         fecha_planeacion = request.query_params.get('fecha_planeacion', None)
         if fecha_planeacion is not None:
@@ -1340,30 +1368,41 @@ class DomListView(APIView):
             ).distinct()
 
         # ── Nivel de urgencia (criterio primario, SIEMPRE) ──────────────
-        # 0 vencido · 1 próximo a vencer (≤7 días) · 2 activo · 3 sin fecha.
-        # isnull se evalúa primero para apartar los null (si no, caerían en "activo").
+        # 0 vencido · 1 próximo a vencer (≤ DIAS_PROXIMO_VENCER días) · 2 activo.
+        # La fecha de entrega efectiva nunca es null (solicitada es obligatoria),
+        # por eso no existe estado "sin fecha".
         hoy = timezone.now().date()
-        limite_proximo = hoy + timedelta(days=7)
+        limite_proximo = hoy + timedelta(days=DIAS_PROXIMO_VENCER)
         doms = doms.annotate(
             nivel_urgencia=Case(
-                When(fecha_entrega_pactada__isnull=True, then=3),
-                When(fecha_entrega_pactada__lt=hoy, then=0),
-                When(fecha_entrega_pactada__lte=limite_proximo, then=1),
+                When(fecha_criterio__lt=hoy, then=0),
+                When(fecha_criterio__lte=limite_proximo, then=1),
                 default=2,
                 output_field=IntegerField()
             )
         )
 
-        # ── Orden manual dentro de cada nivel (lista blanca de campos permitidos) ──
+        # ── Orden manual (lista blanca de campos permitidos) ──
         CAMPOS_ORDEN = {
-            'fecha_entrega': 'fecha_entrega_pactada',
+            'fecha_entrega': 'fecha_criterio',
             'cliente':       'nombre_cliente__nombre_cliente',
             'dom':           'dom_id',
         }
-        campo = CAMPOS_ORDEN.get(request.query_params.get('orden'), 'fecha_entrega_pactada')
+        orden_param = request.query_params.get('orden') or 'fecha_entrega'
+        if orden_param not in CAMPOS_ORDEN:
+            orden_param = 'fecha_entrega'
+        campo = CAMPOS_ORDEN[orden_param]
         if request.query_params.get('direccion') == 'desc':
             campo = '-' + campo
-        doms = doms.order_by('nivel_urgencia', campo)
+
+        # nivel_urgencia (vencidos primero) agrupa SOLO en el orden por fecha de
+        # entrega, que es el criterio de negocio por defecto. Para 'cliente' y 'dom'
+        # el orden es global y directo, sin agrupar por urgencia. dom_id como
+        # desempate garantiza una paginación estable.
+        if orden_param == 'fecha_entrega':
+            doms = doms.order_by('nivel_urgencia', campo, 'dom_id')
+        else:
+            doms = doms.order_by(campo, 'dom_id')
 
         # Paginación
         total = doms.count()
@@ -3311,6 +3350,49 @@ class CronometroFinalizarView(APIView):
 
 from django.db.models import Sum, Count, Q, Case, When, IntegerField
 
+
+# Desglose de productos pendientes por tipo para un conjunto de DOMs. Recibe un
+# queryset de DOMs y devuelve, por cada tipo con pendiente > 0, cuánto falta por
+# producir y en cuántos DOMs aparece. Se reutiliza en el dashboard para el
+# horizonte de 15 días y para el backlog completo de DOMs activos.
+def productos_pendientes_por_doms(doms_qs):
+    resultado = []
+    productos_ids = ProductosDom.objects.filter(
+        productoDom__in=doms_qs
+    ).values('tipo_producto').distinct()
+
+    for item in productos_ids:
+        producto_id = item['tipo_producto']
+        try:
+            producto = Productos.objects.get(producto_id=producto_id)
+        except Productos.DoesNotExist:
+            continue
+
+        doms_con_producto = doms_qs.filter(
+            productos__tipo_producto_id=producto_id
+        ).distinct()
+
+        cantidad_pedida = ProductosDom.objects.filter(
+            productoDom__in=doms_con_producto,
+            tipo_producto_id=producto_id
+        ).aggregate(total=Sum('cantidad_pedido'))['total'] or 0
+
+        cantidad_elaborada = ProductoProduccion.objects.filter(
+            producto_planeacion__registro_planeacion__dom__in=doms_con_producto,
+            producto_planeacion__dom_producto__tipo_producto_id=producto_id
+        ).aggregate(total=Sum('cantidad_elaborada'))['total'] or 0
+
+        cantidad_pendiente = cantidad_pedida - cantidad_elaborada
+
+        if cantidad_pendiente > 0:
+            resultado.append({
+                'nombre_producto': producto.nombre_producto,
+                'cantidad_pendiente': cantidad_pendiente,
+                'doms_involucrados': doms_con_producto.count()
+            })
+    return resultado
+
+
 # Clase DashboardView
 # Retorna métricas globales del sistema para la página de inicio.
 # Incluye: resumen DOMs, métricas de producción, DOMs próximos a vencer,   DOMs vencidos y productos pendientes por categoría en los próximos 15 días.
@@ -3358,75 +3440,68 @@ class DashboardView(APIView):
             },
         ]
 
-        # Metricas de producción globales
-        cantidad_elaborada_total = ProductoProduccion.objects.aggregate(
+        # ── Consolidado HISTÓRICO (todo el tiempo, incluidos DOMs cerrados) ──
+        # Unidades elaboradas en toda la historia. Métrica de volumen/throughput;
+        # NO se usa para "pendiente" (un cierre con bajo-entrega inflaría el pendiente).
+        unidades_elaboradas_historico = ProductoProduccion.objects.aggregate(
             total=Sum('cantidad_elaborada')
         )['total'] or 0
 
-        cantidad_pedida_total = ProductosDom.objects.aggregate(
-            total=Sum('cantidad_pedido')
-        )['total'] or 0
+        # ── Consolidado DOMs ACTIVOS (dom_liberado_cierre=False) ──
+        # Las tres cifras hablan del mismo universo (trabajo en curso), así
+        # 'pendiente = pedida - elaborada' es coherente y accionable.
+        cantidad_pedida_activos = ProductosDom.objects.filter(
+            productoDom__dom_liberado_cierre=False
+        ).aggregate(total=Sum('cantidad_pedido'))['total'] or 0
 
-        cantidad_pendiente_total = cantidad_pedida_total - cantidad_elaborada_total
+        cantidad_elaborada_activos = ProductoProduccion.objects.filter(
+            producto_planeacion__registro_planeacion__dom__dom_liberado_cierre=False
+        ).aggregate(total=Sum('cantidad_elaborada'))['total'] or 0
 
-        # DOMs proximos a vencer: crieterio es fecha solicitada proximos 7 dias
+        cantidad_pendiente_activos = cantidad_pedida_activos - cantidad_elaborada_activos
 
-        fecha_limite_7 = hoy + timezone.timedelta(days=7)
+        # DOMs próximos a vencer: fecha de entrega efectiva (proyectada, o solicitada
+        # si no hay) dentro de los próximos DIAS_PROXIMO_VENCER días. El >= hoy excluye
+        # los ya vencidos para que no se cuenten dos veces.
+        fecha_limite_proximo = hoy + timezone.timedelta(days=DIAS_PROXIMO_VENCER)
         doms_proximos_vencer = Dom.objects.filter(
-            fecha_solicitada_cliente__gte=hoy,
-            fecha_solicitada_cliente__lte=fecha_limite_7,
             dom_liberado_cierre=False
-        ).select_related('nombre_cliente').prefetch_related('productos')
-        
-        # DOMs vencidos: criterio es fecha_solicitada_cliente ya se pasó y no se han dado como cerrados
-        doms_vencidos = Dom.objects.filter(
-            fecha_solicitada_cliente__lt=hoy,
-            dom_liberado_cierre=False
+        ).annotate(
+            fecha_criterio=fecha_entrega_efectiva()
+        ).filter(
+            fecha_criterio__gte=hoy,
+            fecha_criterio__lte=fecha_limite_proximo
         ).select_related('nombre_cliente').prefetch_related('productos')
 
-        # Productos pendientes por categoria en los próximos 15 dias
-        fecha_limite_15 = hoy + timezone.timedelta(days=15)
-        doms_proximos_15 = Dom.objects.filter(
-            fecha_solicitada_cliente__lte=fecha_limite_15,
+        # DOMs vencidos: la fecha de entrega efectiva ya pasó y el DOM sigue abierto.
+        doms_vencidos = Dom.objects.filter(
             dom_liberado_cierre=False
+        ).annotate(
+            fecha_criterio=fecha_entrega_efectiva()
+        ).filter(
+            fecha_criterio__lt=hoy
+        ).select_related('nombre_cliente').prefetch_related('productos')
+
+        # Productos pendientes por categoría dentro del horizonte de producción:
+        # DOMs con fecha de entrega efectiva <= hoy + DIAS_HORIZONTE_PRODUCCION
+        # (sin borde inferior: incluye también los ya vencidos).
+        fecha_limite_horizonte = hoy + timezone.timedelta(days=DIAS_HORIZONTE_PRODUCCION)
+        doms_proximos_15 = Dom.objects.filter(
+            dom_liberado_cierre=False
+        ).annotate(
+            fecha_criterio=fecha_entrega_efectiva()
+        ).filter(
+            fecha_criterio__lte=fecha_limite_horizonte
         )
 
-        # Agrupa por producto y calcula pendientes
-        productos_pendientes = []
-        productos_ids = ProductosDom.objects.filter(
-            productoDom__in=doms_proximos_15
-        ).values('tipo_producto').distinct()
+        # Agrupa por producto y calcula pendientes (horizonte de 15 días).
+        productos_pendientes = productos_pendientes_por_doms(doms_proximos_15)
 
-        for item in productos_ids:
-            producto_id = item['tipo_producto']
-            try:
-                producto = Productos.objects.get(producto_id=producto_id)
-            except Productos.DoesNotExist:
-                continue
+        # Backlog completo de productos pendientes sobre TODOS los DOMs activos.
+        productos_pendientes_activos = productos_pendientes_por_doms(
+            Dom.objects.filter(dom_liberado_cierre=False)
+        )
 
-            doms_con_producto = doms_proximos_15.filter(
-                productos__tipo_producto_id=producto_id
-            ).distinct()
-
-            cantidad_pedida = ProductosDom.objects.filter(
-                productoDom__in=doms_con_producto,
-                tipo_producto_id=producto_id
-            ).aggregate(total=Sum('cantidad_pedido'))['total'] or 0
-
-            cantidad_elaborada = ProductoProduccion.objects.filter(
-                producto_planeacion__registro_planeacion__dom__in=doms_con_producto,
-                producto_planeacion__dom_producto__tipo_producto_id=producto_id
-            ).aggregate(total=Sum('cantidad_elaborada'))['total'] or 0
-
-            cantidad_pendiente = cantidad_pedida - cantidad_elaborada
-
-            if cantidad_pendiente > 0:
-                productos_pendientes.append({
-                    'nombre_producto': producto.nombre_producto,
-                    'cantidad_pendiente': cantidad_pendiente,
-                    'doms_involucrados': doms_con_producto.count()
-                })
-        
         # Calculo de metricas globales a tres niveles: si cumplió el dom como un global, si se cumplio la planeación (así como sus etapas hijas) y despachos
 
         doms_activos = Dom.objects.filter(
@@ -3471,32 +3546,49 @@ class DashboardView(APIView):
                     tratamiento_ok_count += 1
 
         # Nivel 2 — fuera de ambos loops, con totales finales
-        cumplimiento_almacen = calcular_cumplimiento(almacen_ok_count, total_planeaciones_activas)
-        cumplimiento_produccion = calcular_cumplimiento(produccion_ok_count, total_planeaciones_activas)
-        cumplimiento_tratamiento = calcular_cumplimiento(tratamiento_ok_count, total_planeaciones_activas)
-        cumplimiento_despacho = calcular_cumplimiento(doms_entregados_ok, total_doms_activos_count)
+        cumplimiento_almacen     = calcular_ratio_cumplimiento(almacen_ok_count, total_planeaciones_activas)
+        cumplimiento_produccion  = calcular_ratio_cumplimiento(produccion_ok_count, total_planeaciones_activas)
+        cumplimiento_tratamiento = calcular_ratio_cumplimiento(tratamiento_ok_count, total_planeaciones_activas)
+        cumplimiento_despacho    = calcular_ratio_cumplimiento(doms_entregados_ok, total_doms_activos_count)
 
         # Nivel 3 consolidado global - medición cuatro etapas
-        niveles = [cumplimiento_almacen, cumplimiento_produccion, cumplimiento_tratamiento, cumplimiento_despacho]
+        niveles = [c['nivel'] for c in (cumplimiento_almacen, cumplimiento_produccion,
+                                        cumplimiento_tratamiento, cumplimiento_despacho)]
         if all(n == 'CUMPLIÓ' for n in niveles):
-            cumplimiento_consolidado = 'CUMPLIÓ'
+            nivel_consolidado = 'CUMPLIÓ'
         elif all(n == 'NO_CUMPLIÓ' for n in niveles):
-            cumplimiento_consolidado = 'NO_CUMPLIÓ'
+            nivel_consolidado = 'NO_CUMPLIÓ'
         elif all(n == 'SIN_DATOS' for n in niveles):
-            cumplimiento_consolidado = 'SIN_DATOS'
+            nivel_consolidado = 'SIN_DATOS'
         else:
-            cumplimiento_consolidado = 'PARCIAL'
+            nivel_consolidado = 'PARCIAL'
+
+        # Ratio consolidado = suma de "ok" ÷ suma de "total" de las 4 etapas.
+        # OJO: mezcla planeaciones (almacén/producción/tratamiento) con DOMs (despacho); aceptado por negocio.
+        consolidado_ok = almacen_ok_count + produccion_ok_count + tratamiento_ok_count + doms_entregados_ok
+        consolidado_total = total_planeaciones_activas * 3 + total_doms_activos_count
+        cumplimiento_consolidado = {
+            'nivel': nivel_consolidado,
+            'ok': consolidado_ok,
+            'total': consolidado_total,
+            'porcentaje': round(consolidado_ok / consolidado_total * 100, 1) if consolidado_total else None,
+        }
 
         data = {
             'total_doms': total_doms,
             'total_doms_activos': total_doms_activos,
             'total_doms_cerrados': total_doms_cerrados,
             'doms_por_etapa': doms_por_etapa,
-            'cantidad_elaborada_total': cantidad_elaborada_total,
-            'cantidad_pendiente_total': cantidad_pendiente_total,
+            # Consolidado histórico
+            'unidades_elaboradas_historico': unidades_elaboradas_historico,
+            # Consolidado DOMs activos
+            'cantidad_pedida_activos': cantidad_pedida_activos,
+            'cantidad_elaborada_activos': cantidad_elaborada_activos,
+            'cantidad_pendiente_activos': cantidad_pendiente_activos,
             'doms_proximos_vencer': DomListSerializer(doms_proximos_vencer, many=True).data,
             'doms_vencidos': DomListSerializer(doms_vencidos, many=True).data,
             'productos_pendientes_15_dias': productos_pendientes,
+            'productos_pendientes_activos': productos_pendientes_activos,
 
             # datos de cumplimiento por etapa
             'cumplimiento_almacen': cumplimiento_almacen,

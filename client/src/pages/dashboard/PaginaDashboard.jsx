@@ -49,13 +49,55 @@ function PaginaDashboard() {
     <div className="space-y-6">
       <h1 className="text-xl font-semibold text-gray-800">Dashboard</h1>
 
-      {/* Bloque 1 — Tarjetas resumen */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <TarjetaResumen label="Total DOMs"             valor={metricas.total_doms} />
-        <TarjetaResumen label="DOMs activos"           valor={metricas.total_doms_activos} />
-        <TarjetaResumen label="DOMs cerrados"          valor={metricas.total_doms_cerrados} />
-        <TarjetaResumen label="Cantidad elaborada"     valor={metricas.cantidad_elaborada_total} />
-        <TarjetaResumen label="Cantidad pendiente"     valor={metricas.cantidad_pendiente_total} />
+      {/* Consolidado DOMs activos — foco operativo (trabajo en curso) */}
+      <div>
+        <h2 className="text-sm font-medium text-gray-700 mb-3">Consolidado DOMs activos</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <TarjetaResumen label="DOMs activos"        valor={metricas.total_doms_activos} />
+          <TarjetaResumen label="Cantidad pedida"     valor={metricas.cantidad_pedida_activos} />
+          <TarjetaResumen label="Cantidad elaborada"  valor={metricas.cantidad_elaborada_activos} />
+          <TarjetaResumen label="Cantidad pendiente"  valor={metricas.cantidad_pendiente_activos} />
+        </div>
+      </div>
+
+      {/* Productos pendientes — backlog completo de DOMs activos */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <h2 className="px-4 py-3 text-sm font-medium text-gray-700 border-b border-gray-200">
+          Productos pendientes — DOMs activos
+        </h2>
+        {metricas.productos_pendientes_activos.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gray-400">Sin registros</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#1A56A0] text-white">
+                <th className="text-left px-4 py-2 text-xs font-medium">Producto</th>
+                <th className="text-left px-4 py-2 text-xs font-medium">Cant. pendiente</th>
+                <th className="text-left px-4 py-2 text-xs font-medium">DOMs involucrados</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metricas.productos_pendientes_activos.map((p, i) => (
+                <tr key={p.nombre_producto} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  <td className="px-4 py-2 text-gray-700">{p.nombre_producto}</td>
+                  <td className="px-4 py-2 text-gray-700">{p.cantidad_pendiente}</td>
+                  <td className="px-4 py-2 text-gray-700">{p.doms_involucrados}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Consolidado histórico — referencia (todo el tiempo, incluidos cerrados) */}
+      <div>
+        <h2 className="text-sm font-medium text-gray-500 mb-3">Consolidado histórico</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <TarjetaResumen label="Total DOMs"          valor={metricas.total_doms} />
+          <TarjetaResumen label="DOMs cerrados"       valor={metricas.total_doms_cerrados} />
+          <TarjetaResumen label="DOMs abiertos"       valor={metricas.total_doms_activos} />
+          <TarjetaResumen label="Unidades elaboradas" valor={metricas.unidades_elaboradas_historico} />
+        </div>
       </div>
 
       {/* Bloque 2 — DOMs por etapa */}
@@ -131,23 +173,34 @@ function PaginaDashboard() {
         <h2 className="px-4 py-3 text-sm font-medium text-gray-700 border-b border-gray-200">
           Cumplimiento
         </h2>
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
           <thead>
             <tr className="bg-[#1A56A0] text-white">
-              <th className="text-left px-4 py-2 text-xs font-medium">Etapa</th>
-              <th className="text-left px-4 py-2 text-xs font-medium">Resultado</th>
+              <th className="text-left px-4 py-2 text-xs font-medium w-1/3">Etapa</th>
+              <th className="text-left px-4 py-2 text-xs font-medium w-1/3">Resultado</th>
+              <th className="text-left px-4 py-2 text-xs font-medium w-1/3">Cumplimiento</th>
             </tr>
           </thead>
           <tbody>
             {FILAS_CUMPLIMIENTO.map((fila, i) => {
               const valor = metricas[fila.campo]
+              // Las 5 filas llegan como { nivel, ok, total, porcentaje }; string como respaldo defensivo
+              const nivel = typeof valor === 'string' ? valor : valor?.nivel
+              const detalle = typeof valor === 'object' && valor?.porcentaje !== null
+                ? `${valor.porcentaje}% (${valor.ok} de ${valor.total})`
+                : null
               return (
                 <tr key={fila.campo} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                   <td className="px-4 py-2 text-gray-700">{fila.etiqueta}</td>
                   <td className="px-4 py-2">
-                    <span className={`px-2 py-1 text-xs rounded-full font-medium ${ESTILOS_CUMPLIMIENTO[valor] ?? ESTILOS_CUMPLIMIENTO.SIN_DATOS}`}>
-                      {valor}
+                    <span className={`px-2 py-1 text-xs rounded-full font-medium ${ESTILOS_CUMPLIMIENTO[nivel] ?? ESTILOS_CUMPLIMIENTO.SIN_DATOS}`}>
+                      {nivel}
                     </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    {detalle
+                      ? <span className="px-2 py-1 text-xs rounded-full font-medium bg-[#1A56A0]/10 text-[#1A56A0]">{detalle}</span>
+                      : <span className="text-xs text-gray-400">—</span>}
                   </td>
                 </tr>
               )
@@ -186,8 +239,8 @@ function ListaAlertaDoms({ titulo, doms, colorTexto, colorFondo }) {
               {' — '}
               {dom.nombre_cliente_detalle ?? '—'}
               {' — '}
-              {dom.fecha_solicitada_cliente
-                ? new Date(dom.fecha_solicitada_cliente).toLocaleDateString('es-CO')
+              {dom.fecha_criterio
+                ? new Date(dom.fecha_criterio).toLocaleDateString('es-CO')
                 : '—'}
             </li>
           ))}
