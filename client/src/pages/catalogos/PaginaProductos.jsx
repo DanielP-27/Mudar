@@ -6,6 +6,8 @@ import { toInt } from '../../utils/formatters'
 import { useDebounce } from '../../hooks/useDebounce'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import { extraerMensajeError } from '../../utils/errores'
+import Toast from '../../components/common/Toast'
+import ModalBase from '../../components/common/ModalBase'
 
 const FORMULARIO_VACIO = { nombre_producto: '', familia_producto: '', tiempo_produccion_unitario: '' }
 
@@ -24,6 +26,18 @@ function PaginaProductos() {
   const [mostrarFormulario, setMostrarFormulario] = useState(false)
   const [formulario, setFormulario]               = useState(FORMULARIO_VACIO)
   const [guardando, setGuardando]                 = useState(false)
+
+  // Toast de éxito (no bloqueante) — auto-cierra a los 5s
+  const [exito, setExito] = useState(null)
+  const mostrarExito = (msg) => {
+    setExito(msg)
+    setTimeout(() => setExito(null), 5000)
+  }
+
+  // Confirmación de desactivación — modal propio en vez de window.confirm()
+  const [confirmacion, setConfirmacion] = useState(null) // { mensaje, resolve } | null
+  const pedirConfirmacion = (mensaje) =>
+    new Promise(resolve => setConfirmacion({ mensaje, resolve }))
 
   // Carga el listado de productos según el filtro de búsqueda
   const cargarProductos = useCallback(async () => {
@@ -87,13 +101,15 @@ function PaginaProductos() {
         familia_producto: toInt(formulario.familia_producto),
         tiempo_produccion_unitario: toInt(formulario.tiempo_produccion_unitario),
       }
-      if (productoEditando) {
+      const esEdicion = Boolean(productoEditando)
+      if (esEdicion) {
         await actualizarProducto(productoEditando.producto_id, datos)
       } else {
         await crearProducto(datos)
       }
       await cargarProductos()
       cancelarFormulario()
+      mostrarExito(esEdicion ? 'Producto actualizado exitosamente' : 'Producto creado exitosamente')
     } catch {
       setError('Error al guardar el producto.')
     } finally {
@@ -103,11 +119,12 @@ function PaginaProductos() {
 
   // Desactiva un producto previa confirmación
   const manejarDesactivar = async (producto) => {
-    if (!window.confirm('¿Desactivar este producto?')) return
+    if (!await pedirConfirmacion('¿Está seguro que desea desactivar este producto?')) return
     setError(null)
     try {
       await desactivarProducto(producto.producto_id)
       await cargarProductos()
+      mostrarExito('Producto desactivado exitosamente')
     } catch {
       setError('Error al desactivar el producto.')
     }
@@ -237,13 +254,15 @@ function PaginaProductos() {
                   <td className="px-4 py-2">
                     <div className="flex items-center justify-center gap-2">
                       <button onClick={() => abrirFormularioEditar(producto)}
-                        className="text-[#1A56A0] hover:text-[#164685]" title="Editar">
-                        <FiEdit2 size={16} />
+                        className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100">
+                        <FiEdit2 size={14} />
+                        Editar
                       </button>
                       {producto.activo && (
                         <button onClick={() => manejarDesactivar(producto)}
-                          className="text-red-500 hover:text-red-700" title="Desactivar">
-                          <FiXCircle size={16} />
+                          className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border border-red-100 bg-red-50 text-red-700 hover:bg-red-100">
+                          <FiXCircle size={14} />
+                          Desactivar
                         </button>
                       )}
                     </div>
@@ -254,6 +273,20 @@ function PaginaProductos() {
           </tbody>
         </table>
       </div>
+
+      <Toast mensaje={exito} />
+
+      <ModalBase
+        abierto={!!confirmacion}
+        variante="confirmacion"
+        titulo="Confirmar desactivación"
+        mensaje={confirmacion?.mensaje}
+        onCerrar={() => { confirmacion?.resolve(false); setConfirmacion(null) }}
+        acciones={[
+          { texto: 'Cancelar',   estilo: 'peligro',  onClick: () => { confirmacion?.resolve(false); setConfirmacion(null) } },
+          { texto: 'Desactivar', estilo: 'primario', onClick: () => { confirmacion?.resolve(true);  setConfirmacion(null) } },
+        ]}
+      />
     </div>
   )
 }

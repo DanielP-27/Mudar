@@ -4,6 +4,8 @@ import { FiPlus, FiEdit2, FiXCircle } from 'react-icons/fi'
 import { obtenerClientes, crearCliente, actualizarCliente, desactivarCliente } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
 import CampoFormulario from '../../components/common/CampoFormulario'
+import Toast from '../../components/common/Toast'
+import ModalBase from '../../components/common/ModalBase'
 
 const FORMULARIO_VACIO = { nombre_cliente: '', nit: '' }
 
@@ -22,6 +24,18 @@ function PaginaClientes() {
   const [mostrarFormulario, setMostrarFormulario] = useState(false)
   const [formulario, setFormulario]               = useState(FORMULARIO_VACIO)
   const [guardando, setGuardando]                 = useState(false)
+
+  // Toast de éxito (no bloqueante) — auto-cierra a los 5s
+  const [exito, setExito] = useState(null)
+  const mostrarExito = (msg) => {
+    setExito(msg)
+    setTimeout(() => setExito(null), 5000)
+  }
+
+  // Confirmación de desactivación — modal propio en vez de window.confirm()
+  const [confirmacion, setConfirmacion] = useState(null) // { mensaje, resolve } | null
+  const pedirConfirmacion = (mensaje) =>
+    new Promise(resolve => setConfirmacion({ mensaje, resolve }))
 
   // Carga el listado de clientes según filtros activos
   const cargarClientes = useCallback(async () => {
@@ -69,13 +83,15 @@ function PaginaClientes() {
     setGuardando(true)
     setError(null)
     try {
-      if (clienteEditando) {
+      const esEdicion = Boolean(clienteEditando)
+      if (esEdicion) {
         await actualizarCliente(clienteEditando.cliente_id, formulario)
       } else {
         await crearCliente(formulario)
       }
       await cargarClientes()
       cancelarFormulario()
+      mostrarExito(esEdicion ? 'Cliente actualizado exitosamente' : 'Cliente creado exitosamente')
     } catch {
       setError('Error al guardar el cliente.')
     } finally {
@@ -85,11 +101,12 @@ function PaginaClientes() {
 
   // Desactiva un cliente previa confirmación
   const manejarDesactivar = async (cliente) => {
-    if (!window.confirm('¿Desactivar este cliente?')) return
+    if (!await pedirConfirmacion('¿Está seguro que desea desactivar este cliente?')) return
     setError(null)
     try {
       await desactivarCliente(cliente.cliente_id)
       await cargarClientes()
+      mostrarExito('Cliente desactivado exitosamente')
     } catch {
       setError('Error al desactivar el cliente.')
     }
@@ -208,13 +225,15 @@ function PaginaClientes() {
                   <td className="px-4 py-2">
                     <div className="flex items-center justify-center gap-2">
                       <button onClick={() => abrirFormularioEditar(cliente)}
-                        className="text-[#1A56A0] hover:text-[#164685]" title="Editar">
-                        <FiEdit2 size={16} />
+                        className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100">
+                        <FiEdit2 size={14} />
+                        Editar
                       </button>
                       {cliente.activo && (
                         <button onClick={() => manejarDesactivar(cliente)}
-                          className="text-red-500 hover:text-red-700" title="Desactivar">
-                          <FiXCircle size={16} />
+                          className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border border-red-100 bg-red-50 text-red-700 hover:bg-red-100">
+                          <FiXCircle size={14} />
+                          Desactivar
                         </button>
                       )}
                     </div>
@@ -225,6 +244,20 @@ function PaginaClientes() {
           </tbody>
         </table>
       </div>
+
+      <Toast mensaje={exito} />
+
+      <ModalBase
+        abierto={!!confirmacion}
+        variante="confirmacion"
+        titulo="Confirmar desactivación"
+        mensaje={confirmacion?.mensaje}
+        onCerrar={() => { confirmacion?.resolve(false); setConfirmacion(null) }}
+        acciones={[
+          { texto: 'Cancelar',   estilo: 'peligro',  onClick: () => { confirmacion?.resolve(false); setConfirmacion(null) } },
+          { texto: 'Desactivar', estilo: 'primario', onClick: () => { confirmacion?.resolve(true);  setConfirmacion(null) } },
+        ]}
+      />
     </div>
   )
 }

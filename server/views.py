@@ -698,6 +698,37 @@ class ClienteDetalleView(APIView):
             status = status.HTTP_200_OK
         )
 
+    def patch(self, request, cliente_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes los permisos necesarios para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            cliente = Cliente.objects.get(cliente_id=cliente_id)
+        except Cliente.DoesNotExist:
+            return Response(
+                {'error': 'Cliente no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        activo = request.data.get('activo')
+        if activo is None:
+            return Response(
+                {'error': 'Debe indicar el estado activo del registro'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        cliente.activo = activo
+        cliente.save()
+
+        estado_txt = 'activado' if cliente.activo else 'desactivado'
+        return Response(
+            {'mensaje': f'Cliente {cliente.nombre_cliente} {estado_txt} correctamente'},
+            status=status.HTTP_200_OK
+        )
+
 # Catálogo No. 1b - Familias de producto
 # GET lista: todos los usuarios autenticados (dropdown productos)
 # POST / PUT / DELETE: solo ADMIN
@@ -852,6 +883,48 @@ class FamiliaProductoDetalleView(APIView):
             status=status.HTTP_200_OK
         )
 
+    def patch(self, request, familia_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes los permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            familia = FamiliaProducto.objects.get(familia_id=familia_id)
+        except FamiliaProducto.DoesNotExist:
+            return Response(
+                {'error': 'Familia no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        activo = request.data.get('activo')
+        if activo is None:
+            return Response(
+                {'error': 'Debe indicar el estado activo del registro'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Al desactivar, respeta la misma regla que delete: no permitir si tiene productos activos
+        if activo is False:
+            productos_activos = Productos.objects.filter(
+                familia_producto=familia, activo=True
+            ).count()
+            if productos_activos > 0:
+                return Response(
+                    {'error': f'No se puede desactivar. La familia tiene {productos_activos} producto(s) activo(s) asociado(s)'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        familia.activo = activo
+        familia.save()
+
+        estado_txt = 'activada' if familia.activo else 'desactivada'
+        return Response(
+            {'mensaje': f'Familia {familia.nombre_familia} {estado_txt} correctamente'},
+            status=status.HTTP_200_OK
+        )
+
 
 # Catalogo No. 2 - productos
 # para consulta (GET) todos los usuarios cuentan con acceso 
@@ -993,12 +1066,43 @@ class ProductoDetalleView(APIView):
                 status = status.HTTP_404_NOT_FOUND
             )
         
-        producto.activo = False 
+        producto.activo = False
         producto.save()
 
         return Response(
             {'mensaje': f'Producto {producto.nombre_producto} desactivado correctamente'},
             status = status.HTTP_200_OK
+        )
+
+    def patch(self, request, producto_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes los permisos necesarios para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            producto = Productos.objects.get(producto_id=producto_id)
+        except Productos.DoesNotExist:
+            return Response(
+                {'error': 'Producto no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        activo = request.data.get('activo')
+        if activo is None:
+            return Response(
+                {'error': 'Debe indicar el estado activo del registro'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        producto.activo = activo
+        producto.save()
+
+        estado_txt = 'activado' if producto.activo else 'desactivado'
+        return Response(
+            {'mensaje': f'Producto {producto.nombre_producto} {estado_txt} correctamente'},
+            status=status.HTTP_200_OK
         )
     
 # Catalogo No. 3 - turnos
@@ -1135,12 +1239,43 @@ class TurnoDetalleView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        turno.activo = False 
+        turno.activo = False
         turno.save()
 
         return Response(
             {'mensaje': f'turno{turno.nombre_turno} desactivado corrrectamente'},
             status = status.HTTP_200_OK
+        )
+
+    def patch(self, request, turno_id):
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tienes permisos para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            turno = Turno.objects.get(turno_id=turno_id)
+        except Turno.DoesNotExist:
+            return Response(
+                {'error': 'Turno no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        activo = request.data.get('activo')
+        if activo is None:
+            return Response(
+                {'error': 'Debe indicar el estado activo del registro'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        turno.activo = activo
+        turno.save()
+
+        estado_txt = 'activado' if turno.activo else 'desactivado'
+        return Response(
+            {'mensaje': f'Turno {turno.nombre_turno} {estado_txt} correctamente'},
+            status=status.HTTP_200_OK
         )
     
 # Catalogo No. 4 - listas predefinidas
@@ -1343,6 +1478,15 @@ class DomListView(APIView):
         estado = request.query_params.get('estado', None)
         if estado is not None:
             doms = doms.filter(tipo_estado_dom__iexact=estado)
+
+        # Filtro por número de DOM (dom_id) — coincidencia exacta.
+        # Valor no numérico → queryset vacío (no existe un DOM con ese número).
+        numero_dom = request.query_params.get('numero_dom', None)
+        if numero_dom:
+            try:
+                doms = doms.filter(dom_id=int(numero_dom))
+            except (ValueError, TypeError):
+                doms = doms.none()
 
         # Filtros nuevos
         responsable = request.query_params.get('responsable', None)

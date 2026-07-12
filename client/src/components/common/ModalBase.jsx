@@ -31,6 +31,7 @@ const ESTILOS_BOTON = {
   primario:   'text-white bg-[#1A56A0] hover:bg-[#134080]',
   peligro:    'text-white bg-red-600 hover:bg-red-700',
   secundario: 'text-gray-600 border border-gray-300 hover:bg-gray-50',
+  contorno:   'text-[#1A56A0] border border-[#1A56A0] hover:bg-blue-50',
 }
 
 function ModalBase({

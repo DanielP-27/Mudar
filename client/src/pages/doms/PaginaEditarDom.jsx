@@ -8,7 +8,7 @@ import {
 } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { puedeEditarEtapa, esSoloLectura } from '../../utils/permisos'
-import { toInt } from '../../utils/formatters'
+import { toInt, formatearFecha } from '../../utils/formatters'
 import { extraerMensajeError } from '../../utils/errores'
 import {
   obtenerDom, actualizarDom,
@@ -257,11 +257,11 @@ function PaginaEditarDom() {
   // Sincroniza personasConfirmadas con el valor persistido en DB
   // Si el registro activo ya tiene numero_personas_asignadas en DB → habilita el cronómetro sin re-confirmar
   useEffect(() => {
-    const valorEnDB = planeaciones[idxPlaneacion]
+    const valorEnDB = planeacionesOriginal[idxPlaneacion]
       ?.registros_produccion?.[idxProduccion]
       ?.numero_personas_asignadas
     setPersonasConfirmadas(valorEnDB != null && valorEnDB > 0)
-  }, [planeaciones, idxPlaneacion, idxProduccion])
+  }, [planeacionesOriginal, idxPlaneacion, idxProduccion])
 
   // ── Typeahead cliente ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -364,7 +364,7 @@ function PaginaEditarDom() {
 
   const mostrarExito = (msg) => {
     setExito(msg)
-    setTimeout(() => setExito(null), 3000)
+    setTimeout(() => setExito(null), 5000)
   }
 
   // Mensaje de confirmación mostrado antes de guardar un cambio que bloquea una etapa
@@ -1051,10 +1051,10 @@ function PaginaEditarDom() {
           <div className="space-y-6">
             <SeccionConsolidado titulo="Etapa 1 — Creación del DOM">
               <CampoConsolidado label="Número DOM"           valor={datosDom.dom_id} />
-              <CampoConsolidado label="Fecha asignación"     valor={datosDom.fecha_asignacion_dom} />
+              <CampoConsolidado label="Fecha asignación"     valor={formatearFecha(datosDom.fecha_asignacion_dom)} />
               <CampoConsolidado label="Cliente"              valor={datosDom.nombre_cliente_detalle} />
               <CampoConsolidado label="Tipo o estado DOM"    valor={datosDom.tipo_estado_dom} />
-              <CampoConsolidado label="Fecha solicitada"     valor={datosDom.fecha_solicitada_cliente} />
+              <CampoConsolidado label="Fecha solicitada"     valor={formatearFecha(datosDom.fecha_solicitada_cliente)} />
               <CampoConsolidado label="Responsable"          valor={datosDom.responsable} />
               <CampoConsolidado label="Descripción"          valor={datosDom.descripcion} />
             </SeccionConsolidado>
@@ -1072,7 +1072,7 @@ function PaginaEditarDom() {
 
                 {planActual && (
                   <SeccionConsolidado titulo="Etapa 3 — Planeación">
-                    <CampoConsolidado label="Fecha planeación"                       valor={planActual.fecha_planeacion} />
+                    <CampoConsolidado label="Fecha planeación"                       valor={formatearFecha(planActual.fecha_planeacion)} />
                     <CampoConsolidado label="Turno"                                  valor={planActual.turno_detalle?.nombre_turno} />
                     <CampoConsolidado label="Número de operarios"                    valor={planActual.numero_operarios_turno} />
                     <CampoConsolidado label="Capacidad del turno (min)"              valor={planActual.capacidad_turno_dia} />
@@ -1125,8 +1125,8 @@ function PaginaEditarDom() {
                 <SeccionConsolidado titulo="Etapa 7 — Despachos">
                   {/* Etiqueta "Fecha de entrega planificada" por convención del cliente;
                       el dato subyacente es fecha_entrega_pactada (ver deuda técnica en el modelo). */}
-                  <CampoConsolidado label="Fecha de entrega planificada" valor={datosDom.fecha_entrega_pactada} />
-                  <CampoConsolidado label="Fecha entrega proyectada"   valor={datosDom.fecha_entrega_proyectada} />
+                  <CampoConsolidado label="Fecha de entrega planificada" valor={formatearFecha(datosDom.fecha_entrega_pactada)} />
+                  <CampoConsolidado label="Fecha entrega proyectada"   valor={formatearFecha(datosDom.fecha_entrega_proyectada)} />
                   <CampoConsolidado label="Cantidad empaques"          valor={datosDom.cantidad_empaques} />
                   <CampoConsolidado label="Empaque servicio"           valor={datosDom.empaque_servicio} />
                   <CampoConsolidado label="Tipo negociación"           valor={datosDom.tipo_negociacion} />
@@ -1154,7 +1154,7 @@ function PaginaEditarDom() {
           >
             <div className="grid grid-cols-2 gap-4">
               <CampoLectura label="Número DOM"          valor={datosDom.dom_id} />
-              <CampoLectura label="Fecha asignación DOM" valor={datosDom.fecha_asignacion_dom} />
+              <CampoLectura label="Fecha asignación DOM" valor={formatearFecha(datosDom.fecha_asignacion_dom)} />
             </div>
 
             {/* Tipo DOM — bloqueado para evitar cambio entre administrativo/productivo */}
@@ -1230,7 +1230,7 @@ function PaginaEditarDom() {
             onCancelar={() => setMostrarModalCancelar(true)}
           >
             <div className="grid grid-cols-2 gap-4">
-              <CampoLectura label="Fecha asignación DOM" valor={datosDom.fecha_asignacion_dom} />
+              <CampoLectura label="Fecha asignación DOM" valor={formatearFecha(datosDom.fecha_asignacion_dom)} />
               <CampoLectura label="Número DOM"           valor={datosDom.dom_id} />
             </div>
 
@@ -1372,7 +1372,7 @@ function PaginaEditarDom() {
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Fechas de entrega del DOM</h3>
             <div className="grid grid-cols-2 gap-4">
               <CampoConsolidado label="Fecha de entrega solicitada por el cliente"
-                valor={datosDom.fecha_solicitada_cliente} />
+                valor={formatearFecha(datosDom.fecha_solicitada_cliente)} />
               <CampoFormulario label="Fecha de entrega proyectada">
                 <input type="date" value={datosDom.fecha_entrega_proyectada ?? ''}
                   onChange={e => actualizarCampoDom('fecha_entrega_proyectada', e.target.value)}
@@ -1819,6 +1819,25 @@ function PaginaEditarDom() {
             >
               {produccionActual && (
                 <>
+                  {/* Contexto de la planeación madre — solo lectura.
+                      El número de operarios por turno lo asigna el planeador. */}
+                  <div className="bg-blue-50 border border-blue-100 border-l-4 border-l-[#1A56A0] rounded-lg p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <CampoLectura
+                        label="Fecha de planeación"
+                        valor={formatearFecha(planActual?.fecha_planeacion)}
+                      />
+                      <CampoLectura
+                        label="Turno"
+                        valor={planActual?.turno_detalle?.nombre_turno}
+                      />
+                      <CampoLectura
+                        label="Número de personas asignadas en este turno"
+                        valor={planActual?.numero_operarios_turno}
+                      />
+                    </div>
+                  </div>
+
                   {/* Paso 1 del flujo productivo: personas asignadas ANTES del cronómetro
                       (el cronómetro requiere confirmar las personas para poder operar).
                       A ancho completo del contenedor. */}
@@ -1832,8 +1851,14 @@ function PaginaEditarDom() {
                         const val = produccionActual.numero_personas_asignadas
                         if (val && parseInt(val) > 0) setMostrarModalPersonas(true)
                       }}
-                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion}
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || personasConfirmadas}
                       className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                    {personasConfirmadas && (
+                      <p className="flex items-center gap-1 text-xs text-gray-500 mt-1">
+                        <FiLock size={12} />
+                        Confirmado — no editable
+                      </p>
+                    )}
                   </CampoFormulario>
 
                   <CronometroProduccion
@@ -2170,6 +2195,9 @@ function PaginaEditarDom() {
       >
         Este dato es necesario para calcular los <strong>minutos hombre de producción</strong> y
         los <strong>minutos restantes</strong> al finalizar el cronómetro.
+        <span className="block mt-3 font-bold text-gray-800">
+          Tenga en cuenta que este dato, una vez confirmado, no se puede cambiar.
+        </span>
         <span className="block mt-3 text-gray-800 font-medium">
           ¿Confirmar{' '}
           <span className="text-[#1A56A0] font-bold">
@@ -2335,11 +2363,11 @@ function BloqueoEtapa({ children }) {
 // Campo de solo lectura con nota informativa
 function CampoLectura({ label, valor, nota }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1 h-full">
       <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
         {label}
       </label>
-      <div className="campo-input bg-gray-100 text-gray-700 cursor-not-allowed">
+      <div className="campo-input bg-gray-100 text-gray-700 cursor-not-allowed mt-auto">
         {valor ?? '—'}
       </div>
       {nota && <p className="text-xs text-gray-400">{nota}</p>}

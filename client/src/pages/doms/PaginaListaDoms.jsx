@@ -9,6 +9,7 @@ import { useDebounce } from '../../hooks/useDebounce'
 import { ROLES } from '../../routes/RoleRoute'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import { extraerMensajeError } from '../../utils/errores'
+import { formatearFecha } from '../../utils/formatters'
 
 // Roles que pueden editar DOMs
 const ROLES_EDITAR = [
@@ -32,6 +33,7 @@ function PaginaListaDoms() {
   const PAGE_SIZE = 20
 
   // Filtros
+  const [filtroNumeroDom, setFiltroNumeroDom]   = useState('')
   const [filtroEstado, setFiltroEstado]         = useState('')
   const [filtroResponsable, setFiltroResponsable] = useState('')
   const [filtroFechaInicio, setFiltroFechaInicio] = useState('')
@@ -42,6 +44,9 @@ function PaginaListaDoms() {
 
   // Filtro por fecha de planeación (fecha exacta, no rango)
   const [filtroFechaPlaneacion, setFiltroFechaPlaneacion] = useState('')
+
+  // Versión debounced del número de DOM (evita una petición por cada dígito)
+  const numeroDomDebounced = useDebounce(filtroNumeroDom, 300)
 
   // Typeahead cliente
   const [busquedaCliente, setBusquedaCliente]           = useState('')
@@ -84,6 +89,7 @@ function PaginaListaDoms() {
         dom_liberado_cierre: false,
       }
       if (clienteSeleccionado) filtros.cliente  = clienteSeleccionado.cliente_id
+      if (numeroDomDebounced)  filtros.numero_dom = numeroDomDebounced
       if (filtroEstado)        filtros.estado   = filtroEstado
       if (filtroResponsable)   filtros.responsable = filtroResponsable
       if (filtroFechaInicio)   filtros.fecha_inicio = filtroFechaInicio
@@ -104,7 +110,7 @@ function PaginaListaDoms() {
     } finally {
       setCargando(false)
     }
-  }, [clienteSeleccionado, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin, filtroFechaPlaneacion, ordenamiento])
+  }, [clienteSeleccionado, numeroDomDebounced, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin, filtroFechaPlaneacion, ordenamiento])
 
   // Carga inicial y cuando cambian los filtros
   useEffect(() => {
@@ -115,6 +121,7 @@ function PaginaListaDoms() {
   const limpiarFiltros = () => {
     setBusquedaCliente('')
     setClienteSeleccionado(null)
+    setFiltroNumeroDom('')
     setFiltroEstado('')
     setFiltroResponsable('')
     setFiltroFechaInicio('')
@@ -153,6 +160,18 @@ function PaginaListaDoms() {
         {/* Cuerpo */}
         <div className="p-4">
         <div className="grid grid-cols-2 gap-3 mb-3">
+
+          {/* Número de DOM */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+              No. DOM
+            </label>
+            <input type="number" min="1"
+              value={filtroNumeroDom}
+              onChange={e => setFiltroNumeroDom(e.target.value)}
+              placeholder="Ej. 75"
+              className="campo-input" />
+          </div>
 
           {/* Typeahead cliente */}
           <div className="flex flex-col gap-1">
@@ -329,9 +348,7 @@ function PaginaListaDoms() {
                     {/* Fecha entrega — fecha efectiva (proyectada, o solicitada si no hay) */}
                     <td className={`px-4 py-3 text-sm
                       ${vencido ? 'text-red-600 font-medium' : 'text-gray-600'}`}>
-                      {dom.fecha_criterio
-                        ? new Date(dom.fecha_criterio).toLocaleDateString('es-CO')
-                        : '—'}
+                      {formatearFecha(dom.fecha_criterio)}
                     </td>
 
                     {/* Estado vencimiento — clasificación del backend (nivel_urgencia) */}

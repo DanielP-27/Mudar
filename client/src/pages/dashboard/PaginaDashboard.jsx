@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { obtenerDashboard } from '../../api/dashboard'
 import { extraerMensajeError } from '../../utils/errores'
+import { formatearFecha } from '../../utils/formatters'
 
 // Colores de fondo/texto según el resultado de cumplimiento
 const ESTILOS_CUMPLIMIENTO = {
@@ -239,9 +240,7 @@ function ListaAlertaDoms({ titulo, doms, colorTexto, colorFondo }) {
               {' — '}
               {dom.nombre_cliente_detalle ?? '—'}
               {' — '}
-              {dom.fecha_criterio
-                ? new Date(dom.fecha_criterio).toLocaleDateString('es-CO')
-                : '—'}
+              {formatearFecha(dom.fecha_criterio)}
             </li>
           ))}
         </ul>

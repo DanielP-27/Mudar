@@ -5,7 +5,7 @@ import { FiEye, FiFileText, FiBriefcase, FiPlus, FiTrash2 } from 'react-icons/fi
 import { crearDom } from '../../api/doms'
 import { obtenerClientes, obtenerProductos, obtenerListasPorTipo } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
-import { toInt } from '../../utils/formatters'
+import { toInt, formatearFecha } from '../../utils/formatters'
 import { extraerMensajeError } from '../../utils/errores'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
@@ -161,6 +161,29 @@ function PaginaCrearDom() {
   const eliminarProducto = (idx) =>
     setProductosAgregados(prev => prev.filter((_, i) => i !== idx))
 
+  // Reinicia el formulario a su estado inicial para crear otro DOM sin salir de la
+  // página (navegar a la misma ruta no remonta el componente, así que se limpia a mano).
+  const reiniciarFormulario = () => {
+    setDatosEtapa0(estadoInicialEtapa0)
+    setDatosEtapa1(estadoInicialEtapa1)
+    setProductosAgregados([])
+    setPestanaActiva('etapa0')
+
+    // Typeahead cliente / producto
+    setBusquedaCliente('')
+    setSugerenciasCliente([])
+    setMostrarSugerenciasCliente(false)
+    setBusquedaProducto('')
+    setSugerenciasProducto([])
+    setMostrarSugerenciasProducto(false)
+    setCantidadProducto('')
+    setProductoSeleccionado(null)
+
+    // Cierra el modal de éxito y limpia cualquier error residual
+    setError(null)
+    setDomCreado(null)
+  }
+
   // Envía el formulario al backend
   const manejarCrear = async () => {
     // Validar producto obligatorio para DOMs productivos
@@ -245,7 +268,7 @@ function PaginaCrearDom() {
           {/* Campos automáticos */}
           <div className="grid grid-cols-2 gap-4">
             <CampoLectura label="Fecha asignación DOM"
-              valor={new Date().toLocaleDateString('es-CO')}
+              valor={formatearFecha(new Date())}
               nota="Se genera automáticamente" />
             <CampoLectura label="Número DOM"
               valor="El número de registro DOM es asignado automaticamente por el sistema al guardar el registro"
@@ -401,7 +424,7 @@ function PaginaCrearDom() {
                 {/* Campos automáticos */}
                 <div className="grid grid-cols-2 gap-4">
                   <CampoLectura label="Fecha asignación DOM"
-                    valor={new Date().toLocaleDateString('es-CO')}
+                    valor={formatearFecha(new Date())}
                     nota="Se genera automáticamente" />
                   <CampoLectura label="Número DOM"
                     valor="Automático"
@@ -638,6 +661,7 @@ function PaginaCrearDom() {
         onCerrar={() => navegar('/dashboard')}
         acciones={[
           { texto: 'Continuar editando este DOM', estilo: 'primario', onClick: () => navegar(`/doms/${domCreado?.dom_id}/editar`) },
+          { texto: 'Crear otro registro DOM', estilo: 'contorno', onClick: reiniciarFormulario },
           { texto: 'Ir a la página principal', estilo: 'secundario', onClick: () => navegar('/dashboard') },
         ]}
       >
