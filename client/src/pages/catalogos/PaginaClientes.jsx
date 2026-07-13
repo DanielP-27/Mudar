@@ -3,9 +3,12 @@ import { useState, useEffect, useCallback } from 'react'
 import { FiPlus, FiEdit2, FiXCircle } from 'react-icons/fi'
 import { obtenerClientes, crearCliente, actualizarCliente, desactivarCliente } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
+import { useEsEscritorio } from '../../hooks/useEsEscritorio'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import Toast from '../../components/common/Toast'
 import ModalBase from '../../components/common/ModalBase'
+import Par from '../../components/common/Par'
+import Paginacion from '../../components/common/Paginacion'
 
 const FORMULARIO_VACIO = { nombre_cliente: '', nit: '' }
 
@@ -18,6 +21,11 @@ function PaginaClientes() {
   const [busqueda, setBusqueda]       = useState('')
   const [filtroActivo, setFiltroActivo] = useState('')
   const textoDebounced = useDebounce(busqueda, 300)
+
+  // Paginación en cliente — 20 filas por página en escritorio, 10 en móvil
+  const esEscritorio = useEsEscritorio()
+  const POR_PAGINA = esEscritorio ? 20 : 10
+  const [pagina, setPagina] = useState(1)
 
   // Formulario
   const [clienteEditando, setClienteEditando]     = useState(null)
@@ -56,6 +64,19 @@ function PaginaClientes() {
   useEffect(() => {
     cargarClientes()
   }, [cargarClientes])
+
+  // Al cambiar búsqueda o filtro, vuelve a la primera página
+  useEffect(() => { setPagina(1) }, [textoDebounced, filtroActivo])
+
+  // Corrige la página si quedó fuera de rango: menos resultados tras filtrar, o
+  // cambio de breakpoint escritorio↔móvil (que cambia POR_PAGINA y totalPaginas)
+  const totalPaginas = Math.max(1, Math.ceil(clientes.length / POR_PAGINA))
+  useEffect(() => {
+    if (pagina > totalPaginas) setPagina(totalPaginas)
+  }, [pagina, totalPaginas])
+
+  // Pedazo de la lista visible en la página actual (lo usan tabla y tarjetas)
+  const clientesPagina = clientes.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
 
   // Abre el formulario vacío para crear un nuevo cliente
   const abrirFormularioNuevo = () => {
@@ -188,8 +209,13 @@ function PaginaClientes() {
         </select>
       </div>
 
-      {/* Tabla */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      {/* Paginación superior */}
+      {!cargando && clientes.length > 0 && (
+        <Paginacion pagina={pagina} totalPaginas={totalPaginas} total={clientes.length} onPagina={setPagina} />
+      )}
+
+      {/* Tabla (escritorio) */}
+      <div className="hidden md:block bg-white rounded-lg border border-gray-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-[#1A56A0] text-white">
@@ -209,7 +235,7 @@ function PaginaClientes() {
                 <td colSpan={4} className="text-center py-8 text-gray-400 text-sm">Sin registros</td>
               </tr>
             ) : (
-              clientes.map((cliente, i) => (
+              clientesPagina.map((cliente, i) => (
                 <tr key={cliente.cliente_id}
                   className={`border-t border-gray-100
                     ${cliente.activo ? '' : 'opacity-50'}
@@ -244,6 +270,48 @@ function PaginaClientes() {
           </tbody>
         </table>
       </div>
+
+      {/* Tarjetas (móvil) */}
+      <div className="md:hidden space-y-3">
+        {cargando ? (
+          <div className="bg-white rounded-lg border border-gray-200 py-8 text-center text-gray-400 text-sm">Cargando...</div>
+        ) : clientes.length === 0 ? (
+          <div className="bg-white rounded-lg border border-gray-200 py-8 text-center text-gray-400 text-sm">Sin registros</div>
+        ) : (
+          clientesPagina.map((cliente) => (
+            <div key={cliente.cliente_id}
+              className={`bg-white rounded-lg border border-gray-200 p-4 ${cliente.activo ? '' : 'opacity-50'}`}>
+              <Par etiqueta="NIT">{cliente.nit ?? '—'}</Par>
+              <Par etiqueta="Nombre cliente">{cliente.nombre_cliente}</Par>
+              <Par etiqueta="Estado">
+                <span className={`px-2 py-1 text-xs rounded-full font-medium
+                  ${cliente.activo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {cliente.activo ? 'Activo' : 'Inactivo'}
+                </span>
+              </Par>
+              <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+                <button onClick={() => abrirFormularioEditar(cliente)}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100">
+                  <FiEdit2 size={14} />
+                  Editar
+                </button>
+                {cliente.activo && (
+                  <button onClick={() => manejarDesactivar(cliente)}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-red-100 bg-red-50 text-red-700 hover:bg-red-100">
+                    <FiXCircle size={14} />
+                    Desactivar
+                  </button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Paginación inferior */}
+      {!cargando && clientes.length > 0 && (
+        <Paginacion pagina={pagina} totalPaginas={totalPaginas} total={clientes.length} onPagina={setPagina} />
+      )}
 
       <Toast mensaje={exito} />
 

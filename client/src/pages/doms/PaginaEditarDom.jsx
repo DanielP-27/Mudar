@@ -29,6 +29,7 @@ import CronometroProduccion from '../../components/common/CronometroProduccion'
 import ModalMensaje from '../../components/common/ModalMensaje'
 import ModalBase from '../../components/common/ModalBase'
 import Toast from '../../components/common/Toast'
+import Par from '../../components/common/Par'
 
 // Tipos de DOM administrativos — no llevan etapas de producción
 const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
@@ -2427,7 +2428,9 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
       .filter(Boolean)
 
   return (
-    <div className="mb-4 border border-gray-200 rounded overflow-hidden">
+    <>
+    {/* Tabla (escritorio) */}
+    <div className="hidden md:block mb-4 border border-gray-200 rounded overflow-hidden">
       <table className="w-full text-sm">
         <thead className="bg-gray-100 text-xs text-gray-500 uppercase">
           <tr>
@@ -2494,7 +2497,7 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
                             <Fragment key={d.planeacionId}>
                               <tr className="border-t border-gray-200">
                                 <td className="py-1 pl-3 text-gray-700">#{d.numero_registro}</td>
-                                <td className="py-1 text-gray-600">{d.turno ?? '—'} · {d.fecha ?? '—'}</td>
+                                <td className="py-1 text-gray-600">{d.turno ?? '—'} · {formatearFecha(d.fecha)}</td>
                                 <td className="py-1 text-center text-gray-700">{d.proyectada || '—'}</td>
                                 <td className="py-1 text-center text-gray-700">{d.elaborada || '—'}</td>
                                 <td className="py-1 text-center text-gray-700">{d.pendiente > 0 ? d.pendiente : '—'}</td>
@@ -2522,6 +2525,77 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
         </tbody>
       </table>
     </div>
+
+    {/* Tarjetas (móvil) */}
+    <div className="md:hidden border-y-2 border-[#1A56A0] py-4 space-y-3 mb-4">
+      <h4 className="flex items-center gap-2 text-base font-semibold text-gray-700 uppercase tracking-wide">
+        <span className="w-1 h-5 bg-[#1A56A0] rounded-sm"></span>
+        Productos del DOM
+      </h4>
+      {productos.map((p) => {
+        const proyectada = proyectadaPorProducto(p.id)
+        const elaborada  = elaboradaPorProducto(p.id)
+        const pendientePorProyectar = (p.cantidad_pedido ?? 0) - (proyectada ?? 0)
+        const proyectadaPendiente = (proyectada ?? 0) - elaborada
+        const puedeExpandir = proyectada > 0 || elaborada > 0
+        const expandido = expandidos.has(p.id)
+        return (
+          <div key={p.id} className="border border-gray-200 rounded-lg p-4 bg-white">
+            <div className="font-medium text-gray-800 mb-2">
+              {p.tipo_producto_detalle?.nombre_producto ?? '—'}
+            </div>
+            <Par etiqueta="Tiempo unit. (min)">{p.tipo_producto_detalle?.tiempo_produccion_unitario ?? '—'}</Par>
+            <Par etiqueta="Cantidad pedido">{p.cantidad_pedido ?? '—'}</Par>
+            <Par etiqueta="Cantidad planeada">{proyectada || '—'}</Par>
+            <Par etiqueta="Pendiente por planear">
+              <span className={pendientePorProyectar > 0 ? 'text-orange-600 font-medium' : 'text-green-600 font-medium'}>
+                {Math.max(0, pendientePorProyectar)}
+              </span>
+            </Par>
+            <Par etiqueta="Cantidad elaborada">{elaborada}</Par>
+            <Par etiqueta="Pendiente por producir">
+              <span className={proyectadaPendiente > 0 ? 'text-amber-600 font-medium' : 'text-green-600 font-medium'}>
+                {Math.max(0, proyectadaPendiente)}
+              </span>
+            </Par>
+
+            {puedeExpandir && (
+              <>
+                <button onClick={() => toggleExpandido(p.id)}
+                  className="flex items-center gap-1.5 mt-3 pt-3 border-t border-gray-100 w-full text-xs font-medium text-[#1A56A0]">
+                  {expandido ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
+                  {expandido ? 'Ocultar desglose por planeación' : 'Ver desglose por planeación'}
+                </button>
+                {expandido && (
+                  <div className="mt-3 space-y-2">
+                    {desglosePorPlaneacion(p.id).map(d => (
+                      <div key={d.planeacionId} className="rounded-md bg-gray-50 border border-gray-200 p-3">
+                        <Par etiqueta="Planeación">#{d.numero_registro}</Par>
+                        <Par etiqueta="Turno · Fecha">{d.turno ?? '—'} · {formatearFecha(d.fecha)}</Par>
+                        <Par etiqueta="Planeada">{d.proyectada || '—'}</Par>
+                        <Par etiqueta="Elaborada">{d.elaborada || '—'}</Par>
+                        <Par etiqueta="Pendiente">{d.pendiente > 0 ? d.pendiente : '—'}</Par>
+                        {d.producciones.length > 1 && (
+                          <div className="mt-2 pt-2 border-t border-gray-200 space-y-0.5">
+                            {d.producciones.map(prod => (
+                              <div key={prod.numero_registro} className="flex justify-between text-xs text-gray-500">
+                                <span>↳ Producción #{prod.numero_registro}</span>
+                                <span>{prod.cantidad_elaborada}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )
+      })}
+    </div>
+    </>
   )
 }
 

@@ -1,13 +1,16 @@
 // src/pages/doms/PaginaListaDoms.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiSearch, FiEdit2, FiEye, FiChevronLeft, FiChevronRight, FiRotateCcw } from 'react-icons/fi'
+import { FiSearch, FiEdit2, FiEye, FiRotateCcw } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { obtenerDoms } from '../../api/doms'
 import { obtenerClientes, obtenerListasPorTipo } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
+import { useEsEscritorio } from '../../hooks/useEsEscritorio'
 import { ROLES } from '../../routes/RoleRoute'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
+import Par from '../../components/common/Par'
+import Paginacion from '../../components/common/Paginacion'
 import { extraerMensajeError } from '../../utils/errores'
 import { formatearFecha } from '../../utils/formatters'
 
@@ -26,11 +29,12 @@ function PaginaListaDoms() {
   const [cargando, setCargando]   = useState(true)
   const [error, setError]         = useState(null)
 
-  // Paginación
+  // Paginación (server-side) — 20 por página en escritorio, 10 en móvil
+  const esEscritorio = useEsEscritorio()
   const [paginaActual, setPaginaActual]   = useState(1)
   const [totalPaginas, setTotalPaginas]   = useState(1)
   const [totalRegistros, setTotalRegistros] = useState(0)
-  const PAGE_SIZE = 20
+  const PAGE_SIZE = esEscritorio ? 20 : 10
 
   // Filtros
   const [filtroNumeroDom, setFiltroNumeroDom]   = useState('')
@@ -110,7 +114,7 @@ function PaginaListaDoms() {
     } finally {
       setCargando(false)
     }
-  }, [clienteSeleccionado, numeroDomDebounced, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin, filtroFechaPlaneacion, ordenamiento])
+  }, [clienteSeleccionado, numeroDomDebounced, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin, filtroFechaPlaneacion, ordenamiento, PAGE_SIZE])
 
   // Carga inicial y cuando cambian los filtros
   useEffect(() => {
@@ -287,8 +291,15 @@ function PaginaListaDoms() {
       {/* Error */}
       {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
 
-      {/* Tabla */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      {/* Paginación superior */}
+      {!cargando && doms.length > 0 && (
+        <div className="mb-4">
+          <Paginacion pagina={paginaActual} totalPaginas={totalPaginas} total={totalRegistros} onPagina={cargarDoms} />
+        </div>
+      )}
+
+      {/* Tabla (escritorio) */}
+      <div className="hidden md:block bg-white rounded-lg border border-gray-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-[#1A56A0] text-white">
@@ -393,32 +404,70 @@ function PaginaListaDoms() {
             )}
           </tbody>
         </table>
+      </div>
 
-        {/* Paginación */}
-        {!cargando && doms.length > 0 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
-            <span className="text-xs text-gray-500">
-              Página {paginaActual} de {totalPaginas} — {totalRegistros} registros
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => cargarDoms(paginaActual - 1)}
-                disabled={paginaActual === 1}
-                className="p-1.5 rounded border border-gray-300 text-gray-600
-                           hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
-                <FiChevronLeft size={15} />
-              </button>
-              <button
-                onClick={() => cargarDoms(paginaActual + 1)}
-                disabled={paginaActual === totalPaginas}
-                className="p-1.5 rounded border border-gray-300 text-gray-600
-                           hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
-                <FiChevronRight size={15} />
-              </button>
-            </div>
-          </div>
+      {/* Tarjetas (móvil) */}
+      <div className="md:hidden space-y-3">
+        {cargando ? (
+          <div className="bg-white rounded-lg border border-gray-200 py-8 text-center text-gray-400 text-sm">Cargando registros...</div>
+        ) : doms.length === 0 ? (
+          <div className="bg-white rounded-lg border border-gray-200 py-8 text-center text-gray-400 text-sm">No se encontraron registros DOM con los filtros seleccionados.</div>
+        ) : (
+          doms.map((dom) => {
+            const vencido = estaVencido(dom)
+            return (
+              <div key={dom.dom_id}
+                className={`rounded-lg border p-4 ${vencido ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+                <Par etiqueta="DOM"><span className="font-medium text-[#1A56A0]">#{dom.dom_id}</span></Par>
+                <Par etiqueta="Cliente">{dom.nombre_cliente_detalle}</Par>
+                <Par etiqueta="Responsable">{dom.responsable}</Par>
+                <Par etiqueta="Estado">
+                  <span className="px-2 py-1 text-xs rounded-full bg-blue-50 text-blue-700">
+                    {dom.tipo_estado_dom}
+                  </span>
+                </Par>
+                <Par etiqueta="Fecha entrega">
+                  <span className={vencido ? 'text-red-600 font-medium' : ''}>
+                    {formatearFecha(dom.fecha_criterio)}
+                  </span>
+                </Par>
+                <Par etiqueta="Vencimiento">
+                  {vencido ? (
+                    <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-medium">Vencido</span>
+                  ) : dom.nivel_urgencia === 1 ? (
+                    <span className="px-2 py-1 text-xs rounded-full bg-amber-100 text-amber-700">Vence pronto</span>
+                  ) : (
+                    <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">Activo</span>
+                  )}
+                </Par>
+                <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+                  <button
+                    onClick={() => navegar(`/doms/${dom.dom_id}`)}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-violet-100 bg-violet-50 text-violet-700 hover:bg-violet-100">
+                    <FiEye size={14} />
+                    Ver
+                  </button>
+                  {puedeEditar && (
+                    <button
+                      onClick={() => navegar(`/doms/${dom.dom_id}/editar`)}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100">
+                      <FiEdit2 size={14} />
+                      Editar
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })
         )}
       </div>
+
+      {/* Paginación inferior */}
+      {!cargando && doms.length > 0 && (
+        <div className="mt-4">
+          <Paginacion pagina={paginaActual} totalPaginas={totalPaginas} total={totalRegistros} onPagina={cargarDoms} />
+        </div>
+      )}
 
     </div>
   )

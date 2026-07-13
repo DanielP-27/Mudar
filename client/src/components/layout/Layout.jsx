@@ -4,11 +4,12 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAutenticacion } from '../../context/AuthContext'
 import { ROLES } from '../../routes/RoleRoute'
 import Spinner from '../ui/Spinner'
+import { useEsEscritorio } from '../../hooks/useEsEscritorio'
 
 // Iconos de react-icons
 import { MdDashboard, MdMenu } from 'react-icons/md'
 import { BsFileEarmarkText, BsPlusCircle, BsPencil, BsXCircle } from 'react-icons/bs'
-import { FiUsers, FiBox, FiBarChart2, FiChevronDown, FiChevronUp } from 'react-icons/fi'
+import { FiUsers, FiBox, FiBarChart2, FiChevronDown, FiChevronUp, FiX } from 'react-icons/fi'
 
 // Importación logo Mudar
 import logo_mudar from '../../assets/logo_mudar.png'
@@ -28,6 +29,14 @@ function Layout({ modoLogin = false }) {
   // control de submenús abiertos — objeto { clave: boolean }
   const [menuAbierto, setMenuAbierto] = useState({})
   const navegar = useNavigate()
+
+  // Drawer (móvil): panel del sidebar abierto/cerrado. En escritorio no aplica.
+  const [drawerAbierto, setDrawerAbierto] = useState(false)
+
+  // El colapso (barra angosta w-14) es SOLO de escritorio; en móvil el sidebar
+  // va siempre completo, con etiquetas. Ver hook useEsEscritorio.
+  const esEscritorio = useEsEscritorio()
+  const colapsado = esEscritorio && !expandido
 
   // Alterna el estado abierto/cerrado de un submenú
   const toggleMenu = (clave) => {
@@ -61,21 +70,33 @@ function Layout({ modoLogin = false }) {
   return (
     <div className="flex h-screen overflow-hidden bg-gray-100">
 
+      {/* Overlay del drawer — solo móvil; al tocar, cierra */}
+      {drawerAbierto && (
+        <div onClick={() => setDrawerAbierto(false)}
+             className="fixed inset-0 bg-black/40 z-30 md:hidden" />
+      )}
+
       {/* ── Sidebar ─────────────────────────────────────────────── */}
+      {/* Móvil: drawer fijo fuera del lienzo que entra deslizando (translate-x).
+          Escritorio (md:): vuelve al flujo y conserva el colapso w-64/w-14. */}
       <aside className={`
-        flex flex-col bg-[#1A56A0] text-white transition-all duration-200
-        ${expandido ? 'w-64' : 'w-14'}
+        flex flex-col bg-[#1A56A0] text-white z-40
+        fixed inset-y-0 left-0 w-64
+        transition-transform duration-200
+        ${drawerAbierto ? 'translate-x-0' : '-translate-x-full'}
+        md:static md:translate-x-0 md:transition-all
+        ${expandido ? 'md:w-64' : 'md:w-14'}
       `}>
 
         {/* Logo + nombre app */}
         <div className={`border-b border-white/15
-          ${expandido
-            ? 'flex items-center gap-3 px-3 py-4'
-            : 'flex flex-col items-center py-4 gap-2'
+          ${colapsado
+            ? 'flex flex-col items-center py-4 gap-2'
+            : 'flex items-center gap-3 px-3 py-4'
           }`}>
           <img src={logo_mudar} alt="Mudar de Colombia"
               className="w-8 h-8 object-contain flex-shrink-0" />
-          {expandido && (
+          {!colapsado && (
             <span className="text-xs font-medium leading-tight flex-1">
               App Gestión DOM'S<br />Mudar de Colombia
             </span>
@@ -83,16 +104,26 @@ function Layout({ modoLogin = false }) {
           {!modoLogin && (
             <button
               onClick={() => setExpandido(prev => !prev)}
-              className="text-white hover:text-white/70"
+              className="hidden md:block text-white hover:text-white/70"
               aria-label="Alternar sidebar">
               <MdMenu size={20} />
+            </button>
+          )}
+          {/* Cerrar el drawer — solo móvil */}
+          {!modoLogin && (
+            <button
+              onClick={() => setDrawerAbierto(false)}
+              className="md:hidden text-white hover:text-white/70"
+              aria-label="Cerrar menú">
+              <FiX size={20} />
             </button>
           )}
         </div>
 
         {/* Navegación — oculta en modo login */}
         {!modoLogin && (
-          <nav className="flex-1 overflow-y-auto py-3 space-y-1 px-2">
+          <nav onClick={(e) => e.target.closest('a') && setDrawerAbierto(false)}
+               className="flex-1 overflow-y-auto py-3 space-y-1 px-2">
 
             {/* Dashboard — sin submenú */}
             <NavLink
@@ -103,18 +134,18 @@ function Layout({ modoLogin = false }) {
               `}
             >
               <MdDashboard size={18} className="flex-shrink-0" />
-              {expandido && <span>Dashboard</span>}
+              {!colapsado && <span>Dashboard</span>}
             </NavLink>
 
             {/* DOMs — con submenú acordeón */}
             <div>
               <button
-                onClick={() => expandido && toggleMenu('doms')}
+                onClick={() => !colapsado && toggleMenu('doms')}
                 className="w-full flex items-center gap-3 px-2 py-2 rounded text-sm
                            hover:bg-white/10"
               >
                 <BsFileEarmarkText size={18} className="flex-shrink-0" />
-                {expandido && (
+                {!colapsado && (
                   <>
                     <span className="flex-1 text-left">DOMs</span>
                     {menuAbierto['doms']
@@ -126,7 +157,7 @@ function Layout({ modoLogin = false }) {
               </button>
 
               {/* Submenú DOMs */}
-              {expandido && menuAbierto['doms'] && (
+              {!colapsado && menuAbierto['doms'] && (
                 <div className="ml-7 mt-1 space-y-1">
                   {ROLES_CREAR_DOM.includes(usuario?.rol) && (
                     <NavLink to="/doms/crear"
@@ -172,7 +203,7 @@ function Layout({ modoLogin = false }) {
                   `}
                 >
                   <FiUsers size={18} className="flex-shrink-0" />
-                  {expandido && <span>Clientes</span>}
+                  {!colapsado && <span>Clientes</span>}
                 </NavLink>
 
                 {/* Productos — sin submenú */}
@@ -184,7 +215,7 @@ function Layout({ modoLogin = false }) {
                   `}
                 >
                   <FiBox size={18} className="flex-shrink-0" />
-                  {expandido && <span>Productos</span>}
+                  {!colapsado && <span>Productos</span>}
                 </NavLink>
               </>
             )}
@@ -192,12 +223,12 @@ function Layout({ modoLogin = false }) {
             {/* Informes — todos los roles */}
             <div>
               <button
-                onClick={() => expandido && toggleMenu('informes')}
+                onClick={() => !colapsado && toggleMenu('informes')}
                 className="w-full flex items-center gap-3 px-2 py-2 rounded text-sm
                            hover:bg-white/10"
               >
                 <FiBarChart2 size={18} className="flex-shrink-0" />
-                {expandido && (
+                {!colapsado && (
                   <>
                     <span className="flex-1 text-left">Informes</span>
                     {menuAbierto['informes']
@@ -207,7 +238,7 @@ function Layout({ modoLogin = false }) {
                   </>
                 )}
               </button>
-              {expandido && menuAbierto['informes'] && (
+              {!colapsado && menuAbierto['informes'] && (
                 <div className="ml-7 mt-1 space-y-1">
                   <NavLink to="/informes/cumplimiento"
                     className={({ isActive }) => `flex items-center gap-2 px-2 py-1.5 rounded text-xs ${isActive ? 'bg-white/20 font-medium' : 'hover:bg-white/10'}`}>
@@ -238,7 +269,7 @@ function Layout({ modoLogin = false }) {
                               flex justify-center items-center">
                 {iniciales}
               </div>
-              {expandido && (
+              {!colapsado && (
                 <div className="overflow-hidden">
                   <p className="text-xs font-medium truncate">
                     {usuario.nombre_completo}
@@ -263,13 +294,26 @@ function Layout({ modoLogin = false }) {
       <div className="flex flex-col flex-1 overflow-hidden">
 
         {/* Topbar */}
-        <header className="flex items-center gap-4 px-5 py-3 bg-white
-                           border-b border-gray-200 flex-shrink-0">
-          <div className="flex-1" id="topbar-titulo" />
+        <header className="flex items-center gap-4 px-4 md:px-5 py-3
+                           bg-[#1A56A0] md:bg-white
+                           border-b border-white/15 md:border-gray-200 flex-shrink-0">
+          {/* Marca + hamburguesa para abrir el drawer — solo móvil */}
+          {!modoLogin && (
+            <div className="flex md:hidden items-center flex-1">
+              <img src={logo_mudar} alt="Mudar de Colombia"
+                   className="w-8 h-8 object-contain" />
+              <button onClick={() => setDrawerAbierto(true)}
+                      className="ml-auto text-white hover:text-white/70"
+                      aria-label="Abrir menú">
+                <MdMenu size={24} />
+              </button>
+            </div>
+          )}
+          <div className="hidden md:block flex-1" id="topbar-titulo" />
         </header>
 
         {/* Contenido de la página activa */}
-        <main className="flex-1 overflow-y-auto p-5">
+        <main className="flex-1 overflow-y-auto p-3 md:p-5">
           <Outlet />
         </main>
 

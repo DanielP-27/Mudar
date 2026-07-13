@@ -4,10 +4,13 @@ import { FiPlus, FiEdit2, FiXCircle } from 'react-icons/fi'
 import { obtenerProductos, crearProducto, actualizarProducto, desactivarProducto, obtenerFamilias } from '../../api/catalogos'
 import { toInt } from '../../utils/formatters'
 import { useDebounce } from '../../hooks/useDebounce'
+import { useEsEscritorio } from '../../hooks/useEsEscritorio'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import { extraerMensajeError } from '../../utils/errores'
 import Toast from '../../components/common/Toast'
 import ModalBase from '../../components/common/ModalBase'
+import Par from '../../components/common/Par'
+import Paginacion from '../../components/common/Paginacion'
 
 const FORMULARIO_VACIO = { nombre_producto: '', familia_producto: '', tiempo_produccion_unitario: '' }
 
@@ -20,6 +23,11 @@ function PaginaProductos() {
   // Filtros
   const [busqueda, setBusqueda] = useState('')
   const textoDebounced = useDebounce(busqueda, 300)
+
+  // Paginación en cliente — 20 filas por página en escritorio, 10 en móvil
+  const esEscritorio = useEsEscritorio()
+  const POR_PAGINA = esEscritorio ? 20 : 10
+  const [pagina, setPagina] = useState(1)
 
   // Formulario
   const [productoEditando, setProductoEditando]   = useState(null)
@@ -58,6 +66,19 @@ function PaginaProductos() {
   useEffect(() => {
     cargarProductos()
   }, [cargarProductos])
+
+  // Al cambiar la búsqueda, vuelve a la primera página
+  useEffect(() => { setPagina(1) }, [textoDebounced])
+
+  // Corrige la página si quedó fuera de rango: menos resultados tras filtrar, o
+  // cambio de breakpoint escritorio↔móvil (que cambia POR_PAGINA y totalPaginas)
+  const totalPaginas = Math.max(1, Math.ceil(productos.length / POR_PAGINA))
+  useEffect(() => {
+    if (pagina > totalPaginas) setPagina(totalPaginas)
+  }, [pagina, totalPaginas])
+
+  // Pedazo de la lista visible en la página actual (lo usan tabla y tarjetas)
+  const productosPagina = productos.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
 
   // Carga las familias de producto para el select del formulario
   useEffect(() => {
@@ -215,8 +236,13 @@ function PaginaProductos() {
           className="campo-input flex-1" />
       </div>
 
-      {/* Tabla */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      {/* Paginación superior */}
+      {!cargando && productos.length > 0 && (
+        <Paginacion pagina={pagina} totalPaginas={totalPaginas} total={productos.length} onPagina={setPagina} />
+      )}
+
+      {/* Tabla (escritorio) */}
+      <div className="hidden md:block bg-white rounded-lg border border-gray-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-[#1A56A0] text-white">
@@ -237,7 +263,7 @@ function PaginaProductos() {
                 <td colSpan={5} className="text-center py-8 text-gray-400 text-sm">Sin registros</td>
               </tr>
             ) : (
-              productos.map((producto, i) => (
+              productosPagina.map((producto, i) => (
                 <tr key={producto.producto_id}
                   className={`border-t border-gray-100
                     ${producto.activo ? '' : 'opacity-50'}
@@ -273,6 +299,49 @@ function PaginaProductos() {
           </tbody>
         </table>
       </div>
+
+      {/* Tarjetas (móvil) */}
+      <div className="md:hidden space-y-3">
+        {cargando ? (
+          <div className="bg-white rounded-lg border border-gray-200 py-8 text-center text-gray-400 text-sm">Cargando...</div>
+        ) : productos.length === 0 ? (
+          <div className="bg-white rounded-lg border border-gray-200 py-8 text-center text-gray-400 text-sm">Sin registros</div>
+        ) : (
+          productosPagina.map((producto) => (
+            <div key={producto.producto_id}
+              className={`bg-white rounded-lg border border-gray-200 p-4 ${producto.activo ? '' : 'opacity-50'}`}>
+              <Par etiqueta="Nombre producto">{producto.nombre_producto}</Par>
+              <Par etiqueta="Familia">{producto.familia_detalle?.nombre_familia ?? '—'}</Par>
+              <Par etiqueta="Tiempo unit. (min)">{producto.tiempo_produccion_unitario}</Par>
+              <Par etiqueta="Estado">
+                <span className={`px-2 py-1 text-xs rounded-full font-medium
+                  ${producto.activo ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {producto.activo ? 'Activo' : 'Inactivo'}
+                </span>
+              </Par>
+              <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+                <button onClick={() => abrirFormularioEditar(producto)}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100">
+                  <FiEdit2 size={14} />
+                  Editar
+                </button>
+                {producto.activo && (
+                  <button onClick={() => manejarDesactivar(producto)}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-red-100 bg-red-50 text-red-700 hover:bg-red-100">
+                    <FiXCircle size={14} />
+                    Desactivar
+                  </button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Paginación inferior */}
+      {!cargando && productos.length > 0 && (
+        <Paginacion pagina={pagina} totalPaginas={totalPaginas} total={productos.length} onPagina={setPagina} />
+      )}
 
       <Toast mensaje={exito} />
 
