@@ -1,10 +1,10 @@
 // src/pages/doms/PaginaEditarDom.jsx
-import { useState, useEffect, useCallback, Fragment } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   FiEye, FiFileText, FiBriefcase, FiPackage,
   FiSettings, FiThermometer, FiTruck, FiPlus,
-  FiChevronRight, FiChevronDown, FiLock
+  FiChevronRight, FiChevronDown, FiLock, FiUser
 } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { puedeEditarEtapa, esSoloLectura } from '../../utils/permisos'
@@ -70,6 +70,13 @@ function PaginaEditarDom() {
       return siguiente
     }, { replace: true })
   }, [setSearchParams])
+
+  // Auto-centra la pestaña activa en la tira deslizable (móvil). En escritorio,
+  // como la cuadrícula 4×2 cabe, scrollIntoView no produce desplazamiento.
+  const tabActivaRef = useRef(null)
+  useEffect(() => {
+    tabActivaRef.current?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' })
+  }, [pestanaActiva])
 
   // Estado de carga y mensajes
   const [cargando, setCargando]   = useState(true)
@@ -1006,46 +1013,55 @@ function PaginaEditarDom() {
         </p>
       </div>
 
-      {/* Sistema de pestañas — cuadrícula 4×2 (P23): las 8 etapas quedan siempre
-          visibles en dos filas de cuatro, sin scroll horizontal. Estilo de recuadro
-          (activo azul relleno / inactivo con borde gris) en lugar del subrayado, que
-          no traduce bien entre dos filas. */}
-      <div className="grid grid-cols-4 gap-2 mb-6">
-        {pestanas.map(p => (
-          <button key={p.id} onClick={() => setPestanaActiva(p.id)}
-            className={`
-              flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border text-left
-              transition-colors
-              ${pestanaActiva === p.id
-                ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
-                : 'bg-white text-gray-600 border-gray-200 hover:text-gray-800 hover:border-gray-300'
-              }
-            `}>
-            <span className="shrink-0">{p.icono}</span>
-            <span className="leading-tight">{p.label}</span>
-          </button>
-        ))}
+      <div className="mb-6">
+        <div className="flex gap-2 overflow-x-auto md:grid md:grid-cols-4 md:overflow-visible">
+          {pestanas.map(p => (
+            <button key={p.id}
+              ref={pestanaActiva === p.id ? tabActivaRef : null}
+              onClick={() => setPestanaActiva(p.id)}
+              className={`
+                shrink-0 whitespace-nowrap md:whitespace-normal
+                flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border text-left
+                transition-colors
+                ${pestanaActiva === p.id
+                  ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
+                  : 'bg-white text-gray-600 border-gray-200 hover:text-gray-800 hover:border-gray-300'
+                }
+              `}>
+              <span className="shrink-0">{p.icono}</span>
+              <span className="leading-tight">{p.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Barra de contexto */}
-      <div className="flex items-center gap-3 px-4 py-2 mb-4 bg-blue-50 border border-blue-100 rounded text-sm text-blue-800">
-        <span className="font-medium">DOM #{datosDom.dom_id}</span>
-        <span className="text-blue-300">|</span>
-        <span>Cliente: {datosDom.nombre_cliente_detalle ?? '—'}</span>
+      <div className="sticky top-0 z-10 flex flex-col md:flex-row md:items-center gap-1 md:gap-3 px-4 py-2 mb-4 bg-blue-50 border border-blue-100 rounded text-sm text-blue-800">
+        <span className="flex items-center gap-1.5 font-medium">
+          <FiFileText size={14} className="shrink-0" /> DOM #{datosDom.dom_id}
+        </span>
+        <span className="hidden md:inline text-blue-300">|</span>
+        <span className="flex items-center gap-1.5">
+          <FiUser size={14} className="shrink-0" /> Cliente: {datosDom.nombre_cliente_detalle ?? '—'}
+        </span>
       </div>  
           
       {/* Tabla consolidada de productos — visible en todas las pestañas */}  
+      <div className="flex flex-col">
+
       {!esDomAdministrativo && datosDom.productos?.length > 0 && (  
-        <TablaConsolidadoProductos
-          productos={datosDom.productos}
-          planeaciones={planeaciones}
-          elaboradaPorProducto={elaboradaPorProducto}
-          proyectadaPorProducto={proyectadaPorProducto}
-        />
+        <div className="order-2 md:order-none mt-6 md:mt-0">
+          <TablaConsolidadoProductos
+            productos={datosDom.productos}
+            planeaciones={planeaciones}
+            elaboradaPorProducto={elaboradaPorProducto}
+            proyectadaPorProducto={proyectadaPorProducto}
+          />
+        </div>
       )}
 
       {/* Contenido de pestañas */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="order-1 md:order-none bg-white rounded-lg border border-gray-200 p-6">
 
         {/* ── Consolidado ─────────────────────────────────────────────────── */}
         {pestanaActiva === 'consolidado' && (
@@ -1153,7 +1169,7 @@ function PaginaEditarDom() {
             onGuardar={() => guardarDom('Trámite guardado correctamente.', 'etapa_0')}
             onCancelar={() => setMostrarModalCancelar(true)}
           >
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <CampoLectura label="Número DOM"          valor={datosDom.dom_id} />
               <CampoLectura label="Fecha asignación DOM" valor={formatearFecha(datosDom.fecha_asignacion_dom)} />
             </div>
@@ -1230,7 +1246,7 @@ function PaginaEditarDom() {
             onGuardar={() => guardarDom('Etapa de creación de DOM guardada correctamente.', 'etapa_0')}
             onCancelar={() => setMostrarModalCancelar(true)}
           >
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <CampoLectura label="Fecha asignación DOM" valor={formatearFecha(datosDom.fecha_asignacion_dom)} />
               <CampoLectura label="Número DOM"           valor={datosDom.dom_id} />
             </div>
@@ -1312,7 +1328,7 @@ function PaginaEditarDom() {
             onGuardar={() => guardarDom('Etapa de gestión comercial guardada correctamente.', 'etapa_1')}
             onCancelar={() => setMostrarModalCancelar(true)}
           >
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <CampoFormulario label="Orden de compra">
                 <input type="text" value={datosDom.orden_compra ?? ''} maxLength={50}
                   onChange={e => actualizarCampoDom('orden_compra', e.target.value)}
@@ -1371,7 +1387,7 @@ function PaginaEditarDom() {
               edita aquí (etapa 2) y es de solo-lectura en Despachos. */}
           <div className="mb-4 p-4 border border-gray-200 rounded bg-gray-50">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Fechas de entrega del DOM</h3>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <CampoConsolidado label="Fecha de entrega solicitada por el cliente"
                 valor={formatearFecha(datosDom.fecha_solicitada_cliente)} />
               <CampoFormulario label="Fecha de entrega proyectada">
@@ -1423,7 +1439,7 @@ function PaginaEditarDom() {
           >
             {/* BLOQUE 1: Campos de turno, fecha, operarios y duración */}
             {planActual && (
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <CampoFormulario label="Fecha planeación">
                   <input type="date" value={planActual.fecha_planeacion ?? ''}
                     onChange={e => {
@@ -1506,7 +1522,7 @@ function PaginaEditarDom() {
               <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded space-y-3">
                 <p className="text-xs font-semibold text-blue-900 uppercase tracking-wide">Consolidado del turno</p>
 
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
                     <p className="text-xs text-gray-600">Capacidad total</p>
                     <p className="text-lg font-bold text-blue-600">
@@ -1549,7 +1565,7 @@ function PaginaEditarDom() {
 
             {/* BLOQUE 3: Resto de campos de planeación */}
             {planActual && (
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <CampoFormulario label="Orden producción dentro de turno y fecha">
                   <input type="text" value={planActual.orden_produccion ?? ''}
                     onChange={e => actualizarCampoPlaneacion('orden_produccion', e.target.value)}
@@ -1668,7 +1684,7 @@ function PaginaEditarDom() {
                   const pp = planActual.productos_planeacion?.find(p => p.dom_producto === prod.id)
                   const localKey = pp ? pp.id : `new_${prod.id}`
                   return (
-                    <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
+                    <div key={prod.id} className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
                       <div>
                         <p className="text-xs text-gray-500">Producto</p>
                         <p className="text-sm font-medium text-gray-800">
@@ -1746,7 +1762,7 @@ function PaginaEditarDom() {
             >
               {almacenActual && (
                 <>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CampoFormulario label="¿Materias primas internas procesadas?">
                     <SelectSiNo name="almacen_materias_primas" soloLectura={!esEditable('etapa_3')} variante="lectura" value={boolToStr(almacenActual.materias_primas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_primas', strToBool(v), idxAlmacen)}
@@ -1884,7 +1900,7 @@ function PaginaEditarDom() {
                         const localKey           = pp?.id ?? `new_${prod.id}`
                         const bloqueado          = produccionActualOriginal?.cierre_produccion === true
                         return (
-                          <div key={prod.id} className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
+                          <div key={prod.id} className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-gray-50 rounded border border-gray-200">
                             <div>
                               <p className="text-xs text-gray-500">Producto</p>
                               <p className="text-sm font-medium text-gray-800">
@@ -1923,7 +1939,7 @@ function PaginaEditarDom() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CampoLectura
                     label="Tiempo proyectado (min)"
                     valor={planActual?.tiempo_proyectado}
@@ -2017,7 +2033,7 @@ function PaginaEditarDom() {
             >
               {tratamientoActual && (
                 <>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CampoFormulario label="DOM con tratamiento">
                     <SelectSiNo name="tratamiento_dom_con_tratamiento" soloLectura={!esEditable('etapa_5')} variante="lectura" value={boolToStr(tratamientoActual.dom_con_tratamiento)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'dom_con_tratamiento', strToBool(v), idxTratamiento)}
@@ -2075,7 +2091,7 @@ function PaginaEditarDom() {
             onGuardar={() => guardarDom('Despacho guardado correctamente.', 'etapa_6')}
             onCancelar={() => setMostrarModalCancelar(true)}
           >
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Etiqueta "Fecha de entrega planificada" por convención del cliente; el dato
                   subyacente es fecha_entrega_pactada (ver nota de deuda técnica en el modelo Dom).
                   fecha_entrega_planificada se retiró de la UI. */}
@@ -2175,6 +2191,8 @@ function PaginaEditarDom() {
             </BloqueoEtapa>
           </FormEtapa>
         )}
+
+      </div>
 
       </div>
 
@@ -2323,7 +2341,7 @@ function FormEtapa({ titulo, editable, guardando, onGuardar, onCancelar, sinRegi
         children
       )}
       {/* Fila de acciones: Actualizar (solo si editable) + Cancelar (siempre, salida) */}
-      <div className="pt-4 flex gap-3">
+      <div className="pt-4 flex flex-col md:flex-row gap-3">
         {editable && !sinRegistro && (
           <button onClick={onGuardar} disabled={guardando}
             className="px-6 py-2 bg-[#1A56A0] text-white text-sm font-medium
@@ -2393,6 +2411,7 @@ function CampoConsolidado({ label, valor }) {
 // Tabla consolidada de productos — visible en todas las pestañas
 function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProducto, proyectadaPorProducto }) {
   const [expandidos, setExpandidos] = useState(new Set())
+  const [consolidadoAbierto, setConsolidadoAbierto] = useState(false)
 
   const toggleExpandido = (productoId) => {
     setExpandidos(prev => {
@@ -2528,11 +2547,15 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
 
     {/* Tarjetas (móvil) */}
     <div className="md:hidden border-y-2 border-[#1A56A0] py-4 space-y-3 mb-4">
-      <h4 className="flex items-center gap-2 text-base font-semibold text-gray-700 uppercase tracking-wide">
+      <button onClick={() => setConsolidadoAbierto(v => !v)}
+        className="flex items-center gap-2 w-full text-base font-semibold text-gray-700 uppercase tracking-wide">
         <span className="w-1 h-5 bg-[#1A56A0] rounded-sm"></span>
         Productos del DOM
-      </h4>
-      {productos.map((p) => {
+        <span className="ml-auto text-[#1A56A0]">
+          {consolidadoAbierto ? <FiChevronDown size={18} /> : <FiChevronRight size={18} />}
+        </span>
+      </button>
+      {consolidadoAbierto && productos.map((p) => {
         const proyectada = proyectadaPorProducto(p.id)
         const elaborada  = elaboradaPorProducto(p.id)
         const pendientePorProyectar = (p.cantidad_pedido ?? 0) - (proyectada ?? 0)
@@ -2606,7 +2629,7 @@ function SeccionConsolidado({ titulo, children }) {
       <h3 className="text-xs font-semibold text-[#1A56A0] uppercase tracking-wide mb-3">
         {titulo}
       </h3>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {children}
       </div>
     </div>

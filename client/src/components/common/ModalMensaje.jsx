@@ -4,7 +4,7 @@
 // y un único botón "Entendido". Se conserva como componente propio para no tocar
 // las llamadas existentes `<ModalMensaje abierto=... mensaje=... onCerrar=... />`.
 // Soporta multilínea: si el mensaje trae varias líneas (unidas con '\n' por el
-// util extraerMensajeError), ModalBase las renderiza como viñetas.
+// util extraerMensajeError), ModalBase las lista con la etiqueta del campo en negrita.
 
 import ModalBase from './ModalBase'
 

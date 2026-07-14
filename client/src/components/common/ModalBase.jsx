@@ -8,7 +8,7 @@
 // estado (`abierto`) y decide qué hace `onCerrar`.
 //
 // El cuerpo admite dos formas:
-//   - `mensaje` (string o string[]): texto plano; si trae varias líneas se pinta en viñetas.
+//   - `mensaje` (string o string[]): texto plano; si trae varias líneas se listan con la etiqueta del campo en negrita.
 //   - `children`: contenido JSX enriquecido (negritas, resaltados, etc.).
 //
 // ModalMensaje se apoya en este componente como variante `info` de un solo botón,
@@ -90,8 +90,20 @@ function ModalBase({
         {children ? (
           <div className="text-sm text-gray-700 mb-5">{children}</div>
         ) : lineas.length > 1 ? (
-          <ul className="list-disc pl-5 space-y-1 text-sm text-gray-700 mb-5">
-            {lineas.map((linea, i) => <li key={i}>{linea}</li>)}
+          <ul className="space-y-1.5 text-sm mb-5">
+            {lineas.map((linea, i) => {
+              // "Etiqueta: mensaje" → etiqueta en negrita, mensaje en secundario.
+              // Líneas sin ":" (validaciones cruzadas) se muestran tal cual.
+              const idx = linea.indexOf(': ')
+              const etiqueta = idx > 0 ? linea.slice(0, idx) : null
+              const detalle  = idx > 0 ? linea.slice(idx + 2) : linea
+              return (
+                <li key={i}>
+                  {etiqueta && <span className="font-semibold text-gray-800">{etiqueta}: </span>}
+                  <span className="text-gray-600">{detalle}</span>
+                </li>
+              )
+            })}
           </ul>
         ) : (
           <p className="text-sm text-gray-700 mb-5">{lineas[0] ?? ''}</p>
@@ -107,7 +119,7 @@ function ModalBase({
               autoFocus={i === idxFoco}
               onClick={b.onClick}
               disabled={b.deshabilitado}
-              className={`px-4 py-2 text-sm font-medium rounded disabled:opacity-60 ${apilarBotones ? 'w-full' : ''} ${ESTILOS_BOTON[b.estilo] ?? ESTILOS_BOTON.primario}`}
+              className={`px-4 py-2.5 text-sm font-medium rounded disabled:opacity-60 ${apilarBotones ? 'w-full' : ''} ${ESTILOS_BOTON[b.estilo] ?? ESTILOS_BOTON.primario}`}
             >
               {b.texto}
             </button>

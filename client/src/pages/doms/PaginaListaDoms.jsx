@@ -1,7 +1,7 @@
 // src/pages/doms/PaginaListaDoms.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiSearch, FiEdit2, FiEye, FiRotateCcw } from 'react-icons/fi'
+import { FiSearch, FiEdit2, FiEye, FiRotateCcw, FiChevronDown, FiChevronUp } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { obtenerDoms } from '../../api/doms'
 import { obtenerClientes, obtenerListasPorTipo } from '../../api/catalogos'
@@ -49,6 +49,9 @@ function PaginaListaDoms() {
   // Filtro por fecha de planeación (fecha exacta, no rango)
   const [filtroFechaPlaneacion, setFiltroFechaPlaneacion] = useState('')
 
+  // Panel de filtros plegable (solo móvil; en escritorio siempre visible vía md:block)
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false)
+
   // Versión debounced del número de DOM (evita una petición por cada dígito)
   const numeroDomDebounced = useDebounce(filtroNumeroDom, 300)
 
@@ -57,6 +60,12 @@ function PaginaListaDoms() {
   const [sugerenciasCliente, setSugerenciasCliente]     = useState([])
   const [mostrarSugerencias, setMostrarSugerencias]     = useState(false)
   const [clienteSeleccionado, setClienteSeleccionado]   = useState(null)
+
+  // Nº de filtros activos (para el contador del panel plegado; el rango de fechas cuenta como 1)
+  const filtrosActivos = [
+    filtroNumeroDom, clienteSeleccionado, filtroEstado, filtroResponsable,
+    filtroFechaInicio || filtroFechaFin, filtroFechaPlaneacion,
+  ].filter(Boolean).length
   const textoCliente = useDebounce(busquedaCliente, 300)
 
   // Opciones de dropdowns
@@ -156,14 +165,18 @@ function PaginaListaDoms() {
       {/* Filtros */}
       <div className="bg-white rounded-lg border border-gray-200 mb-4 overflow-hidden">
         {/* Encabezado del panel */}
-        <div className="bg-[#1A56A0] px-4 py-2.5">
+        <button type="button" onClick={() => setFiltrosAbiertos(v => !v)}
+          className="w-full bg-[#1A56A0] px-4 py-2.5 flex items-center gap-2 text-left md:cursor-default">
           <h2 className="text-sm font-semibold text-white uppercase tracking-wide">
-            Filtros de búsqueda
+            Filtros de búsqueda{filtrosActivos > 0 && ` (${filtrosActivos})`}
           </h2>
-        </div>
+          <span className="ml-auto text-white md:hidden">
+            {filtrosAbiertos ? <FiChevronUp size={18} /> : <FiChevronDown size={18} />}
+          </span>
+        </button>
         {/* Cuerpo */}
-        <div className="p-4">
-        <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className={`p-4 ${filtrosAbiertos ? '' : 'hidden'} md:block`}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
 
           {/* Número de DOM */}
           <div className="flex flex-col gap-1">

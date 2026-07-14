@@ -1,5 +1,5 @@
 // src/pages/doms/PaginaCrearDom.jsx
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FiEye, FiFileText, FiBriefcase, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { crearDom } from '../../api/doms'
@@ -44,6 +44,13 @@ function PaginaCrearDom() {
 
   // Pestaña activa — inicia en etapa 0
   const [pestanaActiva, setPestanaActiva] = useState('etapa0')
+
+  // Auto-centra la pestaña activa en la tira deslizable (móvil). En escritorio,
+  // como las pestañas caben, scrollIntoView no produce desplazamiento.
+  const tabActivaRef = useRef(null)
+  useEffect(() => {
+    tabActivaRef.current?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' })
+  }, [pestanaActiva])
 
   // Estado de carga y error del formulario
   const [guardando, setGuardando] = useState(false)
@@ -266,7 +273,7 @@ function PaginaCrearDom() {
           </h2>
 
           {/* Campos automáticos */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <CampoLectura label="Fecha asignación DOM"
               valor={formatearFecha(new Date())}
               nota="Se genera automáticamente" />
@@ -343,21 +350,23 @@ function PaginaCrearDom() {
 
         /* ── Formulario productivo con pestañas ─────────────── */
         <>
-          {/* Sistema de pestañas */}
-          <div className="border-b border-gray-200 mb-6">
-            <div className="flex gap-0">
+          <div className="mb-6">
+            <div className="flex gap-2 overflow-x-auto md:grid md:grid-cols-3 md:overflow-visible">
               {pestanas.map(p => (
                 <button key={p.id}
+                  ref={pestanaActiva === p.id ? tabActivaRef : null}
                   onClick={() => setPestanaActiva(p.id)}
                   className={`
-                    flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2
+                    shrink-0 whitespace-nowrap md:whitespace-normal
+                    flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border text-left
                     transition-colors
                     ${pestanaActiva === p.id
-                      ? 'border-[#1A56A0] text-[#1A56A0]'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      ? 'bg-[#1A56A0] text-white border-[#1A56A0]'
+                      : 'bg-white text-gray-600 border-gray-200 hover:text-gray-800 hover:border-gray-300'
                     }
                   `}>
-                  {p.icono}{p.label}
+                  <span className="shrink-0">{p.icono}</span>
+                  <span className="leading-tight">{p.label}</span>
                 </button>
               ))}
             </div>
@@ -371,7 +380,7 @@ function PaginaCrearDom() {
                 <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
                   Información consolidada
                 </h2>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CampoConsolidado label="Cliente"              valor={busquedaCliente} />
                   <CampoConsolidado label="Tipo o estado DOM"    valor={datosEtapa0.tipo_estado_dom} />
                   <CampoConsolidado label="Fecha solicitada"     valor={datosEtapa0.fecha_solicitada_cliente} />
@@ -422,7 +431,7 @@ function PaginaCrearDom() {
                 </h2>
 
                 {/* Campos automáticos */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CampoLectura label="Fecha asignación DOM"
                     valor={formatearFecha(new Date())}
                     nota="Se genera automáticamente" />
@@ -501,8 +510,8 @@ function PaginaCrearDom() {
                   </h3>
 
                   {/* Typeahead producto + cantidad */}
-                  <div className="grid grid-cols-3 gap-3 items-end">
-                    <div className="col-span-2">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                    <div className="md:col-span-2">
                       <CampoFormulario label="Producto">
                         <TypeaheadInput
                           valor={busquedaProducto}
@@ -580,7 +589,7 @@ function PaginaCrearDom() {
                 <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
                   Etapa 2 — Gestión comercial y diseño
                 </h2>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CampoFormulario label="Orden de compra">
                     <input type="text" value={datosEtapa1.orden_compra} maxLength={50}
                       onChange={e => actualizarEtapa1('orden_compra', e.target.value)}
@@ -619,23 +628,24 @@ function PaginaCrearDom() {
                 </div>
               </div>
             )}
+
+            {/* Botones de acción */}
+            <div className="flex flex-col md:flex-row gap-3 pt-4">
+              <button onClick={manejarCrear} disabled={guardando}
+                className="px-6 py-2 bg-[#1A56A0] text-white text-sm font-medium rounded
+                           hover:bg-[#134080] disabled:opacity-60 disabled:cursor-not-allowed">
+                {guardando ? 'Guardando...' : 'CREAR REGISTRO DOM'}
+              </button>
+              <button onClick={() => setMostrarModalCancelar(true)}
+                className="px-6 py-2 bg-red-600 text-white text-sm
+                           font-medium rounded hover:bg-red-700">
+                CANCELAR
+              </button>
+            </div>
           </div>
         </>
       )}
 
-      {/* Botones de acción */}
-      <div className="flex gap-3 mt-6">
-        <button onClick={manejarCrear} disabled={guardando}
-          className="px-6 py-2 bg-[#1A56A0] text-white text-sm font-medium rounded
-                     hover:bg-[#134080] disabled:opacity-60 disabled:cursor-not-allowed">
-          {guardando ? 'Guardando...' : 'CREAR REGISTRO DOM'}
-        </button>
-        <button onClick={() => setMostrarModalCancelar(true)}
-          className="px-6 py-2 bg-red-600 text-white text-sm
-                     font-medium rounded hover:bg-red-700">
-          CANCELAR
-        </button>
-      </div>
 
       {/* ── Modal de confirmación de cancelación ───────────────── */}
       <ModalBase
