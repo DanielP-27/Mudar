@@ -3089,22 +3089,15 @@ class RegistroTurnoDiaListView(APIView):
             registros = registros.filter(fecha=fecha)
         serializer = RegistroTurnoDiaSerializer(registros, many=True)
 
-        # Tiempo ya asignado por OTRAS planeaciones de este turno+fecha. Permite
-        # previsualizar "ya asignado"/"restante" en el 2º registro ANTES del PUT
-        # que liga la planeación actual al turno. Excluye la planeación en edición
-        # (excluir_planeacion) para no contarla dos veces. Misma lógica que
-        # RegistroPlaneacion.sumatoria_tiempo_asignado_turnos (models.py).
+        # DOMs vinculados al turno+fecha (No. DOM, cliente, productos+cantidades) y los
+        # minutos ya asignados por OTRAS planeaciones. Ambos se derivan de un ÚNICO
+        # recorrido en RegistroPlaneacion.detalle_por_turno, que excluye la planeación en
+        # edición (excluir) para no contarla dos veces ni listar el DOM actual.
         tiempo_asignado_otras = 0
+        doms_vinculados = []
         if turno_id and fecha:
-            planeaciones = RegistroPlaneacion.objects.filter(
-                fecha_planeacion=fecha, turno__turno_id=turno_id,
-            ).prefetch_related('productos_planeacion__dom_producto__tipo_producto')
-            if excluir:
-                planeaciones = planeaciones.exclude(id=excluir)
-            for p in planeaciones:
-                for pp in p.productos_planeacion.all():
-                    if pp.cantidad_proyectada and pp.dom_producto:
-                        tiempo_asignado_otras += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+            doms_vinculados = RegistroPlaneacion.detalle_por_turno(turno_id, fecha, excluir)
+            tiempo_asignado_otras = sum(d['minutos_ocupados'] for d in doms_vinculados)
 
         return Response(
             {
@@ -3112,6 +3105,7 @@ class RegistroTurnoDiaListView(APIView):
                 'total': registros.count(),
                 'registros': serializer.data,
                 'tiempo_asignado_otras': tiempo_asignado_otras,
+                'doms_vinculados': doms_vinculados,
             },
             status=status.HTTP_200_OK
         )

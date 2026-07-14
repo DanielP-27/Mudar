@@ -116,6 +116,9 @@ function PaginaEditarDom() {
   // Tiempo ya asignado por OTRAS planeaciones del turno+fecha seleccionado
   // (viene del GET de turno-día; permite previsualizar asignado/restante sin PUT)
   const [asignadoOtras, setAsignadoOtras] = useState(0)
+  // Detalle de los DOMs ya asignados a ese turno+fecha (No. DOM, cliente,
+  // productos+cantidades, minutos ocupados) — solo lectura, viene del mismo GET.
+  const [domsVinculados, setDomsVinculados] = useState([])
 
   // Confirmación de personas asignadas antes de iniciar cronómetro
   const [personasConfirmadas, setPersonasConfirmadas]     = useState(false)
@@ -344,6 +347,7 @@ function PaginaEditarDom() {
     try {
       const res = await consultarTurnoDia(turnoId, fecha, excluirId)
       setAsignadoOtras(res.data.tiempo_asignado_otras ?? 0)
+      setDomsVinculados(res.data.doms_vinculados ?? [])
       const registros = res.data.registros ?? []
       if (registros.length > 0) {
         setTurnoDiaExistente(registros[0])
@@ -359,6 +363,7 @@ function PaginaEditarDom() {
     } catch {
       setTurnoDiaExistente(null)
       setDatosTurnoDia({ numero_operarios: '', minutos_totales: '' })
+      setDomsVinculados([])
     }
   }
 
@@ -1560,6 +1565,100 @@ function PaginaEditarDom() {
                     ⚠️ No hay capacidad suficiente en este turno para esta planeación.
                   </p>
                 )}
+
+                {/* Detalle: DOMs ya asignados a este turno+fecha (solo lectura).
+                    Desglosa de dónde sale el "Ya asignado" de arriba. */}
+                <div className="pt-3 border-t border-blue-200">
+                  <p className="text-xs font-semibold text-blue-900 uppercase tracking-wide mb-2">
+                    DOMs asignados a este turno
+                  </p>
+
+                  {domsVinculados.length === 0 ? (
+                    <p className="text-xs text-gray-500 italic">
+                      Aún no hay otros DOMs asignados a este turno.
+                    </p>
+                  ) : (
+                    <>
+                      {/* Tabla (escritorio) */}
+                      <table className="hidden md:table w-full text-sm bg-white rounded border border-blue-100">
+                        <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium">DOM</th>
+                            <th className="text-left px-3 py-2 font-medium">Cliente</th>
+                            <th className="text-left px-3 py-2 font-medium">Producto</th>
+                            <th className="text-right px-3 py-2 font-medium">Cantidad</th>
+                            <th className="text-right px-3 py-2 font-medium">Min. asignados</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {domsVinculados.map((d, i) => {
+                            // Si no hay productos, usamos [null] como fila única para el caso "sin cantidades"
+                            const filas = d.productos.length > 0 ? d.productos : [null]
+                            return filas.map((p, j) => (
+                              <tr key={`${i}-${j}`} className={j === 0 && i > 0 ? 'border-t border-gray-200' : ''}>
+                                {/* DOM, Cliente y Minutos: se fusionan a lo alto de los productos (solo en la 1ª fila) */}
+                                {j === 0 && (
+                                  <td rowSpan={filas.length} className="px-3 py-2 text-gray-800 whitespace-nowrap align-top">
+                                    #{d.dom_id}
+                                  </td>
+                                )}
+                                {j === 0 && (
+                                  <td rowSpan={filas.length} className="px-3 py-2 text-gray-700 align-top">
+                                    {d.nombre_cliente}
+                                  </td>
+                                )}
+                                {/* Producto + Cantidad: una fila por producto */}
+                                {p ? (
+                                  <>
+                                    <td className={`px-3 py-2 text-gray-600 ${j > 0 ? 'border-t border-gray-100' : ''}`}>
+                                      {p.nombre}
+                                    </td>
+                                    <td className={`px-3 py-2 text-right text-gray-700 whitespace-nowrap ${j > 0 ? 'border-t border-gray-100' : ''}`}>
+                                      {p.cantidad}
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td className="px-3 py-2 text-amber-600">Sin cantidades asignadas</td>
+                                    <td className="px-3 py-2 text-right text-gray-500">—</td>
+                                  </>
+                                )}
+                                {j === 0 && (
+                                  <td rowSpan={filas.length} className="px-3 py-2 text-right text-gray-800 whitespace-nowrap align-top">
+                                    {d.minutos_ocupados} min
+                                  </td>
+                                )}
+                              </tr>
+                            ))
+                          })}
+                        </tbody>
+                      </table>
+
+                      {/* Tarjetas (móvil) */}
+                      <div className="md:hidden space-y-2">
+                        {domsVinculados.map((d, i) => (
+                          <div key={i} className="bg-white rounded border border-blue-100 p-3">
+                            <p className="text-sm font-semibold text-gray-800">{d.nombre_cliente}</p>
+                            <p className="text-sm font-semibold text-gray-800">DOM #{d.dom_id}</p>
+                            <p className="text-sm font-semibold text-gray-800 mb-2">{d.minutos_ocupados} min</p>
+                            {d.productos.length === 0 ? (
+                              <p className="text-xs text-amber-600">Sin cantidades asignadas</p>
+                            ) : (
+                              <ul className="text-xs text-gray-600 space-y-0.5">
+                                {d.productos.map((p, j) => (
+                                  <li key={j} className="flex justify-between gap-3">
+                                    <span>{p.nombre}</span>
+                                    <span className="text-gray-800 whitespace-nowrap">{p.cantidad}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
 

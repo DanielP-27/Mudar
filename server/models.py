@@ -503,6 +503,41 @@ class RegistroPlaneacion(models.Model):
     def etapa2_bloqueada(self):
         return self.planeacion_completa
 
+    @classmethod
+    def detalle_por_turno(cls, turno_id, fecha, excluir_planeacion=None):
+        """
+        Detalle de las planeaciones ligadas a un turno+fecha (una entrada por planeación).
+        Base del consolidado de turno (DOMs vinculados) y de la suma de tiempo asignado.
+        Incluye planeaciones sin cantidades (productos vacío) para poder alertarlas.
+        """
+        planeaciones = (
+            cls.objects
+            .filter(turno__turno_id=turno_id, fecha_planeacion=fecha)
+            .select_related('dom__nombre_cliente')
+            .prefetch_related('productos_planeacion__dom_producto__tipo_producto')
+        )
+        if excluir_planeacion:
+            planeaciones = planeaciones.exclude(id=excluir_planeacion)
+
+        detalle = []
+        for p in planeaciones:
+            productos = []
+            minutos_ocupados = 0
+            for pp in p.productos_planeacion.all():
+                if pp.cantidad_proyectada and pp.dom_producto:
+                    productos.append({
+                        'nombre': pp.dom_producto.tipo_producto.nombre_producto,
+                        'cantidad': pp.cantidad_proyectada,
+                    })
+                    minutos_ocupados += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+            detalle.append({
+                'dom_id': p.dom.dom_id,
+                'nombre_cliente': p.dom.nombre_cliente.nombre_cliente,
+                'productos': productos,
+                'minutos_ocupados': minutos_ocupados,
+            })
+        return detalle
+
 
 class ProductoPlaneacion(models.Model):
 
