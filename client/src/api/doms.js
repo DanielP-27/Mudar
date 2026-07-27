@@ -107,3 +107,9 @@ export const actualizarProductoProduccion = (productoId, datos) =>
 // Elimina un registro de cantidad elaborada por producto
 export const eliminarProductoProduccion = (productoId) =>
   api.delete(`/api/productos-produccion/${productoId}/`)
+
+// Desbloquea una etapa bloqueada de un DOM (solo ADMIN). Recibe el tipo de etapa
+// ('planeacion' | 'almacen' | 'produccion' | 'tratamiento' | 'despacho' | 'dom_etapa1')
+// y el id del registro a reabrir; el backend baja el candado y audita la acción.
+export const desbloquearEtapa = (tipo, registroId) =>
+  api.post('/api/desbloqueo/', { tipo, registro_id: registroId })

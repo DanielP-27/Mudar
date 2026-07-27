@@ -1,9 +1,9 @@
 // src/pages/doms/PaginaListaDoms.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FiSearch, FiEdit2, FiEye, FiRotateCcw, FiChevronDown, FiChevronUp } from 'react-icons/fi'
+import { FiSearch, FiEdit2, FiEye, FiRotateCcw, FiChevronDown, FiChevronUp, FiLock, FiUnlock } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
-import { obtenerDoms } from '../../api/doms'
+import { obtenerDoms, desbloquearEtapa } from '../../api/doms'
 import { obtenerClientes, obtenerListasPorTipo } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
 import { useEsEscritorio } from '../../hooks/useEsEscritorio'
@@ -11,6 +11,8 @@ import { ROLES } from '../../routes/RoleRoute'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import Par from '../../components/common/Par'
 import Paginacion from '../../components/common/Paginacion'
+import Toast from '../../components/common/Toast'
+import ModalBase from '../../components/common/ModalBase'
 import { extraerMensajeError } from '../../utils/errores'
 import { formatearFecha } from '../../utils/formatters'
 
@@ -43,6 +45,11 @@ function PaginaListaDoms() {
   const [filtroFechaInicio, setFiltroFechaInicio] = useState('')
   const [filtroFechaFin, setFiltroFechaFin]       = useState('')
 
+  // DOMs a mostrar — selector único que cruza cierre y vencimiento:
+  // 'activos' (por defecto, criterio histórico) · 'vencidos'/'proximos'/'a_tiempo'
+  // (cortes de vencimiento, siempre sobre abiertos) · 'cerrados' · 'todos'.
+  const [filtroMostrar, setFiltroMostrar] = useState('activos')
+
   // Ordenamiento (Opción B: campo+dirección en un valor "campo:direccion")
   const [ordenamiento, setOrdenamiento] = useState('fecha_entrega:asc')
 
@@ -51,6 +58,21 @@ function PaginaListaDoms() {
 
   // Panel de filtros plegable (solo móvil; en escritorio siempre visible vía md:block)
   const [filtrosAbiertos, setFiltrosAbiertos] = useState(false)
+
+  // Toast de éxito (no bloqueante) — auto-cierra a los 5s
+  const [exito, setExito] = useState(null)
+  const mostrarExito = (msg) => {
+    setExito(msg)
+    setTimeout(() => setExito(null), 5000)
+  }
+
+  // Confirmación de reapertura — modal propio en vez de window.confirm()
+  const [confirmacion, setConfirmacion] = useState(null) // { mensaje, resolve } | null
+  const pedirConfirmacion = (mensaje) =>
+    new Promise(resolve => setConfirmacion({ mensaje, resolve }))
+
+  // dom_id que se está reabriendo (deshabilita solo ese botón, no toda la tabla)
+  const [reabriendo, setReabriendo] = useState(null)
 
   // Versión debounced del número de DOM (evita una petición por cada dígito)
   const numeroDomDebounced = useDebounce(filtroNumeroDom, 300)
@@ -61,10 +83,12 @@ function PaginaListaDoms() {
   const [mostrarSugerencias, setMostrarSugerencias]     = useState(false)
   const [clienteSeleccionado, setClienteSeleccionado]   = useState(null)
 
-  // Nº de filtros activos (para el contador del panel plegado; el rango de fechas cuenta como 1)
+  // Nº de filtros activos (para el contador del panel plegado; el rango de fechas cuenta como 1).
+  // "DOMs a mostrar" solo cuenta cuando NO está en su valor por defecto (activos).
   const filtrosActivos = [
     filtroNumeroDom, clienteSeleccionado, filtroEstado, filtroResponsable,
     filtroFechaInicio || filtroFechaFin, filtroFechaPlaneacion,
+    filtroMostrar !== 'activos',
   ].filter(Boolean).length
   const textoCliente = useDebounce(busquedaCliente, 300)
 
@@ -99,7 +123,7 @@ function PaginaListaDoms() {
       const filtros = {
         page:      pagina,
         page_size: PAGE_SIZE,
-        dom_liberado_cierre: false,
+        mostrar: filtroMostrar,
       }
       if (clienteSeleccionado) filtros.cliente  = clienteSeleccionado.cliente_id
       if (numeroDomDebounced)  filtros.numero_dom = numeroDomDebounced
@@ -123,7 +147,7 @@ function PaginaListaDoms() {
     } finally {
       setCargando(false)
     }
-  }, [clienteSeleccionado, numeroDomDebounced, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin, filtroFechaPlaneacion, ordenamiento, PAGE_SIZE])
+  }, [clienteSeleccionado, numeroDomDebounced, filtroEstado, filtroResponsable, filtroFechaInicio, filtroFechaFin, filtroFechaPlaneacion, filtroMostrar, ordenamiento, PAGE_SIZE])
 
   // Carga inicial y cuando cambian los filtros
   useEffect(() => {
@@ -140,16 +164,49 @@ function PaginaListaDoms() {
     setFiltroFechaInicio('')
     setFiltroFechaFin('')
     setFiltroFechaPlaneacion('')
+    setFiltroMostrar('activos')
     setOrdenamiento('fecha_entrega:asc')
   }
+
+  // Un DOM cerrado (etapa 6 bloqueada) salió del ciclo de trabajo.
+  const estaCerrado = (dom) => dom.dom_liberado_cierre === true
 
   // Vencimiento clasificado por el backend (nivel_urgencia): 0 vencido · 1 próximo · 2 activo.
   // Ya no se recalcula con fechas en JS — el backend es la única fuente de verdad
   // (mismo criterio que el orden y el dashboard; evita bugs de zona horaria).
-  const estaVencido = (dom) => dom.nivel_urgencia === 0
+  // Un DOM cerrado NO se marca como vencido: su reloj de entrega se detuvo al cerrarse,
+  // así que pintarlo de rojo por una fecha pasada sería información falsa.
+  const estaVencido = (dom) => dom.nivel_urgencia === 0 && !estaCerrado(dom)
 
   // Determina si el usuario puede editar DOMs
   const puedeEditar = ROLES_EDITAR.includes(usuario?.rol)
+
+  // Solo el ADMIN puede reabrir un DOM cerrado (mismo criterio que el backend)
+  const esAdmin = usuario?.rol === ROLES.ADMIN
+
+  // Reabre la etapa 6 de un DOM cerrado. OJO: reabre SOLO el cierre/despacho —
+  // las demás etapas conservan su propio candado y se desbloquean por separado
+  // desde la página de edición. Por eso el rótulo es "Reabrir" y no "Desbloquear".
+  const reabrirDom = async (dom) => {
+    const confirmado = await pedirConfirmacion(
+      `Va a reabrir la etapa de Despacho del DOM #${dom.dom_id} (${dom.nombre_cliente_detalle}). ` +
+      `El DOM volverá a la lista de activos y la acción quedará registrada en auditoría a su nombre. ` +
+      `Las demás etapas mantienen su bloqueo. ¿Desea continuar?`
+    )
+    if (!confirmado) return
+
+    setReabriendo(dom.dom_id)
+    setError(null)
+    try {
+      const res = await desbloquearEtapa('despacho', dom.dom_id)
+      await cargarDoms(paginaActual)
+      mostrarExito(res.data.mensaje)
+    } catch (err) {
+      setError(extraerMensajeError(err, 'No se pudo reabrir el DOM.'))
+    } finally {
+      setReabriendo(null)
+    }
+  }
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -273,6 +330,24 @@ function PaginaListaDoms() {
               className="campo-input" />
           </div>
 
+          {/* DOMs a mostrar — activos / cerrados / todos.
+              No se llama "Estado": ese nombre ya lo usa el filtro de tipo_estado_dom. */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+              DOMs a mostrar
+            </label>
+            <select value={filtroMostrar}
+              onChange={e => setFiltroMostrar(e.target.value)}
+              className="campo-input">
+              <option value="activos">Activos</option>
+              <option value="vencidos">Vencidos</option>
+              <option value="proximos">Vence pronto</option>
+              <option value="a_tiempo">A tiempo</option>
+              <option value="cerrados">Cerrados</option>
+              <option value="todos">Todos</option>
+            </select>
+          </div>
+
           {/* Ordenar por — misma fila que Fecha de planeación */}
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
@@ -341,15 +416,19 @@ function PaginaListaDoms() {
             ) : (
               doms.map((dom, i) => {
                 const vencido = estaVencido(dom)
+                const cerrado = estaCerrado(dom)
                 return (
                   <tr key={dom.dom_id}
                     className={`border-t border-gray-100
-                      ${vencido ? 'bg-red-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
+                      ${cerrado ? 'bg-gray-100' : vencido ? 'bg-red-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
                       hover:bg-blue-50 transition-colors`}>
 
-                    {/* Número DOM */}
+                    {/* Número DOM — con candado si está cerrado */}
                     <td className="px-4 py-3 font-medium text-[#1A56A0]">
-                      #{dom.dom_id}
+                      <span className="inline-flex items-center gap-1.5">
+                        {cerrado && <FiLock size={13} className="text-gray-500 shrink-0" />}
+                        #{dom.dom_id}
+                      </span>
                     </td>
 
                     {/* Cliente */}
@@ -375,9 +454,16 @@ function PaginaListaDoms() {
                       {formatearFecha(dom.fecha_criterio)}
                     </td>
 
-                    {/* Estado vencimiento — clasificación del backend (nivel_urgencia) */}
+                    {/* Estado vencimiento — clasificación del backend (nivel_urgencia).
+                        "Cerrado" tiene precedencia: el DOM salió del ciclo y su
+                        vencimiento ya no aplica. */}
                     <td className="px-4 py-3">
-                      {vencido ? (
+                      {cerrado ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-gray-200 text-gray-700 font-medium">
+                          <FiLock size={11} />
+                          Cerrado
+                        </span>
+                      ) : vencido ? (
                         <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-medium">
                           Vencido
                         </span>
@@ -387,7 +473,7 @@ function PaginaListaDoms() {
                         </span>
                       ) : (
                         <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">
-                          Activo
+                          A tiempo
                         </span>
                       )}
                     </td>
@@ -409,6 +495,16 @@ function PaginaListaDoms() {
                             Editar
                           </button>
                         )}
+                        {/* Reabre SOLO el cierre/despacho — devuelve el DOM a activos */}
+                        {esAdmin && cerrado && (
+                          <button
+                            onClick={() => reabrirDom(dom)}
+                            disabled={reabriendo === dom.dom_id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full border border-amber-300 bg-white text-amber-800 hover:bg-amber-50 disabled:opacity-60 disabled:cursor-not-allowed">
+                            <FiUnlock size={14} />
+                            {reabriendo === dom.dom_id ? 'Reabriendo...' : 'Reabrir'}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -428,10 +524,16 @@ function PaginaListaDoms() {
         ) : (
           doms.map((dom) => {
             const vencido = estaVencido(dom)
+            const cerrado = estaCerrado(dom)
             return (
               <div key={dom.dom_id}
-                className={`rounded-lg border p-4 ${vencido ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
-                <Par etiqueta="DOM"><span className="font-medium text-[#1A56A0]">#{dom.dom_id}</span></Par>
+                className={`rounded-lg border p-4 ${cerrado ? 'bg-gray-100 border-gray-300' : vencido ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+                <Par etiqueta="DOM">
+                  <span className="inline-flex items-center gap-1.5 font-medium text-[#1A56A0]">
+                    {cerrado && <FiLock size={13} className="text-gray-500 shrink-0" />}
+                    #{dom.dom_id}
+                  </span>
+                </Par>
                 <Par etiqueta="Cliente">{dom.nombre_cliente_detalle}</Par>
                 <Par etiqueta="Responsable">{dom.responsable}</Par>
                 <Par etiqueta="Estado">
@@ -445,12 +547,17 @@ function PaginaListaDoms() {
                   </span>
                 </Par>
                 <Par etiqueta="Vencimiento">
-                  {vencido ? (
+                  {cerrado ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-gray-200 text-gray-700 font-medium">
+                      <FiLock size={11} />
+                      Cerrado
+                    </span>
+                  ) : vencido ? (
                     <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-medium">Vencido</span>
                   ) : dom.nivel_urgencia === 1 ? (
                     <span className="px-2 py-1 text-xs rounded-full bg-amber-100 text-amber-700">Vence pronto</span>
                   ) : (
-                    <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">Activo</span>
+                    <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">A tiempo</span>
                   )}
                 </Par>
                 <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
@@ -468,6 +575,16 @@ function PaginaListaDoms() {
                       Editar
                     </button>
                   )}
+                  {/* Reabre SOLO el cierre/despacho — devuelve el DOM a activos */}
+                  {esAdmin && cerrado && (
+                    <button
+                      onClick={() => reabrirDom(dom)}
+                      disabled={reabriendo === dom.dom_id}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-amber-300 bg-white text-amber-800 hover:bg-amber-50 disabled:opacity-60 disabled:cursor-not-allowed">
+                      <FiUnlock size={14} />
+                      {reabriendo === dom.dom_id ? 'Reabriendo...' : 'Reabrir'}
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -481,6 +598,21 @@ function PaginaListaDoms() {
           <Paginacion pagina={paginaActual} totalPaginas={totalPaginas} total={totalRegistros} onPagina={cargarDoms} />
         </div>
       )}
+
+      <Toast mensaje={exito} />
+
+      {/* Confirmación de reapertura del cierre (ADMIN) */}
+      <ModalBase
+        abierto={!!confirmacion}
+        variante="confirmacion"
+        titulo="Confirmar reapertura del DOM"
+        mensaje={confirmacion?.mensaje}
+        onCerrar={() => { confirmacion?.resolve(false); setConfirmacion(null) }}
+        acciones={[
+          { texto: 'Cancelar', estilo: 'peligro',  onClick: () => { confirmacion?.resolve(false); setConfirmacion(null) } },
+          { texto: 'Reabrir',  estilo: 'primario', onClick: () => { confirmacion?.resolve(true);  setConfirmacion(null) } },
+        ]}
+      />
 
     </div>
   )

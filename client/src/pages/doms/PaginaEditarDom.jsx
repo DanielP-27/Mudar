@@ -4,7 +4,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   FiEye, FiFileText, FiBriefcase, FiPackage,
   FiSettings, FiThermometer, FiTruck, FiPlus,
-  FiChevronRight, FiChevronDown, FiLock, FiUser
+  FiChevronRight, FiChevronDown, FiLock, FiUnlock, FiUser
 } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { puedeEditarEtapa, esSoloLectura } from '../../utils/permisos'
@@ -19,6 +19,7 @@ import {
   crearProductoPlaneacion, actualizarProductoPlaneacion,
   crearProductoProduccion, actualizarProductoProduccion, eliminarProductoProduccion,
   consultarPreviewTurnoDia, actualizarTurnoDia,
+  desbloquearEtapa,
 } from '../../api/doms'
 import { obtenerClientes, obtenerListasPorTipo, obtenerTurnos, consultarTurnoDia } from '../../api/catalogos'
 import { useDebounce } from '../../hooks/useDebounce'
@@ -129,6 +130,9 @@ function PaginaEditarDom() {
 
   // Confirmación de bloqueo de etapa — modal propio en vez de window.confirm()
   const [confirmacionBloqueo, setConfirmacionBloqueo]     = useState(null) // { mensaje, resolve } | null
+
+  // Confirmación de desbloqueo de etapa (ADMIN) — mismo patrón, modal propio por el título
+  const [confirmacionDesbloqueo, setConfirmacionDesbloqueo] = useState(null) // { mensaje, resolve } | null
 
   // Preview de impacto al editar un turno-día ya existente (GET /preview/, con debounce)
   const [previewTurnoDia, setPreviewTurnoDia] = useState(null)
@@ -388,6 +392,54 @@ function PaginaEditarDom() {
   // resuelve con true/false según el botón que el usuario presione
   const confirmarBloqueo = (mensaje) =>
     new Promise(resolve => setConfirmacionBloqueo({ mensaje, resolve }))
+
+  // ── Desbloqueo de etapa (exclusivo ADMIN) ─────────────────────────────────
+
+  const esAdmin = usuario?.rol === 'ADMIN'
+
+  // Muestra el modal de confirmación de desbloqueo; misma mecánica que confirmarBloqueo
+  const confirmarDesbloqueo = (mensaje) =>
+    new Promise(resolve => setConfirmacionDesbloqueo({ mensaje, resolve }))
+
+  // Relee DOM y planeaciones del servidor y actualiza TANTO el estado editable
+  // COMO el snapshot *Original.
+  const recargarDesdeServidor = async () => {
+    const resDom = await obtenerDom(domId)
+    const dom = resDom.data.dom
+    setDatosDom(dom)
+    setDatosDomOriginal(dom)
+
+    // Mismo criterio que la carga inicial: los DOM administrativos no tienen planeación
+    if (!TIPOS_ADMINISTRATIVOS.includes(dom.tipo_estado_dom)) {
+      const resPlaneacion = await obtenerPlaneacion({ dom_id: domId })
+      const registros = resPlaneacion.data.registros ?? []
+      setPlaneaciones(registros)
+      setPlaneacionesOriginal(registros)
+    }
+  }
+
+  // Reabre una etapa bloqueada. `tipo` es la clave que entiende el backend
+  // (MAPA_DESBLOQUEO); `nombre` solo se usa en el texto del modal.
+  const desbloquear = async (tipo, registroId, nombre) => {
+    const confirmado = await confirmarDesbloqueo(
+      `Va a desbloquear la etapa de ${nombre} del DOM #${domId}. La etapa quedará ` +
+      `disponible para edición y la acción quedará registrada en auditoría a su nombre. ` +
+      `¿Desea continuar?`
+    )
+    if (!confirmado) return
+
+    setGuardando(true)
+    setError(null)
+    try {
+      const res = await desbloquearEtapa(tipo, registroId)
+      await recargarDesdeServidor()
+      mostrarExito(res.data.mensaje)
+    } catch (err) {
+      setError(extraerMensajeError(err, 'No se pudo desbloquear la etapa.'))
+    } finally {
+      setGuardando(false)
+    }
+  }
 
   // Campo de bloqueo y textos del modal, según el tipo de registro hijo
   const CAMPO_BLOQUEO_POR_TIPO = {
@@ -1370,7 +1422,11 @@ function PaginaEditarDom() {
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
               </CampoFormulario>
             </div>
-            <BloqueoEtapa>
+            <BloqueoEtapa
+              puedeDesbloquear={esAdmin && datosDomOriginal?.dom_relacionado_produccion === true}
+              onDesbloquear={() => desbloquear('dom_etapa1', domId, 'Gestión comercial y diseño')}
+              guardando={guardando}
+            >
               <CampoFormulario label="¿DOM relacionado con producción?">
                 <SelectSiNo name="dom_relacionado_produccion" soloLectura={!esEditable('etapa_1')} value={boolToStr(datosDom.dom_relacionado_produccion)}
                   onChange={v => actualizarCampoDom('dom_relacionado_produccion', strToBool(v))}
@@ -1817,7 +1873,11 @@ function PaginaEditarDom() {
 
             {/* BLOQUE 4: Bloqueo de etapa */}
             {planActual && (
-              <BloqueoEtapa>
+              <BloqueoEtapa
+                puedeDesbloquear={esAdmin && planActualOriginal?.planeacion_completa === true}
+                onDesbloquear={() => desbloquear('planeacion', planActual.id, 'Planeación')}
+                guardando={guardando}
+              >
                 <CampoFormulario label="¿Registro de planeación completo y relacionado con producción?">
                   {/* Editores → radios (control de acción). Solo-lectura por rol → pill ámbar. */}
                   <SelectSiNo name="planeacion_completa" soloLectura={!esEditable('etapa_2')} value={boolToStr(planActual.planeacion_completa)}
@@ -1885,7 +1945,11 @@ function PaginaEditarDom() {
                       disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                   </CampoFormulario>
                 </div>
-                <BloqueoEtapa>
+                <BloqueoEtapa
+                  puedeDesbloquear={esAdmin && almacenActualOriginal?.materias_liberadas === true}
+                  onDesbloquear={() => desbloquear('almacen', almacenActual.id, 'Almacén')}
+                  guardando={guardando}
+                >
                   <CampoFormulario label="¿Materias primas liberadas para producción?">
                     <SelectSiNo name="almacen_materias_liberadas" soloLectura={!esEditable('etapa_3')} value={boolToStr(almacenActual.materias_liberadas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_liberadas', strToBool(v), idxAlmacen)}
@@ -2082,7 +2146,11 @@ function PaginaEditarDom() {
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
                   </CampoFormulario>
                 </div>
-                <BloqueoEtapa>
+                <BloqueoEtapa
+                  puedeDesbloquear={esAdmin && produccionActualOriginal?.cierre_produccion === true}
+                  onDesbloquear={() => desbloquear('produccion', produccionActual.id, 'Producción')}
+                  guardando={guardando}
+                >
                   <CampoFormulario label="¿Este DOM ya ha sido liberado desde producción?">
                     <SelectSiNo name="produccion_cierre_produccion" soloLectura={!esEditable('etapa_4')} value={boolToStr(produccionActual.cierre_produccion)}
                       onChange={v => actualizarCampoHijo('produccion', 'cierre_produccion', strToBool(v), idxProduccion)}
@@ -2164,7 +2232,11 @@ function PaginaEditarDom() {
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
                 </div>
-                <BloqueoEtapa>
+                <BloqueoEtapa
+                  puedeDesbloquear={esAdmin && tratamientoActualOriginal?.tratamiento_completado === true}
+                  onDesbloquear={() => desbloquear('tratamiento', tratamientoActual.id, 'Tratamiento')}
+                  guardando={guardando}
+                >
                   <CampoFormulario label="¿Actividades de tratamiento termico realizadas según planeación?">
                     <SelectSiNo name="tratamiento_completado" soloLectura={!esEditable('etapa_5')} value={boolToStr(tratamientoActual.tratamiento_completado)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_completado', strToBool(v), idxTratamiento)}
@@ -2277,7 +2349,11 @@ function PaginaEditarDom() {
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>
             </div>
-            <BloqueoEtapa>
+            <BloqueoEtapa
+              puedeDesbloquear={esAdmin && datosDomOriginal?.dom_liberado_cierre === true}
+              onDesbloquear={() => desbloquear('despacho', domId, 'Despacho')}
+              guardando={guardando}
+            >
               <CampoFormulario label="¿DOM se libera para cierre definitivo?">
                 <SelectSiNo name="dom_liberado_cierre" soloLectura={!esEditable('etapa_6')} value={boolToStr(datosDom.dom_liberado_cierre)}
                   onChange={v => actualizarCampoDom('dom_liberado_cierre', strToBool(v))}
@@ -2335,6 +2411,19 @@ function PaginaEditarDom() {
         acciones={[
           { texto: 'Cancelar', estilo: 'peligro', onClick: () => { confirmacionBloqueo?.resolve(false); setConfirmacionBloqueo(null) } },
           { texto: 'Confirmar', estilo: 'primario', onClick: () => { confirmacionBloqueo?.resolve(true); setConfirmacionBloqueo(null) } },
+        ]}
+      />
+
+      {/* Modal confirmación de desbloqueo de etapa (ADMIN) */}
+      <ModalBase
+        abierto={!!confirmacionDesbloqueo}
+        variante="confirmacion"
+        titulo="Confirmar desbloqueo de etapa"
+        mensaje={confirmacionDesbloqueo?.mensaje}
+        onCerrar={() => { confirmacionDesbloqueo?.resolve(false); setConfirmacionDesbloqueo(null) }}
+        acciones={[
+          { texto: 'Cancelar', estilo: 'peligro', onClick: () => { confirmacionDesbloqueo?.resolve(false); setConfirmacionDesbloqueo(null) } },
+          { texto: 'Desbloquear', estilo: 'primario', onClick: () => { confirmacionDesbloqueo?.resolve(true); setConfirmacionDesbloqueo(null) } },
         ]}
       />
 
@@ -2463,7 +2552,9 @@ function FormEtapa({ titulo, editable, guardando, onGuardar, onCancelar, sinRegi
 // que, al marcarse "Sí" y guardar, cierra la etapa para edición. Fondo ámbar +
 // ícono de candado + título, para que el usuario identifique sin ambigüedad cuál
 // es el control de bloqueo (antes se confundía con un campo más del formulario).
-function BloqueoEtapa({ children }) {
+// Si puedeDesbloquear (solo ADMIN, y solo si la etapa está bloqueada según el
+// snapshot *Original), suma abajo el botón que la reabre.
+function BloqueoEtapa({ children, puedeDesbloquear, onDesbloquear, guardando }) {
   return (
     <div className="mt-1 p-4 rounded-lg border border-amber-300 bg-amber-50">
       <div className="flex items-center gap-2 mb-3 text-amber-800">
@@ -2473,6 +2564,22 @@ function BloqueoEtapa({ children }) {
         </h3>
       </div>
       {children}
+      {puedeDesbloquear && (
+        <div className="mt-4 pt-4 border-t border-amber-300">
+          <button onClick={onDesbloquear} disabled={guardando}
+            className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-2.5
+                       bg-white border border-amber-400 text-amber-800 text-sm font-medium
+                       rounded hover:bg-amber-100 disabled:opacity-60
+                       disabled:cursor-not-allowed">
+            <FiUnlock size={15} />
+            DESBLOQUEAR ETAPA
+          </button>
+          <p className="text-xs text-amber-700 mt-2">
+            Esta etapa está bloqueada. Como administrador puede reabrirla para corregirla;
+            la acción quedará registrada en auditoría.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

@@ -41,6 +41,7 @@ from server.views import(
     # Módulo 3 - DOMs
     DomListView,
     DomDetalleView,
+    DesbloqueoEtapaView,
 
     # Módulo 4 - Etapas
     RegistroPlaneacionListView,
@@ -101,6 +102,9 @@ urlpatterns = [
     # Módulo 3 - DOMs
     path('api/doms/', DomListView.as_view(), name='doms'),
     path('api/doms/<int:dom_id>/', DomDetalleView.as_view(), name='dom-detalle'),
+
+    # Desbloqueo de etapas (ADMIN)
+    path('api/desbloqueo/', DesbloqueoEtapaView.as_view(), name='desbloqueo-etapa'),
 
     # Módulo 4 - Etapas 2, 3, 4, 5 (etapas 1 y 6 traen directamente su información de DOM, no es necesario crear rutas especificas)
     path('api/planeacion/', RegistroPlaneacionListView.as_view(), name='planeacion'),

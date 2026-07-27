@@ -1458,6 +1458,15 @@ from django.db import transaction, IntegrityError
 # Clase para obtener datos GET DomListView o listado de todos los DOMS del sistema todos los roles del sistema 
 # Clase para creación de nuevo registro DOM ANALISTA_1 ANALISTA_2 ADMIN
 
+# Opciones de vencimiento del selector "DOMs a mostrar" → nivel_urgencia que filtran.
+# Las demas opciones ('activos', 'cerrados', 'todos') solo tocan el cierre.
+MOSTRAR_URGENCIA = {
+    'vencidos':  0,
+    'proximos':  1,
+    'a_tiempo':  2,
+}
+
+
 class DomListView(APIView):
 
     authentication_classes = [TokenAuthentication]
@@ -1493,9 +1502,19 @@ class DomListView(APIView):
         if responsable is not None:
             doms = doms.filter(responsable__icontains=responsable)
 
-        dom_liberado_raw = request.query_params.get('dom_liberado_cierre', 'false')
-        dom_liberado = dom_liberado_raw.lower() == 'true'
-        doms = doms.filter(dom_liberado_cierre=dom_liberado)
+        # ── DOMs a mostrar (selector unico del listado) ──────────────────
+        # Cruza dos dimensiones en un solo parametro: el cierre (etapa 6) y el
+        # vencimiento. Las opciones de vencimiento hablan SOLO de DOMs abiertos:
+        # un DOM cerrado no tiene vencimiento, su reloj se detuvo al cerrarse.
+        # El filtro por urgencia NO puede ir aqui — 'nivel_urgencia' aun no existe;
+        # se aplica mas abajo, despues del annotate que lo crea.
+        mostrar = request.query_params.get('mostrar', 'activos').lower()
+
+        if mostrar == 'cerrados':
+            doms = doms.filter(dom_liberado_cierre=True)
+        elif mostrar != 'todos':
+            # 'activos' + las tres de vencimiento + cualquier valor no reconocido
+            doms = doms.filter(dom_liberado_cierre=False)
 
         fecha_inicio = request.query_params.get('fecha_inicio', None)
         if fecha_inicio is not None:
@@ -1525,6 +1544,12 @@ class DomListView(APIView):
                 output_field=IntegerField()
             )
         )
+
+        # Corte por vencimiento del selector "DOMs a mostrar". Va aqui a la fuerza:
+        # 'nivel_urgencia' es una anotacion, no una columna, y solo se puede filtrar
+        # despues de que el annotate de arriba la registre en el queryset.
+        if mostrar in MOSTRAR_URGENCIA:
+            doms = doms.filter(nivel_urgencia=MOSTRAR_URGENCIA[mostrar])
 
         # ── Orden manual (lista blanca de campos permitidos) ──
         CAMPOS_ORDEN = {
@@ -1825,6 +1850,85 @@ class DomDetalleView(APIView):
         )
         
 # FIN MODULO 3 - DOMs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DESBLOQUEO DE ETAPAS (exclusivo ADMIN)
+# Reabre una etapa bloqueada para corregirla: baja a False el booleano de bloqueo
+# del registro indicado y deja rastro en auditoría.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# tipo → (Modelo, campo_lock, etiqueta_etapa, nombre_legible, cómo llegar al DOM para auditar)
+# etiqueta_etapa es la clave técnica que se guarda en auditoría; nombre_legible es
+# el único texto que ve el usuario (no exponer 'etapa_2' en mensajes).
+MAPA_DESBLOQUEO = {
+    'planeacion':  (RegistroPlaneacion,  'planeacion_completa',        'etapa_2', 'Planeación',                  lambda inst: inst.dom),
+    'almacen':     (RegistroAlmacen,     'materias_liberadas',         'etapa_3', 'Almacén',                     lambda inst: inst.registro_planeacion.dom),
+    'produccion':  (RegistroProduccion,  'cierre_produccion',          'etapa_4', 'Producción',                  lambda inst: inst.registro_planeacion.dom),
+    'tratamiento': (RegistroTratamiento, 'tratamiento_completado',     'etapa_5', 'Tratamiento',                 lambda inst: inst.registro_planeacion.dom),
+    'despacho':    (Dom,                 'dom_liberado_cierre',        'etapa_6', 'Despacho',                    lambda inst: inst),
+    'dom_etapa1':  (Dom,                 'dom_relacionado_produccion', 'etapa_1', 'Gestión comercial y diseño',  lambda inst: inst),
+}
+
+
+class DesbloqueoEtapaView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # Solo el ADMIN puede desbloquear
+        if not verificar_rol(request, ['ADMIN']):
+            return Response(
+                {'error': 'No tiene permisos para desbloquear etapas'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        tipo = request.data.get('tipo')
+        registro_id = request.data.get('registro_id')
+
+        if tipo not in MAPA_DESBLOQUEO or registro_id is None:
+            return Response(
+                {'error': 'Debe indicar un tipo de etapa válido y el registro_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        Modelo, campo, etiqueta, nombre, obtener_dom = MAPA_DESBLOQUEO[tipo]
+
+        # ValueError/TypeError: registro_id no convertible a entero (ej. "abc"); la
+        # conversión falla antes de consultar, así que nunca se lanza DoesNotExist.
+        try:
+            instancia = Modelo.objects.get(pk=registro_id)
+        except (Modelo.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {'error': 'El registro indicado no existe'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Idempotencia: si ya estaba abierto, no hay nada que hacer
+        if getattr(instancia, campo) is False:
+            return Response(
+                {'mensaje': f'La etapa de {nombre} no está bloqueada.'},
+                status=status.HTTP_200_OK
+            )
+
+        # Desbloqueo: baja el candado y persiste solo ese campo
+        setattr(instancia, campo, False)
+        instancia.save(update_fields=[campo])
+
+        # Auditoría
+        dom = obtener_dom(instancia)
+        registrar_auditoria(
+            dom=dom,
+            usuario=request.user,
+            accion='DESBLOQUEO_ETAPA',
+            etapa=etiqueta,
+            campos_modificados={campo: {'antes': 'True', 'despues': 'False'}}
+        )
+
+        return Response(
+            {'mensaje': f'La etapa de {nombre} del DOM #{dom.dom_id} quedó desbloqueada y puede editarse nuevamente.'},
+            status=status.HTTP_200_OK
+        )
 
 
 # INICIO MODULO 4 - ETAPAS 2, 3, 4, 5
