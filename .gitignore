@@ -6,9 +6,8 @@ venv/
 
 # Variables de entorno y secretos
 .env
-
-# Base de datos local
-*.sqlite3
+.env.*
+!.env.example
 
 # Bytecode Python
 __pycache__/
@@ -18,3 +17,13 @@ __pycache__/
 # Build frontend
 client/dist
 client/node_modules
+
+# Estaticos recolectados (collectstatic)
+staticfiles/
+
+# Logs
+*.log
+
+# Configuracion de editores
+.vscode/
+.idea/
