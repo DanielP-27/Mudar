@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from decouple import config
 from server.views import(
 
     # Módulo 1 - Autenciación usuarios
@@ -77,7 +78,7 @@ from server.views import(
 urlpatterns = [
     
     # path admin, necesario para acceso interfaz Django
-    path('admin/', admin.site.urls), 
+    path(config('ADMIN_URL', default='admin/'), admin.site.urls), 
 
     # Módulo 1 - Autenticación
     path('api/auth/login/', LoginView.as_view(), name='login'),
