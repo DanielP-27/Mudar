@@ -47,6 +47,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     "corsheaders.middleware.CorsMiddleware",
     'django.middleware.common.CommonMiddleware',
@@ -174,3 +175,38 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
     ]
 }
+
+
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 3600
+
+    (BASE_DIR / 'logs').mkdir(exist_ok=True)
+
+    LOGGING = {
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'detallado': {
+                'format': '{asctime} {levelname} {name} {message}',
+                'style': '{',
+            },
+        },
+        'handlers': {
+            'archivo': {
+                'class': 'logging.handlers.RotatingFileHandler',
+                'filename': BASE_DIR / 'logs' / 'mudar.log',
+                'maxBytes': 5 * 1024 * 1024,
+                'backupCount': 3,
+                'formatter': 'detallado',
+            },
+        },
+        'loggers': {
+            'django': {
+                'handlers': ['archivo'],
+                'level': 'WARNING',
+            },
+        },
+    }

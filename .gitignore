@@ -23,6 +23,7 @@ staticfiles/
 
 # Logs
 *.log
+logs/
 
 # Configuracion de editores
 .vscode/

@@ -1,36 +1,33 @@
 from django.contrib import admin
+from rest_framework.authtoken.models import TokenProxy
 from .models import(
-    Cliente,
     FamiliaProducto,
-    Productos,
     Turno,
-    RegistroTurnoDia,
     ListaPredefinida,
-    Dom,
-    ProductosDom,
-    RegistroPlaneacion,
-    RegistroAlmacen,
-    RegistroProduccion,
-    RegistroTiempoProduccion,
-    PausaTiempoProduccion,
-    RegistroTratamiento,
     PerfilUsuario,
     AuditoriaDom
 )
 
-admin.site.register(Cliente)
 admin.site.register(FamiliaProducto)
-admin.site.register(Productos)
 admin.site.register(Turno)
-admin.site.register(RegistroTurnoDia)
 admin.site.register(ListaPredefinida)
-admin.site.register(Dom)
-admin.site.register(ProductosDom)
-admin.site.register(RegistroPlaneacion)
-admin.site.register(RegistroAlmacen)
-admin.site.register(RegistroProduccion)
-admin.site.register(RegistroTiempoProduccion)
-admin.site.register(PausaTiempoProduccion)
-admin.site.register(RegistroTratamiento)
 admin.site.register(PerfilUsuario)
-admin.site.register(AuditoriaDom)
+
+# DRF muestra la clave del token en texto plano en su listado.
+admin.site.unregister(TokenProxy)
+
+
+@admin.register(AuditoriaDom)
+class AuditoriaDomAdmin(admin.ModelAdmin):
+    """Solo consulta:"""
+
+    list_display = ('timestamp', 'dom', 'usuario', 'accion', 'etapa')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
