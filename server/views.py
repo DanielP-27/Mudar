@@ -1,7 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.models import Token
 
@@ -11,6 +10,7 @@ from django.utils import timezone
 from datetime import timedelta
 from django.db.models.functions import Coalesce
 
+from .authentication import TOKEN_EXPIRY_MINUTES
 from .models import (
     Cliente,
     FamiliaProducto,
@@ -181,7 +181,10 @@ def calcular_campos_modificados(objeto_antes, request_data, objeto_despues):
 
 # POST /api/auth/login/
 class LoginView(APIView):
-    # Autenticación y token de acceso 
+    # Autenticación y token de acceso
+    # Lista vacía = no autenticar. Es obligatorio: sin ella, la vista heredaría
+    # ExpiringTokenAuthentication y un token vencido en la cabecera haría fallar
+    # el login con 401, impidiendo reingresar justo a quien acaba de expirar.
     authentication_classes = []
     permission_classes = [AllowAny]
 
@@ -225,17 +228,17 @@ class LoginView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Reutiliza token vigente; regenera si está expirado
-        token, created = Token.objects.get_or_create(user=user)
-        if not created and (timezone.now() - token.created) > timedelta(minutes=25):
-            token.delete()
-            token = Token.objects.create(user=user)
+        # Cada ingreso emite credencial nueva: invalida la sesión anterior del
+        # usuario y evita duplicar aquí el umbral de caducidad.
+        Token.objects.filter(user=user).delete()
+        token = Token.objects.create(user=user)
 
         return Response(
             {
                 'mensaje' : 'Inicio de sesión exitoso',
                 'token' : token.key,
-                'perfil' : perfil_data # incluye rol, username, nombre_completo
+                'perfil' : perfil_data, # incluye rol, username, nombre_completo
+                'expira_en_minutos' : TOKEN_EXPIRY_MINUTES,
             },
             status = status.HTTP_200_OK
         )
@@ -244,7 +247,6 @@ class LoginView(APIView):
 class LogoutView(APIView):
     # Elimina el token de usuario autenticado al momento que este cierra sesión
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -265,7 +267,6 @@ class PerfilView(APIView):
 
     # retorna perfil de usuario autenticado a través de JSON, verificación y consulta de datos pq5q logueo
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -289,7 +290,6 @@ class CambioPasswordView(APIView):
     # Vista para permitir a los usuarios cambiar su contraseña
     # Importante: Se construye lógica a nivel de Back; sin embargo, funcionalidad no se encuentra habilitada a nivel Front - escalabilidad futura del proyecto
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -333,7 +333,6 @@ class CambioPasswordView(APIView):
 # Clase para la visualización del listado de usuarios y roles, y para creación de nuevos usuarios, exclusivo ADMIN
 class UsuarioListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -405,7 +404,6 @@ class UsuarioListView(APIView):
 # Registros de usuarios desactivados no se eliminan
 class UsuarioDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
     
     def put(self, request, user_id):
@@ -494,7 +492,6 @@ class UsuarioDetalleView(APIView):
 
 class RestablecerPasswordView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -550,7 +547,6 @@ from django.db import IntegrityError
 
 class ClienteListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get (self, request):
@@ -614,7 +610,6 @@ class ClienteListView(APIView):
 
 class ClienteDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, cliente_id):
@@ -735,7 +730,6 @@ class ClienteDetalleView(APIView):
 
 class FamiliaProductoListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -790,7 +784,6 @@ class FamiliaProductoListView(APIView):
 
 class FamiliaProductoDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, familia_id):
@@ -931,7 +924,6 @@ class FamiliaProductoDetalleView(APIView):
 # creación nuevos productos (POST) solo ADMIN
 
 class ProductoListView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -990,7 +982,6 @@ class ProductoListView(APIView):
 
 class ProductoDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, producto_id):
@@ -1111,7 +1102,6 @@ class ProductoDetalleView(APIView):
 
 class TurnoListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -1162,7 +1152,6 @@ class TurnoListView(APIView):
 # Clase para edición de información o desactivación de turnos / SOLO ADMIN
 class TurnoDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, turno_id):
@@ -1284,7 +1273,6 @@ class TurnoDetalleView(APIView):
 
 class ListaPredefinidaListView(APIView):
     
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -1356,7 +1344,6 @@ class ListaPredefinidaListView(APIView):
 
 class ListaPredefinidaDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, lista_id):
@@ -1469,7 +1456,6 @@ MOSTRAR_URGENCIA = {
 
 class DomListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -1715,7 +1701,6 @@ CAMPOS_POR_ETAPA = {
 
 class DomDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, dom_id):
@@ -1872,7 +1857,6 @@ MAPA_DESBLOQUEO = {
 
 
 class DesbloqueoEtapaView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -1943,7 +1927,6 @@ class DesbloqueoEtapaView(APIView):
 
 class RegistroPlaneacionListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -2044,7 +2027,6 @@ class RegistroPlaneacionListView(APIView):
 
 class RegistroPlaneacionDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, registro_id):
@@ -2200,7 +2182,6 @@ class RegistroPlaneacionDetalleView(APIView):
 # ── Endpoints ProductoPlaneacion ──────────────────────────────────────────────
 
 class ProductoPlaneacionListView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes     = [IsAuthenticated]
 
     def post(self, request):
@@ -2313,7 +2294,6 @@ class ProductoPlaneacionListView(APIView):
 
 
 class ProductoPlaneacionDetalleView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes     = [IsAuthenticated]
 
     def put(self, request, producto_id):
@@ -2454,7 +2434,6 @@ class ProductoPlaneacionDetalleView(APIView):
 # ── Endpoint ProductoProduccion ───────────────────────────────────────────────
 
 class ProductoProduccionListView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes     = [IsAuthenticated]
 
     def post(self, request):
@@ -2540,7 +2519,6 @@ class ProductoProduccionListView(APIView):
 
 
 class ProductoProduccionDetalleView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes     = [IsAuthenticated]
 
     def put(self, request, producto_id):
@@ -2657,7 +2635,6 @@ class ProductoProduccionDetalleView(APIView):
 
 class RegistroAlmacenListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -2744,7 +2721,6 @@ class RegistroAlmacenListView(APIView):
 
 class RegistroAlmacenDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, registro_id):
@@ -2829,7 +2805,6 @@ class RegistroAlmacenDetalleView(APIView):
 
 class RegistroProduccionListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -2914,7 +2889,6 @@ class RegistroProduccionListView(APIView):
 
 class RegistroProduccionDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, registro_id):
@@ -3008,7 +2982,6 @@ class RegistroProduccionDetalleView(APIView):
 
 class RegistroTratamientoListView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -3097,7 +3070,6 @@ class RegistroTratamientoListView(APIView):
 
 class RegistroTratamientoDetalleView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, registro_id):
@@ -3179,7 +3151,6 @@ class RegistroTratamientoDetalleView(APIView):
 # Solo ADMIN y PLANEADOR puede modificar este dato una vez registrado
 
 class RegistroTurnoDiaListView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -3216,7 +3187,6 @@ class RegistroTurnoDiaListView(APIView):
 
 
 class RegistroTurnoDiaPreviewView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, registro_id):
@@ -3255,7 +3225,6 @@ class RegistroTurnoDiaPreviewView(APIView):
 
 
 class RegistroTurnoDiaDetalleView(APIView):
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, registro_id):
@@ -3350,7 +3319,6 @@ class CronometroIniciarView(APIView):
 # Crea RegistroTiempoProduccion con estado=EN_CURSO e inicio=ahora.
 # Valida que no exista ya un cronómetro EN_CURSO para ese registro.
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -3407,7 +3375,6 @@ class CronometroIniciarView(APIView):
 # Clase pausa cronómetro
 class CronometroPausaView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -3459,7 +3426,6 @@ class CronometroPausaView(APIView):
 # Clase reanuda cronómetro en pausa
 class CronometroReanudarView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -3519,7 +3485,6 @@ class CronometroReanudarView(APIView):
 # Clase para finalizar cronometro 
 class CronometroFinalizarView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -3642,7 +3607,6 @@ def productos_pendientes_por_doms(doms_qs):
 
 class DashboardView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -3850,7 +3814,6 @@ class DashboardView(APIView):
 
 class InformeCumplimientoPlaneacion(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -4002,7 +3965,6 @@ class InformeCumplimientoPlaneacion(APIView):
 
 class InformeDespachoView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -4098,7 +4060,6 @@ class InformeDespachoView(APIView):
 
 class DomReporteView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, dom_id):
@@ -4221,7 +4182,6 @@ class DomReporteView(APIView):
 
 class InformeAuditoriaView(APIView):
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):

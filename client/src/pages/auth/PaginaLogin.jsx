@@ -1,15 +1,20 @@
 // src/pages/auth/PaginaLogin.jsx
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAutenticacion } from '../../context/AuthContext'
+import { extraerMensajeError } from '../../utils/errores'
 
 function PaginaLogin() {
   const { iniciarSesion }                       = useAutenticacion()
   const navegar                                 = useNavigate()
+  const [parametros]                            = useSearchParams()
   const [nombreUsuario, setNombreUsuario]       = useState('')
   const [contrasena, setContrasena]             = useState('')
   const [cargando, setCargando]                 = useState(false)
   const [error, setError]                       = useState(null)
+
+  // El interceptor de axios redirige aquí con ?sesion=expirada tras un 401
+  const sesionExpirada = parametros.get('sesion') === 'expirada'
 
   const manejarSubmit = async (e) => {
     e.preventDefault()
@@ -21,12 +26,9 @@ function PaginaLogin() {
       // Login exitoso — redirigir siempre al dashboard
       navegar('/dashboard', { replace: true })
     } catch (err) {
-      // Error de credenciales o conexión
-      setError(
-        err.response?.status === 400
-          ? 'Usuario o contraseña incorrectos.'
-          : 'Error de conexión. Intente nuevamente.'
-      )
+      // El backend responde con el mensaje preciso: credenciales incorrectas,
+      // usuario inactivo o sin perfil asignado.
+      setError(extraerMensajeError(err, 'No se pudo iniciar sesión. Intente nuevamente.'))
     } finally {
       setCargando(false)
     }
@@ -43,6 +45,16 @@ function PaginaLogin() {
             Por favor, digite sus datos para iniciar
           </p>
         </div>
+
+        {/* Aviso de sesión cerrada por inactividad */}
+        {sesionExpirada && !error && (
+          <div className="mb-5 p-3 rounded border border-amber-300 bg-amber-50">
+            <p className="text-xs font-semibold text-amber-800 text-center">
+              Su sesión se cerró por inactividad. Si tenía un cronómetro en curso,
+              este no se ha detenido, sigue corriendo; vuelva a ingresar para finalizarlo.
+            </p>
+          </div>
+        )}
 
         {/* Formulario */}
         <form onSubmit={manejarSubmit} className="space-y-5">

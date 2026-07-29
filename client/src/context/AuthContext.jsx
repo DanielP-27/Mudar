@@ -17,8 +17,10 @@ export function ProveedorAutenticacion({ children }) {
     const tiempoGuardado  = localStorage.getItem('mudar_token_tiempo')
 
     if (sesionGuardada && tiempoGuardado) {
+      // La ventana la define el backend y llega en la respuesta del login.
+      // Si la clave no existe, Number(null) da 0 y la sesión se descarta.
       const minutosTranscurridos = (Date.now() - Number(tiempoGuardado)) / 60000
-      const tiempoExpiracion     = Number(import.meta.env.VITE_TOKEN_EXPIRY_MINUTES)
+      const tiempoExpiracion     = Number(localStorage.getItem('mudar_token_ventana'))
 
       if (minutosTranscurridos < tiempoExpiracion) {
         // Token vigente — restaurar sesión
@@ -27,6 +29,7 @@ export function ProveedorAutenticacion({ children }) {
         // Token expirado — limpiar localStorage
         localStorage.removeItem('mudar_usuario')
         localStorage.removeItem('mudar_token_tiempo')
+        localStorage.removeItem('mudar_token_ventana')
       }
     }
 
@@ -46,9 +49,10 @@ const iniciarSesion = async (nombreUsuario, contrasena) => {
   // Actualizar estado en memoria
   setUsuario(datosUsuario)
 
-  // Persistir sesión y timestamp para validar expiración al recargar
-  localStorage.setItem('mudar_usuario',      JSON.stringify(datosUsuario))
-  localStorage.setItem('mudar_token_tiempo', Date.now().toString())
+  // Persistir sesión, timestamp y ventana de caducidad para validar al recargar
+  localStorage.setItem('mudar_usuario',       JSON.stringify(datosUsuario))
+  localStorage.setItem('mudar_token_tiempo',  Date.now().toString())
+  localStorage.setItem('mudar_token_ventana', String(data.expira_en_minutos))
 
   // Retorna datosUsuario para que PaginaLogin pueda redirigir inmediatamente
   return datosUsuario
@@ -59,6 +63,7 @@ const iniciarSesion = async (nombreUsuario, contrasena) => {
     setUsuario(null)
     localStorage.removeItem('mudar_usuario')
     localStorage.removeItem('mudar_token_tiempo')
+    localStorage.removeItem('mudar_token_ventana')
   }
 
   // Expone usuario, iniciarSesion, cerrarSesion y cargando a todos los componentes hijos

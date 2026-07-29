@@ -20,15 +20,27 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// Interceptor de respuesta — maneja errores globales
+// Interceptor de respuesta — renueva la sesión y maneja errores globales
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Espeja la renovación deslizante del backend: toda respuesta exitosa
+    // reinicia el contador local de inactividad.
+    if (localStorage.getItem('mudar_usuario')) {
+      localStorage.setItem('mudar_token_tiempo', Date.now().toString())
+    }
+    return response
+  },
   (error) => {
-    // Token expirado o inválido — limpiar sesión y redirigir al login
-    if (error.response?.status === 401) {
+    // El 401 del login significa credenciales incorrectas, no sesión vencida.
+    // Ahí no hay sesión que limpiar ni a dónde redirigir: lo maneja la propia
+    // pantalla de ingreso.
+    const esLogin = error.config?.url?.includes('/api/auth/login/')
+
+    if (error.response?.status === 401 && !esLogin) {
       localStorage.removeItem('mudar_usuario')
       localStorage.removeItem('mudar_token_tiempo')
-      window.location.href = '/login'
+      localStorage.removeItem('mudar_token_ventana')
+      window.location.href = '/login?sesion=expirada'
     }
     return Promise.reject(error)
   }
