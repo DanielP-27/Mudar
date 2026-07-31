@@ -161,17 +161,53 @@ def registrar_auditoria(dom, usuario, accion, etapa=None, campos_modificados=Non
         campos_modificados = campos_modificados
     )
 
-def calcular_campos_modificados(objeto_antes, request_data, objeto_despues):
+def instantanea(objeto, request_data):
+    """Valores actuales de lo que vale la pena auditar: los campos que Django guarda
+    en columna, más las claves del request — de ahí salen las propiedades calculadas,
+    que no son columnas. Se omiten los auto_now: cambian en cada guardado sin informar.
+
+    Recorrer los campos del modelo (y no solo lo que mandó el cliente) es lo que hace
+    que queden auditados los cambios del servidor: numero_registro, creado_por, etc."""
+    nombres = {f.name for f in objeto._meta.concrete_fields
+               if not getattr(f, 'auto_now', False)} | set(request_data.keys())
+    return {n: getattr(objeto, n, None) for n in nombres}
+
+
+def foto_inicial(objeto):
+    """Estado con el que nació un registro, se guarda como foto plana. cuando una
+    edición posterior lleve un campo de None a un valor, las dos filas se encadenan."""
+    return {f.name: str(getattr(objeto, f.name, None))
+            for f in objeto._meta.concrete_fields
+            if not getattr(f, 'auto_now', False)}
+
+
+def calcular_campos_modificados(campos_antes, objeto_despues):
     campos = {}
-    for field in request_data.keys():
-        if field == 'etapa':
+    for nombre, valor_antes in campos_antes.items():
+        if nombre == 'etapa':      # clave de enrutamiento del request, no es columna
             continue
-        if hasattr(objeto_despues, field):
-            antes = str(getattr(objeto_antes, field, None))
-            despues = str(getattr(objeto_despues, field, None))
-            if antes != despues:
-                campos[field] = {'antes': antes, 'despues': despues}
+        antes = str(valor_antes)
+        despues = str(getattr(objeto_despues, nombre, None))
+        if antes != despues:
+            campos[nombre] = {'antes': antes, 'despues': despues}
     return campos if campos else None
+
+# Cerrar una etapa y editar su contenido son dos hechos distintos, aunque el
+# frontend los mande en el mismo PUT. Antes se auditaban como una sola fila
+# etiquetada BLOQUEO_ETAPA, y los campos de contenido quedaban escondidos ahí
+# dentro: invisibles como edición y sin contar en total_ediciones.
+def registrar_edicion_y_bloqueo(dom, usuario, etapa, campos, campo_bloqueo, bloqueada):
+    campos = dict(campos) if campos else {}
+    candado = campos.pop(campo_bloqueo, None)
+
+    # El 'or not candado' conserva el caso "guardó sin cambiar nada", que hoy
+    # se registra como una edición con campos_modificados en None.
+    if campos or not candado:
+        registrar_auditoria(dom, usuario, 'EDICION', etapa, campos or None)
+
+    if bloqueada and candado:
+        registrar_auditoria(dom, usuario, 'BLOQUEO_ETAPA', etapa,
+                            {campo_bloqueo: candado})
 
 # FIN HELPERS
 
@@ -1520,7 +1556,7 @@ class DomListView(APIView):
         # 0 vencido · 1 próximo a vencer (≤ DIAS_PROXIMO_VENCER días) · 2 activo.
         # La fecha de entrega efectiva nunca es null (solicitada es obligatoria),
         # por eso no existe estado "sin fecha".
-        hoy = timezone.now().date()
+        hoy = timezone.localdate()
         limite_proximo = hoy + timedelta(days=DIAS_PROXIMO_VENCER)
         doms = doms.annotate(
             nivel_urgencia=Case(
@@ -1638,17 +1674,29 @@ class DomListView(APIView):
             with transaction.atomic():
                 dom: Dom = serializer.save(creado_por=request.user, dom_relacionado_produccion=False)
 
+                # save() devuelve el objeto creado; se conserva para auditarlo abajo
+                productos_creados = []
                 for producto_serializer in productos_serializers:
-                    producto_serializer.save(productoDom=dom)
+                    productos_creados.append(producto_serializer.save(productoDom=dom))
 
-                # registro de auditoria de creación
+                # Registro de auditoría de creación. El DOM y cada uno de sus
+                # productos son hechos distintos, así que cada uno deja su fila.
                 registrar_auditoria(
                     dom=dom,
                     usuario=request.user,
                     accion='CREACION',
                     etapa='etapa_0',
-                    campos_modificados={k: str(v) for k, v in request.data.items()}
+                    campos_modificados=foto_inicial(dom)
                 )
+
+                for producto in productos_creados:
+                    registrar_auditoria(
+                        dom=dom,
+                        usuario=request.user,
+                        accion='CREACION',
+                        etapa='etapa_0',
+                        campos_modificados=foto_inicial(producto)
+                    )
         except Exception as e:
             return Response(
                 {'error': f'Error al crear el DOM: {str(e)}'},
@@ -1784,11 +1832,18 @@ class DomDetalleView(APIView):
         # Verifica bloqueo de etapa antes de aplicar cambios.
         # etapa_1 se bloquea con dom_relacionado_produccion=True (reactivado 2026-07-06,
         # cableado por el modal de confirmación del frontend).
+        # Cada etapa con candado guarda su verificador y el nombre del campo que lo
+        # representa. El nombre lo necesita la auditoría más abajo para separar el
+        # cierre de etapa de la edición de contenido.
         bloqueos = {
-            'etapa_1': dom.etapa_1_bloqueada,
-            'etapa_6': dom.etapa_6_bloqueada,
+            'etapa_1': (dom.etapa_1_bloqueada, 'dom_relacionado_produccion'),
+            'etapa_6': (dom.etapa_6_bloqueada, 'dom_liberado_cierre'),
         }
-        if etapa in bloqueos and bloqueos[etapa]():
+        # El valor por defecto permite desempacar sin comprobar antes si la etapa
+        # tiene candado: la etapa_0 (comercial) no lo tiene.
+        verificar_bloqueo, campo_bloqueo = bloqueos.get(etapa, (None, None))
+
+        if verificar_bloqueo and verificar_bloqueo():
             return Response(
                 {'error': f'La {etapa} de esta DOM está bloqueada y no puede ser modificada, contacte con el Administrador del sistema'},
                 status=status.HTTP_400_BAD_REQUEST      
@@ -1811,19 +1866,18 @@ class DomDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        campos_antes = {k: getattr(dom, k, None) for k in datos_filtrados.keys()}
+        campos_antes = instantanea(dom, datos_filtrados)
 
         dom = serializer.save()
 
         # Registros de auditoria, primero se verifica que la etapa no esté bloqueada 
-        accion = 'BLOQUEO_ETAPA' if etapa in bloqueos and bloqueos[etapa]() else 'EDICION'
-
-        registrar_auditoria(
+        registrar_edicion_y_bloqueo(
             dom=dom,
             usuario=request.user,
-            accion=accion,
             etapa=etapa,
-            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), datos_filtrados, dom)
+            campos=calcular_campos_modificados(campos_antes, dom),
+            campo_bloqueo=campo_bloqueo,
+            bloqueada=bool(verificar_bloqueo and verificar_bloqueo()),
         )
 
         return Response(
@@ -2004,7 +2058,7 @@ class RegistroPlaneacionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_2',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados=foto_inicial(registro)
         )
 
         # Refresca el objeto con relaciones cargadas
@@ -2146,19 +2200,18 @@ class RegistroPlaneacionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+        campos_antes = instantanea(registro, request.data)
 
         registro = serializer.save()
 
-        accion = 'BLOQUEO_ETAPA' if registro.etapa2_bloqueada() else 'EDICION'
-
-        registrar_auditoria(
+        registrar_edicion_y_bloqueo(
             dom=registro.dom,
             usuario=request.user,
-            accion=accion,
             etapa='etapa_2',
-            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
-    )
+            campos=calcular_campos_modificados(campos_antes, registro),
+            campo_bloqueo='planeacion_completa',
+            bloqueada=registro.etapa2_bloqueada(),
+        )
         
         # Refresca el objeto con relaciones cargadas
         registro = RegistroPlaneacion.objects.select_related(
@@ -2281,7 +2334,7 @@ class ProductoPlaneacionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_2',
-            campos_modificados={'dom_producto_id': str(request.data.get('dom_producto')), 'cantidad_proyectada': str(cantidad_proyectada_nueva)}
+            campos_modificados=foto_inicial(producto_planeacion)
         )
 
         return Response(
@@ -2372,14 +2425,16 @@ class ProductoPlaneacionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        campos_antes = instantanea(producto, request.data)
+
         producto = serializer.save()
 
         registrar_auditoria(
             dom=producto.registro_planeacion.dom,
             usuario=request.user,
-            accion='ACTUALIZACION',
+            accion='EDICION',
             etapa='etapa_2',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados=calcular_campos_modificados(campos_antes, producto)
         )
 
         return Response(
@@ -2506,7 +2561,7 @@ class ProductoProduccionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_4',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados=foto_inicial(producto)
         )
 
         return Response(
@@ -2571,14 +2626,16 @@ class ProductoProduccionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        campos_antes = instantanea(producto, request.data)
+
         producto = serializer.save()
 
         registrar_auditoria(
             dom=producto.registro_produccion.registro_planeacion.dom,
             usuario=request.user,
-            accion='ACTUALIZACION',
+            accion='EDICION',
             etapa='etapa_4',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados=calcular_campos_modificados(campos_antes, producto)
         )
 
         return Response(
@@ -2705,7 +2762,7 @@ class RegistroAlmacenListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_3',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados=foto_inicial(registro)
         )
 
         return Response(
@@ -2775,18 +2832,17 @@ class RegistroAlmacenDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+        campos_antes = instantanea(registro, request.data)
 
         registro = serializer.save()
 
-        accion = 'BLOQUEO_ETAPA' if registro.etapa_3_bloqueada() else 'EDICION'
-
-        registrar_auditoria(
-            dom = registro.registro_planeacion.dom,
+        registrar_edicion_y_bloqueo(
+            dom=registro.registro_planeacion.dom,
             usuario=request.user,
-            accion=accion,
             etapa='etapa_3',
-            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
+            campos=calcular_campos_modificados(campos_antes, registro),
+            campo_bloqueo='materias_liberadas',
+            bloqueada=registro.etapa_3_bloqueada(),
         )
 
         return Response(
@@ -2873,7 +2929,7 @@ class RegistroProduccionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_4',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados=foto_inicial(registro)
         )
 
         return Response(
@@ -2951,18 +3007,17 @@ class RegistroProduccionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+        campos_antes = instantanea(registro, request.data)
 
         registro = serializer.save()
 
-        accion = 'BLOQUEO_ETAPA' if registro.etapa_4_bloqueada() else 'EDICION'
-
-        registrar_auditoria(
+        registrar_edicion_y_bloqueo(
             dom=registro.registro_planeacion.dom,
             usuario=request.user,
-            accion=accion,
             etapa='etapa_4',
-            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
+            campos=calcular_campos_modificados(campos_antes, registro),
+            campo_bloqueo='cierre_produccion',
+            bloqueada=registro.etapa_4_bloqueada(),
         )
 
         return Response(
@@ -3052,7 +3107,7 @@ class RegistroTratamientoListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_5',
-            campos_modificados={k: str(v) for k, v in request.data.items()}
+            campos_modificados=foto_inicial(registro)
         )
 
         return Response(
@@ -3125,18 +3180,17 @@ class RegistroTratamientoDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        campos_antes = {k: getattr(registro, k, None) for k in request.data.keys()}
+        campos_antes = instantanea(registro, request.data)
 
         registro = serializer.save()
 
-        accion = 'BLOQUEO_ETAPA' if registro.etapa_5_bloqueada() else 'EDICION'
-
-        registrar_auditoria(
+        registrar_edicion_y_bloqueo(
             dom=registro.registro_planeacion.dom,
             usuario=request.user,
-            accion=accion,
             etapa='etapa_5',
-            campos_modificados=calcular_campos_modificados(type('obj', (), campos_antes), request.data, registro)
+            campos=calcular_campos_modificados(campos_antes, registro),
+            campo_bloqueo='tratamiento_completado',
+            bloqueada=registro.etapa_5_bloqueada(),
         )
 
         return Response(
@@ -3610,7 +3664,7 @@ class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        hoy = timezone.now().date()
+        hoy = timezone.localdate()
 
         # Resumen global DOMs
         total_doms = Dom.objects.count()

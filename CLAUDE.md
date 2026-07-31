@@ -66,9 +66,10 @@ Cada etapa tiene un campo boolean de bloqueo. Una vez marcado `True`, la etapa n
 | 5 — Tratamiento | `RegistroTratamiento` | `tratamiento_completado` |
 | 6 — Despacho | `Dom` | `dom_liberado_cierre` |
 
-**Bloqueo desactivado deliberadamente — etapa 1 (Gestión comercial y diseño):** el modelo `Dom` tiene el campo `dom_relacionado_produccion` y el método `etapa_1_bloqueada()` (`models.py:256,319-320`), pero desde 2026-07-02 el bloqueo de esta etapa está **desactivado a propósito** — se quitó `'etapa_1': dom.etapa_1_bloqueada` del diccionario `bloqueos` en `DomDetalleView.put` (`views.py`) para evitar que un usuario bloquee la etapa por error, y se retiró el campo `CampoFormulario` "Validación etapa 1" del frontend (`PaginaEditarDom.jsx`) para que no sea visible ni editable. El campo del modelo, el método y el serializer siguen intactos — es código muerto reversible. Si el dueño del negocio pide reactivar este bloqueo en el futuro, hay que: (1) volver a agregar `'etapa_1': dom.etapa_1_bloqueada,` al diccionario `bloqueos`, y (2) restaurar el `CampoFormulario` correspondiente en el frontend.
+**Etapa 1 (Gestión comercial y diseño) — bloqueo ACTIVO.** Se bloquea con `dom_relacionado_produccion=True`. Estuvo desactivado entre el 2026-07-02 y el 2026-07-06, y fue **reactivado el 2026-07-06**, cableado por el modal de confirmación del frontend. Hoy `'etapa_1': dom.etapa_1_bloqueada` está en el diccionario `bloqueos` de `DomDetalleView.put` (`views.py:1788`), junto a `'etapa_6'`.
+> *(Corregido el 2026-07-31, verificado contra código: esta sección afirmaba lo contrario.)*
 
-> **Nota:** ningún check de bloqueo exceptúa hoy al rol `ADMIN` — un registro bloqueado queda bloqueado también para el administrador. El desbloqueo por ADMIN es una funcionalidad faltante (pendiente pre-pruebas, ver sección 7).
+> **Nota:** ningún check de bloqueo exceptúa al rol `ADMIN` — un registro bloqueado queda bloqueado también para el administrador. El desbloqueo **no** se resolvió con una excepción de rol sino con un **endpoint dedicado**: `POST /api/desbloqueo/` → `DesbloqueoEtapaView` (`views.py:1859`), restringido a ADMIN, idempotente (si ya estaba abierto responde 200 sin escribir) y con registro en `AuditoriaDom` como `DESBLOQUEO_ETAPA`. El mapa etapa→modelo→campo vive en `MAPA_DESBLOQUEO` (`views.py:1854`). En el frontend, el botón **Reabrir** de `PaginaListaDoms.jsx:499` (tabla) y `:579` (tarjeta móvil) lo consume para la etapa 6.
 
 ### 5.2 Sistema de roles (`PerfilUsuario`)
 Define 6 roles con permisos diferenciados por etapa via `puede_editar_etapas(etapa)`:
@@ -98,21 +99,20 @@ Las siguientes propiedades se calculan en tiempo de ejecución y **no se almacen
 
 - Las credenciales de BD y `SECRET_KEY` se leen desde `.env` via `python-decouple` (`config()`)
 - `.env` está excluido del repositorio — nunca debe commitearse
-- El `.gitignore` cubre: `.env`, `*.sqlite3`, `__pycache__/`, `*.pyc`, `venv/`, `node_modules`
+- El `.gitignore` cubre: `node_modules`, `venv/`, `.venv/`, `.env` **y `.env.*` con excepción explícita `!.env.example`**, `__pycache__/`, `*.pyc`, `*.pyo`, `client/dist`, `client/node_modules`, `staticfiles/`, `*.log`, `logs/`, `.vscode/`, `.idea/`. Ya **no** incluye `*.sqlite3` — se retiró por política de clean code, la base es PostgreSQL y el archivo se borró del disco
 
 ## 7. Pendientes (previos al entorno de pruebas)
 
-### 7.1 Visibilidad de campos `SelectSiNo` sin permisos de edición
-`client/src/components/common/SelectSiNo.jsx` tiene dos variantes activas en paralelo, falta validar en navegador y decidir cuál queda:
-- Etapa 2 (Planeación, 11 campos): prop `mostrarCandado` activa — radio seleccionado se mantiene azul fijo, señal de bloqueo es un ícono de candado (`FiLock`) junto a los radios.
-- Resto de etapas (Almacén, Producción, Tratamiento, Despacho, DOM): sin candado — radio azul cuando editable, negro sólido cuando bloqueado.
-- Pendiente decidir si se extiende el candado a todas las etapas o se queda solo en Planeación.
+### 7.1 Visibilidad de campos `SelectSiNo` sin permisos de edición — ✅ RESUELTO
+La prop `mostrarCandado` y el ícono `FiLock` **ya no existen** en el componente. `SelectSiNo` recibe hoy `variante = 'bloqueo' | 'lectura'` y, cuando el usuario no puede editar la etapa (`soloLectura`), pinta una **píldora legible** en vez de radios deshabilitados —que el navegador agrisaba hasta hacerlos ilegibles—: ámbar **reservada a los campos de bloqueo de etapa**, gris estándar para el resto, y `—` cuando aún no se ha diligenciado.
+> *(Corregido el 2026-07-31, verificado contra código: esta sección describía dos variantes en paralelo que ya no están.)*
 
 ### 7.2 Contraste de campos deshabilitados
 Se aplicaron varias capas de fix (contraste de texto/fondo en `disabled:*`, override global de `-webkit-text-fill-color`/`opacity` en `client/src/index.css`), pero tras probarlo en navegador el usuario indicó que el aspecto visual sigue sin convencerlo. Retomar y revisar con el usuario antes de seguir iterando a ciegas.
 
-### 7.3 Desbloqueo por ADMIN de etapas bloqueadas
-Confirmado en `views.py`: ningún check de bloqueo (`etapa2_bloqueada()`, `etapa_3_bloqueada()`, etc., ni el dict `bloqueos` de etapas 1/6) exceptúa al rol `ADMIN`. Por diseño acordado con el cliente, el administrador debe poder desbloquear cualquier etapa de cualquier DOM. Funcionalidad faltante — resolver antes de pruebas. Decisión pendiente: excepción de rol en el check vs. endpoint dedicado de desbloqueo con auditoría (preferencia: endpoint dedicado, por trazabilidad).
+### 7.3 Desbloqueo por ADMIN de etapas bloqueadas — ✅ RESUELTO
+Se implementó la opción preferida: **endpoint dedicado con auditoría**, no excepción de rol. `POST /api/desbloqueo/` (`urls.py:108`) → `DesbloqueoEtapaView` (`views.py:1859`) recibe `tipo` y `registro_id`, valida rol ADMIN, baja el candado con `save(update_fields=[campo])` y registra `DESBLOQUEO_ETAPA` en `AuditoriaDom` con el antes/después. Los checks de bloqueo de las etapas siguen **sin** excepción de rol, que es lo correcto: el desbloqueo es un acto explícito y trazable, no un permiso silencioso. Detalle en la nota de la sección 5.1.
+> *(Corregido el 2026-07-31, verificado contra código: figuraba como funcionalidad faltante con la decisión abierta.)*
 
 ## 8. Deuda Técnica / Mejoras a Futuro (post-pruebas)
 
