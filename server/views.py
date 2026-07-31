@@ -3836,9 +3836,8 @@ class InformeCumplimientoPlaneacion(APIView):
         registros = RegistroPlaneacion.objects.filter(
             fecha_planeacion__range=[fecha_inicio, fecha_fin]
         ).select_related(
+            # 'dom_producto' y 'turno' no se usan aquí; el primero además ya no existe en el modelo
             'dom__nombre_cliente',
-            'dom_producto__tipo_producto',
-            'turno'
         ).prefetch_related(
             'registros_almacen',
             'registros_produccion',

@@ -935,8 +935,8 @@ class PerfilUsuario(models.Model):
     # definición de roles de permisos según usuario, en views.py se utilizarán estas declaraciones 
 
     ROLES_CHOICES = [
-        ('GERENCIA', 'gerencia'),
-        ('ADMIN', 'administrador'),
+        ('GERENCIA', 'Gerencia'),
+        ('ADMIN', 'Administrador'),
         ('ANALISTA_1', 'Analista Costos 1'),
         ('ANALISTA_2', 'Analista Costos 2'),
         ('PLANEADOR', 'Planeador'),
