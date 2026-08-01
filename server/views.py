@@ -150,6 +150,78 @@ def calcular_ratio_cumplimiento(registros_ok, total_registros):
         'porcentaje': round(registros_ok / total_registros * 100, 1) if total_registros else None,
     }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SALVAGUARDA DE CIERRE DE ETAPA
+# Una etapa no puede bloquearse sin el dato que esa etapa debía producir. El valor
+# puede ser verdadero o falso según la realidad del negocio; lo que no se admite es
+# que quede sin diligenciar: el DOM se vería cerrado para todos y el número que
+# alimenta los informes nunca habría existido.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def valor_efectivo(instancia, datos, campo):
+    """Valor que tendrá el campo DESPUÉS de aplicar el payload.
+
+    El veredicto y el candado viajan en el mismo PUT, así que mirar solo la base
+    daría 'falta el dato' justo cuando el usuario acaba de marcarlo."""
+    if campo in datos:
+        return datos.get(campo)
+    return getattr(instancia, campo, None)
+
+
+# etapa → (campo_candado, [(campo, etiqueta)], [(comprobación, etiqueta)])
+# Las etiquetas son el texto que lee el usuario cuando se rechaza el cierre.
+REQUISITOS_CIERRE = {
+    'etapa_3': ('materias_liberadas',
+        [('dom_realizado_planeacion',
+          'si las actividades de almacén se realizaron según planeación')],
+        []),
+    # ⚠ DECLARADA PERO NO CABLEADA (2026-08-01). RegistroProduccionDetalleView.put
+    # sigue usando su bloque propio, que solo exige el cronómetro. Se dejó así a
+    # propósito: es la única de las cuatro que sustituye código en funcionamiento,
+    # y la etapa tiene restricciones de secuencia que conviene revisar antes.
+    # Al cablearla se retira ese bloque y se ganan dos requisitos que hoy no existen:
+    # el veredicto y el número de personas asignadas.
+    'etapa_4': ('cierre_produccion',
+        [('segun_planeacion',
+          'si las actividades de producción se realizaron según planeación'),
+         ('numero_personas_asignadas',
+          'el número de personas asignadas a la producción')],
+        [(lambda inst: inst.registros_tiempo.filter(estado='FINALIZADO').exists(),
+          'que el cronómetro de producción esté finalizado')]),
+    'etapa_5': ('tratamiento_completado',
+        [('tratamiento_segun_planeacion',
+          'si el tratamiento térmico se realizó según planeación')],
+        []),
+    'etapa_6': ('dom_liberado_cierre',
+        [('dom_entregado_ok',
+          'si el DOM fue entregado según planeación')],
+        []),
+}
+
+
+def validar_cierre(instancia, datos, etapa):
+    """None si se puede cerrar; el mensaje de error si falta algo.
+
+    Se comprueba con 'is None' y no con 'not valor': False es una respuesta
+    válida —significa que no cumplió— y cero personas también sería un dato."""
+    campo_candado, campos, comprobaciones = REQUISITOS_CIERRE[etapa]
+
+    # Si este PUT no está intentando cerrar, no hay nada que validar
+    if valor_efectivo(instancia, datos, campo_candado) is not True:
+        return None
+
+    faltantes = [etiqueta for campo, etiqueta in campos
+                 if valor_efectivo(instancia, datos, campo) is None]
+    faltantes += [etiqueta for prueba, etiqueta in comprobaciones
+                  if not prueba(instancia)]
+
+    if not faltantes:
+        return None
+
+    detalle = (faltantes[0] if len(faltantes) == 1
+               else ', '.join(faltantes[:-1]) + ' y ' + faltantes[-1])
+    return 'No es posible cerrar esta etapa sin indicar %s.' % detalle
+
 # Centraliza que  la creación de registros de AuditoriaDom ante accciones relevantes (creacion, edicion, bloqueo o desbloqueo etapa, eliminación)
 def registrar_auditoria(dom, usuario, accion, etapa=None, campos_modificados=None):
 
@@ -1846,9 +1918,16 @@ class DomDetalleView(APIView):
         if verificar_bloqueo and verificar_bloqueo():
             return Response(
                 {'error': f'La {etapa} de esta DOM está bloqueada y no puede ser modificada, contacte con el Administrador del sistema'},
-                status=status.HTTP_400_BAD_REQUEST      
+                status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # No se puede cerrar la etapa sin el veredicto que esta etapa produce.
+        # Este endpoint atiende las etapas 0, 1, 2 y 6; solo la 6 tiene requisitos.
+        if etapa in REQUISITOS_CIERRE:
+            error_cierre = validar_cierre(dom, request.data, etapa)
+            if error_cierre:
+                return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
+
         # Filtrado por etapa: se conservan solo los campos que pertenecen a la
         # etapa declarada. El frontend envía el objeto completo del DOM en cada
         # guardado; esto evita que un guardado escriba campos de otra etapa.
@@ -2820,7 +2899,12 @@ class RegistroAlmacenDetalleView(APIView):
                 {'error': 'Este registro de almacen se encuentra bloqueado. Por favor, contacte al administrador del sistema'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # No se puede cerrar la etapa sin el veredicto que esta etapa produce
+        error_cierre = validar_cierre(registro, request.data, 'etapa_3')
+        if error_cierre:
+            return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = RegistroAlmacenSerializer(registro, data=request.data, partial=True)
 
         if not serializer.is_valid():
@@ -3168,6 +3252,11 @@ class RegistroTratamientoDetalleView(APIView):
                 {'error': 'Este registro de tratamiento se encuentra bloqueado y no puede ser modificado. Por favor contacte al administrador del sistema'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # No se puede cerrar la etapa sin el veredicto que esta etapa produce
+        error_cierre = validar_cierre(registro, request.data, 'etapa_5')
+        if error_cierre:
+            return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = RegistroTratamientoSerializer(registro, data=request.data, partial=True)
 

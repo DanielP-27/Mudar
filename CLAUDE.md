@@ -71,6 +71,17 @@ Cada etapa tiene un campo boolean de bloqueo. Una vez marcado `True`, la etapa n
 
 > **Nota:** ningún check de bloqueo exceptúa al rol `ADMIN` — un registro bloqueado queda bloqueado también para el administrador. El desbloqueo **no** se resolvió con una excepción de rol sino con un **endpoint dedicado**: `POST /api/desbloqueo/` → `DesbloqueoEtapaView` (`views.py:1859`), restringido a ADMIN, idempotente (si ya estaba abierto responde 200 sin escribir) y con registro en `AuditoriaDom` como `DESBLOQUEO_ETAPA`. El mapa etapa→modelo→campo vive en `MAPA_DESBLOQUEO` (`views.py:1854`). En el frontend, el botón **Reabrir** de `PaginaListaDoms.jsx:499` (tabla) y `:579` (tarjeta móvil) lo consume para la etapa 6.
 
+> **Salvaguarda de cierre (2026-08-01).** Una etapa **no puede bloquearse si su campo de veredicto sigue sin diligenciar**. El valor puede ser verdadero o falso según la realidad del negocio; lo que no se admite es el nulo, porque el DOM quedaría cerrado para todos y el dato que alimenta los informes nunca habría existido. Vive en `views.py`: `valor_efectivo` resuelve el valor que tendrá el campo **después** de aplicar el payload —veredicto y candado viajan en el mismo PUT—, `REQUISITOS_CIERRE` declara los requisitos por etapa y `validar_cierre` devuelve el mensaje o `None`.
+>
+> | Etapa | Candado | Exige |
+> |---|---|---|
+> | 3 — Almacén | `materias_liberadas` | `dom_realizado_planeacion` |
+> | 4 — Producción | `cierre_produccion` | `segun_planeacion`, `numero_personas_asignadas` y cronómetro finalizado |
+> | 5 — Tratamiento | `tratamiento_completado` | `tratamiento_segun_planeacion` |
+> | 6 — Despacho | `dom_liberado_cierre` | `dom_entregado_ok` |
+>
+> ⚠️ **La etapa 4 está declarada en `REQUISITOS_CIERRE` pero NO cableada.** `RegistroProduccionDetalleView.put` conserva su bloque propio, que solo exige el cronómetro. Se dejó así a propósito: es la única de las cuatro que sustituye código en funcionamiento. Al cablearla se ganan dos requisitos que hoy no se exigen. La etapa 2 no tiene campo de veredicto; su guarda —turno, fecha, operarios, duración y al menos un producto con cantidad— queda para el bloque de endurecimiento previo al piloto.
+
 ### 5.2 Sistema de roles (`PerfilUsuario`)
 Define 6 roles con permisos diferenciados por etapa via `puede_editar_etapas(etapa)`:
 
@@ -83,11 +94,12 @@ Define 6 roles con permisos diferenciados por etapa via `puede_editar_etapas(eta
 | `GERENCIA` | ninguna (solo lectura) |
 
 ### 5.3 Capacidad de turno — `RegistroTurnoDia` (migración 0005)
-Registra operarios disponibles por turno y fecha. Es la base del cálculo de `capacidad_turno_dia` en `RegistroPlaneacion`. Sus campos clave: `turno` (FK), `fecha`, `numero_operarios`, `horas_extras` (+120 min si `True`). Restricción: `unique_together = ('turno', 'fecha')`.
+Registra operarios disponibles por turno y fecha. Es la base del cálculo de `capacidad_turno_dia` en `RegistroPlaneacion`. Sus campos concretos son: `turno` (FK), `fecha`, `numero_operarios`, `minutos_totales`, `registrado_por` y `fecha_creacion`. Restricción: `unique_together = ('turno', 'fecha')`.
+> *(Corregido el 2026-07-31, verificado contra código: esta sección citaba un campo `horas_extras` (+120 min si `True`) que no existe en el modelo. La duración del turno se guarda en `minutos_totales`.)*
 
 ### 5.4 Propiedades calculadas en `RegistroPlaneacion`
 Las siguientes propiedades se calculan en tiempo de ejecución y **no se almacenan en BD**. Requieren `select_related` y refresh antes del `Response`:
-- `capacidad_turno_dia` — minutos totales disponibles del turno × operarios (+ extras si aplica)
+- `capacidad_turno_dia` — minutos del turno × operarios del turno-día. El resultado son **minutos-persona**, que es la unidad en la que el sistema mide toda la carga de trabajo. Esa unidad **no está declarada en ningún `verbose_name` ni comentario**: se deduce de que `tiempo_restante_dia` le resta el tiempo proyectado, y de que `tiempo_produccion_unitario` es el promedio de minutos que **una persona** tarda en una unidad, obtenido de año y medio de registros en papel. *(Corregido el 2026-08-01: esta línea decía "(+ extras si aplica)", residuo de una constante muerta — ver 8.3.4.)*
 - `tiempo_proyectado` — `cantidad_pedido × tiempo_produccion_unitario`
 - `sumatoria_tiempo_asignado_turnos` — suma de tiempos proyectados de todos los registros del mismo turno y fecha
 - `tiempo_restante_dia` — `capacidad_turno_dia - sumatoria_tiempo_asignado_turnos`
@@ -131,7 +143,11 @@ Relacionado (pendiente post-pruebas, 2026-07-12): analizar y establecer un mecan
 
 ### 8.2 Datos
 
-**8.2.1 Migración de turnos históricos 480/600 → 420/540** — el cambio de legislación (migración 0019, 2026-07-10) ajustó la duración de los turnos, pero los registros `RegistroTurnoDia` creados antes conservan la duración anterior. Definir si se migran retroactivamente o se dejan como histórico intencional.
+**8.2.1 Tolerancia del `<select>` de duración de turno a valores fuera de `choices`** — `PaginaEditarDom.jsx:361` carga el valor guardado en un `<select>` cuyas opciones son solo las vigentes (`OPCIONES_MINUTOS`, `:39-42`). Si el registro trae una duración de una legislación anterior, ninguna opción coincide y **el campo se muestra vacío**. No afecta a producción hoy (la base arranca vacía y todo lo escrito tras la 0019 es válido), pero **el próximo cambio de legislación reproduce la situación con datos reales**. Arreglo: inyectar el valor actual como opción adicional. ~20-30 min, va al bloque de endurecimiento previo al piloto.
+
+> ✅ **CERRADO el 2026-08-01 — la migración retroactiva de turnos 480/600 → 420/540 NO se hace, y no era deuda técnica.** Los 480/600 son el registro fiel de jornadas que de verdad duraban 8 y 10 horas antes del cambio de legislación. Verificado: las **29** filas fuera de `choices` se crearon **todas antes** de la migración 0019, y las **5** posteriores están las 5 en 420/540 — el camino de escritura no ha admitido un solo valor inválido. Además, en producción la base arranca vacía.
+>
+> ⛔ **Retractada la advertencia del 2026-07-31** que decía que el catálogo `Turno` alimentaba la validación de capacidad: **es falsa**. La capacidad sale siempre de `RegistroTurnoDia` — `capacidad_turno_dia` (`models.py:414`) y `preview_capacidad` (`models.py:175`). Grep de `turno.minutos_totales` en todo el proyecto: cero coincidencias. `Turno.minutos_totales` (480 en pk 1 y 3) es dato muerto que solo aparece en su `__str__`; queda pendiente decidir si se corrige o se elimina el campo.
 
 ### 8.3 Refactors
 
@@ -140,6 +156,10 @@ Relacionado (pendiente post-pruebas, 2026-07-12): analizar y establecer un mecan
 **8.3.2 Wrapper `CampoSiNo`** — componente envoltorio que centralice permiso por etapa + variante + estado de bloqueo, en vez de repetir `soloLectura`/`disabled` en ~25 campos de `PaginaEditarDom.jsx`. Post-pruebas.
 
 **8.3.3 Centralizar el sistema de toasts** — hoy `Toast.jsx` es solo presentacional (éxito, controlado); cada página replica su propio estado `exito` + helper `mostrarExito` con el `setTimeout` de duración (3 copias: `PaginaEditarDom`, `PaginaClientes`, `PaginaProductos`). Además no hay toast de error (los errores van por `ModalMensaje` o texto rojo inline, según la página). Mejora: un `useToast` (hook) o `ToastProvider` (context) que centralice estado + duración y soporte variantes éxito/error, para que cualquier página dispare `toast.exito(...)` / `toast.error(...)` desde una sola fuente de verdad. Post-pruebas.
+
+**8.3.4 Código muerto que fabrica documentación falsa** — `MINUTOS_HORAS_EXTRAS = 120` (`models.py:9`) **no se usa en ninguna parte** y no existe ningún campo `horas_extras` en ningún modelo. Pero **dos comentarios describen ese comportamiento inexistente**: `models.py:8` y `models.py:121`. Esos comentarios son el **origen del error de la sección 5.3** — quien escribió la documentación leyó el comentario y le creyó, y de ahí pasó a razonamientos posteriores. Es una categoría distinta de las divergencias entre implementaciones: es divergencia **entre la descripción y el código**, y se propaga. Arreglo: borrar la constante y los dos comentarios.
+
+**8.3.5 Revisión de comentarios y declaración de unidades** — barrido de los comentarios existentes en `models.py` y `views.py` para detectar los que describen comportamiento distinto del que implementan, y adición de comentarios donde falta contexto que hoy solo vive en la cabeza de quien lo escribió. Casos concretos ya detectados: el comentario de `minutos_hombre_produccion_dom` (`models.py:700`) describe `tiempo_proyectado`, no la propiedad que encabeza; el `help_text` de `tiempo_produccion_unitario` está **vacío** y debería decir que es el promedio de minutos que **una persona** tarda en una unidad, obtenido de año y medio de registros en papel; `capacidad_turno_dia` no declara que su resultado son minutos-persona (ver 5.4). **La regla:** cuando una propiedad devuelve una magnitud, el comentario debe decir **en qué unidad** y **de dónde sale el dato**. No es documentación por documentar — es que estas confusiones no producen ningún error visible y sobreviven meses.
 
 ## 9. Historial de Sesiones
 

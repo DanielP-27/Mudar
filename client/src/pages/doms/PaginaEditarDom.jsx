@@ -1592,7 +1592,7 @@ function PaginaEditarDom() {
                   </div>
 
                   <div>
-                    <p className="text-xs text-gray-600">Ya asignado</p>
+                    <p className="text-xs text-gray-600">Tiempo ya asignado en turno y fecha</p>
                     <p className="text-lg font-bold text-amber-600">
                       {turnoDiaExistente ? asignadoOtras : '0'} min
                     </p>
