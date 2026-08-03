@@ -5,9 +5,6 @@ from django.utils import timezone
 from django.db.models.options import Options
 from django.db.models import Sum
 
-# Esta consante maneja la logica de +120 minutos si en el campo horas extras en planeación es marcado como TRUE
-MINUTOS_HORAS_EXTRAS = 120
-
 # Tabla listado de clientes
 class Cliente (models.Model):
     # Listado maestro de los clientes de la organización
@@ -118,7 +115,8 @@ class Turno(models.Model):
         if self.minutos_totales <= 0: 
             raise ValidationError ({'los minutos del turno deben ser mayores a 0'})
         
-# Clase donde se valida numero de operarios por turno y si se trabajan horas extras (+120 minutos en turno)
+# Operarios disponibles y duración del turno, por turno y fecha. Base del
+# cálculo de capacidad_turno_dia.
 
 class RegistroTurnoDia(models.Model):
     OPCIONES_MINUTOS = [(420, '7 horas (420 min)'), (540, '9 horas (540 min)')]
