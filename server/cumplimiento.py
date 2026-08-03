@@ -16,6 +16,12 @@ NO_CUMPLIO = 'NO_CUMPLIÓ'
 PENDIENTE = 'PENDIENTE'
 ANOMALO = 'ANÓMALO'
 
+# Etiquetas de CONJUNTO, no de registro. Un registro nunca es PARCIAL; un DOM
+# con tres producciones sí. CUMPLIÓ, NO_CUMPLIÓ y PARCIAL se acordaron con el
+# cliente y son lenguaje natural: el informe no las traduce a porcentajes.
+PARCIAL = 'PARCIAL'
+EN_CURSO = 'EN_CURSO'
+
 # Máximas de la experiencia: se escribe el razonamiento, no sólo el número.
 # 10 h porque la jornada larga son 9 (540 min) y cada turno abre su propio
 # cronómetro. La hora restante es margen para cerrarlo. Confirmado 2026-08-02.
@@ -111,3 +117,78 @@ def veredicto_tiempo(registro_produccion):
 
     # Minutos-persona contra minutos-persona.
     return CUMPLIO if minutos * personas <= proyectado else NO_CUMPLIO
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGREGACIÓN
+# Un DOM tiene N planeaciones y cada planeación M registros hijo: dos
+# multiplicidades encadenadas. En la base actual, 20 de 58 DOMs tienen más de
+# una planeación, así que no es un caso de borde.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Camino desde el DOM hasta los registros de cada etapa. Va aquí y no en cada
+# consumidor: es donde están las multiplicidades y donde se olvidan.
+CAMINOS = {
+    'almacen':     ('registros_almacen',     veredicto_almacen),
+    'produccion':  ('registros_produccion',  veredicto_produccion),
+    'tratamiento': ('registros_tratamiento', veredicto_tratamiento),
+    'tiempo':      ('registros_produccion',  veredicto_tiempo),
+}
+
+
+def veredictos_planeacion(planeacion, etapa):
+    """Veredictos de una etapa para UNA planeación.
+
+    Es la unidad que usan hoy el informe de cumplimiento (`views.py:3979`) y el
+    dashboard."""
+    # Despacho se mide por DOM (decisión 2026-08-02).
+    if etapa == 'despacho':
+        raise ValueError('Despacho se mide por DOM, no por planeación: usar veredictos_dom')
+
+    relacion, veredicto = CAMINOS[etapa]
+    return [veredicto(registro) for registro in getattr(planeacion, relacion).all()]
+
+
+def veredictos_dom(dom, etapa):
+    """Veredictos de una etapa para UN DOM: todas sus planeaciones."""
+    if etapa == 'despacho':
+        return [veredicto_despacho(dom)]      # vive en el DOM, no cuelga de nada
+
+    return [
+        v
+        for planeacion in dom.registro_planeacion.all()
+        for v in veredictos_planeacion(planeacion, etapa)
+    ]
+
+
+def consolidar(veredictos):
+    """Veredicto de un conjunto: un DOM, una planeación, un rango de fechas.
+
+    Todo bien CUMPLIÓ · algo mal PARCIAL · todo mal NO_CUMPLIÓ · faltan datos
+    PENDIENTE · cronómetro anómalo ANÓMALO. Acordado con el cliente: son
+    etiquetas en lenguaje natural, el informe no las traduce a porcentajes."""
+    if not veredictos:
+        return PENDIENTE
+
+    # Un solo cronómetro anómalo hace incalculable el total del conjunto.
+    if ANOMALO in veredictos:
+        return ANOMALO
+
+    n_ok = veredictos.count(CUMPLIO)
+    n_no = veredictos.count(NO_CUMPLIO)
+    n_pend = veredictos.count(PENDIENTE)
+
+    # PARCIAL antes que NO_CUMPLIÓ: n_no es cierto en los dos casos, y al revés
+    # un conjunto mezclado saldría como incumplimiento total.
+    if n_no and (n_ok or n_pend):
+        return PARCIAL
+    if n_no:
+        return NO_CUMPLIO
+    # Etapas pendientes de cierre y ningún incumplimiento: va bien, no terminó.
+    if n_pend and n_ok:
+        return EN_CURSO
+    # Todo pendiente: no ha empezado nada. Si se prefiere que este caso también
+    # sea EN_CURSO, se borra esta línea.
+    if n_pend:
+        return PENDIENTE
+    return CUMPLIO

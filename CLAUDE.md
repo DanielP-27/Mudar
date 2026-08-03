@@ -140,6 +140,36 @@ Ninguno entra al denominador del porcentaje, pero salen por razones opuestas y c
 
 **Efecto medido del predicado nuevo** (base de pruebas, 2026-08-02, antes de cablear): producción pasa de **46 incumplimientos a 3** más 43 pendientes; despacho de 51 a 2 más 49 pendientes; tratamiento de 15 a 3 más 12; almacén de 24 a 13 más 11. El informe decía "53 de 58 incumplieron"; con pendientes fuera del denominador la producción queda en 66.7 % (6 de 9 evaluables).
 
+### 5.7 Unidad de conteo de los informes — decidido el 2026-08-02
+
+**Almacén, producción y tratamiento se cuentan por PLANEACIÓN. Despacho por DOM.** El informe mezcla dos unidades **a propósito y correctamente**, porque el veredicto de despacho vive en el `Dom` y no cuelga de ninguna planeación.
+
+**Razón de Angel para quedarse en planeación:** con criterios en lenguaje natural, consolidar por DOM **sesga** la información; con valores numéricos sería distinto. **La pérdida al consolidar es asimétrica:** con números, agregar conserva la magnitud ("3 de 5" sigue diciendo cuánto); con etiquetas, colapsa estados distinguibles en una palabra irreversible — EN_CURSO no dice cuántas jornadas cumplieron ni cuántas faltan.
+
+**Y además distorsiona, no sólo pierde.** El **DOM 67** por DOM da almacén = NO_CUMPLIÓ a secas, que se lee como "a este pedido le falló el almacén". Lo ocurrido: de sus tres planeaciones sólo una llegó a tener registro de almacén, y ese falló. La etiqueta consolidada **afirma más de lo que pasó**.
+
+**Despacho por DOM, y `veredictos_planeacion` lo rechaza con error explícito.** Si se resolviera por planeación, cada una heredaría el mismo veredicto: 2 fallas reales se reportarían como 7. Falla ruidosamente en vez de contar mal en silencio.
+
+**Dos reglas para la pantalla** (bloque de frontend): un DOM con varias planeaciones **ocupa varias filas** — hay que agrupar u ordenar por DOM o se lee como duplicación. Y la sección de despacho **no debe compartir tabla ni encabezado** con las columnas por planeación, o el usuario comparará renglones que no cuentan lo mismo.
+
+**Universo real del informe: 59 de 79 planeaciones.** Las otras **20 no tienen fecha** y el filtro `fecha_planeacion__range` las descarta **en silencio**. `fecha_planeacion` es **nulable por diseño** (`models.py:358`), así que esto **no se cura vaciando la base**: se repetirá en producción. Las 20 tampoco tienen turno, y sin fecha ni turno no hay cálculo de capacidad (`models.py:404`) — están planeadas sólo de nombre.
+- **Se decidió NO fecharlas:** son la evidencia de que la app permite ese estado incompleto, y son el caso de prueba del aviso de excluidas. Fecharlas además haría que consumieran capacidad de su turno-día, alterando el `tiempo_restante_dia` de planeaciones del grupo de control.
+- **Arreglo acordado, dentro del cableado:** que el informe **declare lo que excluyó** ("20 planeaciones sin fecha quedaron fuera"). Convierte un hueco invisible en un aviso.
+- **Pendiente de Angel, para el bloque de endurecimiento:** ¿es legítimo crear una planeación sin fecha y ponérsela después, o siempre es un error? De eso depende si el campo pasa a obligatorio.
+- Los **6 DOMs sin ninguna planeación NO son un hueco**: un pedido nunca planeado no tiene cumplimiento de planeación que reportar.
+
+### 5.8 Informe de despacho — los defectos, con causa exacta (2026-08-02)
+
+Reproducidos en vivo sobre la base de pruebas.
+
+**El "2 contra 4".** `views.py:4134` cuenta `dom_entregado_ok=False` y da 2. Pero el bucle de `:4157` usa `if dom.dom_entregado_ok: ... else: ...`, y ese `else` **atrapa el falso y el nulo juntos**. De 7 DOMs en rango: 3 verdaderos, 2 falsos, 2 nulos → el encabezado dice 2 y la lista trae 4, en la misma respuesta.
+
+**Las tres columnas clonadas.** `views.py:4148`, `:4150` y `:4152` asignan las tres `dom.dom_entregado_ok`: almacén, producción y tratamiento muestran el mismo dato con tres rótulos. Las novedades, igual: la de almacén recibe un campo del DOM y las otras dos un `None` fijo.
+
+**Ceremonia muerta, no inventariada antes.** `views.py:4166-4174` construye una lista de **un solo elemento** y le aplica tres `all(...)`. `cumplimiento_consolidado` siempre acaba igual a `cumplimiento_despacho`. Nueve líneas que no deciden nada.
+
+> ⚠️ **RESTRICCIÓN DE SECUENCIA PARA EL CABLEADO.** `ResumenCumplimientoEtapaSerializer` **lo comparten los dos informes**, y sus campos de etapa son `BooleanField` (`serializers.py:1021`, `:1026`, `:1030`). Al pasar de booleanos a etiquetas hay que volverlos `CharField`, y eso **rompe el otro informe en el mismo momento**. La unidad de trabajo **no es "un informe": son los dos informes y el serializer compartido, en un solo paso.** Cablearlos por separado deja el sistema roto en el medio.
+
 ## 6. Seguridad y Entorno
 
 - Las credenciales de BD y `SECRET_KEY` se leen desde `.env` via `python-decouple` (`config()`)
