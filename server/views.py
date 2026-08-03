@@ -194,7 +194,11 @@ REQUISITOS_CIERRE = {
         []),
     'etapa_6': ('dom_liberado_cierre',
         [('dom_entregado_ok',
-          'si el DOM fue entregado según planeación')],
+          'si el DOM fue entregado según planeación'),
+         # Se incluye la fecha de entrega pactada como campo obligatorio para el
+         # cierre de la etapa 6 porque es dato fundamental del informe de despachos.
+         ('fecha_entrega_pactada',
+          'la fecha de entrega pactada')],
         []),
 }
 
@@ -202,16 +206,18 @@ REQUISITOS_CIERRE = {
 def validar_cierre(instancia, datos, etapa):
     """None si se puede cerrar; el mensaje de error si falta algo.
 
-    Se comprueba con 'is None' y no con 'not valor': False es una respuesta
-    válida —significa que no cumplió— y cero personas también sería un dato."""
+    Ausencia es el nulo y la cadena vacía, no la falsedad: False es una
+    respuesta válida —significa que no cumplió— y cero personas también sería
+    un dato."""
     campo_candado, campos, comprobaciones = REQUISITOS_CIERRE[etapa]
 
     # Si este PUT no está intentando cerrar, no hay nada que validar
     if valor_efectivo(instancia, datos, campo_candado) is not True:
         return None
 
+    # Un campo de fecha que el usuario borra en el navegador envía '', no null.
     faltantes = [etiqueta for campo, etiqueta in campos
-                 if valor_efectivo(instancia, datos, campo) is None]
+                 if valor_efectivo(instancia, datos, campo) in (None, '')]
     faltantes += [etiqueta for prueba, etiqueta in comprobaciones
                   if not prueba(instancia)]
 
