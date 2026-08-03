@@ -1063,27 +1063,50 @@ class InformeCumplimientoPlaneacionSerializer(serializers.Serializer):
     registros_no_segun_planeacion = ResumenCumplimientoEtapaSerializer(many = True, read_only = True)
 
 
+# Serializer: ResumenDespachoDomSerializer
+# Uso: una fila del informe de despacho. Propio y no compartido con el informe de
+# cumplimiento porque la unidad es distinta: aquí la fila es un DOM, allá una
+# planeación. Por eso no tiene columnas de almacén, producción ni tratamiento.
+
+class ResumenDespachoDomSerializer(serializers.Serializer):
+    dom_id = serializers.IntegerField(read_only = True)
+    nombre_cliente = serializers.CharField(read_only = True)
+    fecha_entrega_pactada = serializers.DateField(read_only = True, allow_null = True)
+
+    # Etiqueta del predicado, no un booleano: CUMPLIÓ, NO_CUMPLIÓ o PENDIENTE.
+    veredicto_despacho = serializers.CharField(read_only = True)
+    novedad = serializers.CharField(read_only = True, allow_null = True)
+
+
 # Serializer: InformeDespachoSerializer
-# Uso: Informeción respecto de los DOMs que cumplieron con la planeación establecida para despachos vs los que no cumplieron 
+# Uso: Informeción respecto de los DOMs que cumplieron con la planeación establecida para despachos vs los que no cumplieron
 
 class InformeDespachoSerializer(serializers.Serializer):
-    # Parametros de fecha informe 
+    # Parametros de fecha informe
     fecha_inicio = serializers.DateField(read_only = True)
     fecha_fin = serializers.DateField(read_only = True)
 
-    # Totales del periodo 
-    total_doms_evaluados = serializers.IntegerField(read_only =True)
-    total_entregados_ok = serializers.IntegerField(read_only = True, help_text = 'Total Doms despachados según planeación de la producción')
-    total_no_entregados_ok = serializers.IntegerField(read_only = True)
-    porcentaje_cumplimiento = serializers.FloatField(read_only = True, help_text = 'Porcentaje cumplimiento DOMs donde se cumplió con la planeación correspondiente a despachos y servicios externos' )
+    # Totales del periodo. Evaluable es el DOM donde alguien respondió si se
+    # entregó según lo planeado; el pendiente sale del denominador y se muestra
+    # al lado, porque no haber contestado todavía no es haber incumplido.
+    total_doms_en_rango = serializers.IntegerField(read_only = True)
+    total_cumplieron = serializers.IntegerField(read_only = True)
+    total_no_cumplieron = serializers.IntegerField(read_only = True)
+    total_pendientes = serializers.IntegerField(read_only = True, help_text = 'Doms que aún no tienen fecha de entrega planificada quedan excluidos de este calculo')
+    total_evaluables = serializers.IntegerField(read_only = True, help_text = 'Cumplieron + no cumplieron. Es el denominador del porcentaje')
+    porcentaje_cumplimiento = serializers.FloatField(read_only = True, help_text = 'Porcentaje de cumplimiento sobre los DOMs evaluables, no sobre el total del rango' )
 
-    # Variables para determinar cumplimiento o no según produccion
+    # Ningún rango de fechas puede incluirlos: sin fecha de entrega pactada no hay
+    # por dónde filtrarlos. Se declara para que la exclusión deje de ser invisible.
+    total_doms_sin_fecha_pactada = serializers.IntegerField(read_only = True)
+
+    # Etiqueta de conjunto para todo el periodo.
     cumplimiento_despacho = serializers.CharField(read_only=True)
-    cumplimiento_consolidado = serializers.CharField(read_only=True)
-    
-    # Detalles por registro
-    registros_segun_planeacion = ResumenCumplimientoEtapaSerializer(many = True, read_only = True)
-    registros_no_segun_planeacion = ResumenCumplimientoEtapaSerializer(many = True, read_only = True)
+
+    # Una sola lista: cada fila lleva su etiqueta y la pantalla decide cómo
+    # agrupar. Con cinco etiquetas posibles, repartirlas en cubos obliga a elegir
+    # dónde va un pendiente y la pantalla tendría que volver a unirlas.
+    registros = ResumenDespachoDomSerializer(many = True, read_only = True)
 
 class InformeAuditoriaSerializer(serializers.Serializer):
 

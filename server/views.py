@@ -61,11 +61,21 @@ from .serializers import (
     DomReporteSerializer,
     ProductoPendienteDashBoardSerializer,   # viaja dentro de DashboardSerializer
     DashboardSerializer,
-    ResumenCumplimientoEtapaSerializer,     # viaja dentro de InformeCumplimiento e InformeDespacho
+    ResumenCumplimientoEtapaSerializer,     # viaja dentro de InformeCumplimiento
     InformeCumplimientoPlaneacionSerializer, 
     InformeDespachoSerializer,
     InformeAuditoriaSerializer,             # se instancia directamente en InformeAuditoriaView
     RestablecerPasswordSerializer,
+)
+
+# El predicado de cumplimiento vive fuera de las vistas para que la regla no
+# dependa de que alguien abra una pantalla.
+from .cumplimiento import (
+    CUMPLIO,
+    NO_CUMPLIO,
+    PENDIENTE,
+    veredicto_despacho,
+    consolidar,
 )
 
 
@@ -4131,65 +4141,59 @@ class InformeDespachoView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # El filtro es la fecha que produce esta misma etapa. Los DOMs que aún no
+        # la tienen no están planeados para despacho todavía; se declaran aparte.
         doms = Dom.objects.filter(
             fecha_entrega_pactada__range=[fecha_inicio, fecha_fin]
-        ).select_related('nombre_cliente').prefetch_related('productos')
+        ).select_related('nombre_cliente')
 
-        total_doms = doms.count()
-        total_entregados_ok = doms.filter(dom_entregado_ok=True).count()
-        total_no_entregados_ok = doms.filter(dom_entregado_ok=False).count()
-        porcentaje_cumplimiento = round(
-            (total_entregados_ok / total_doms * 100) if total_doms > 0 else 0, 2
-        )
-
-        # Contrucción del resumen por DOM 
-
-        registros_segun_planeacion = []
-        registros_segun_no_planeacion = []
+        # Un veredicto por DOM: dom_entregado_ok vive en el DOM y no cuelga de
+        # ninguna planeación, así que aquí no hay multiplicidad que recorrer.
+        registros = []
+        veredictos = []
 
         for dom in doms:
-            resumen = {
+            veredicto = veredicto_despacho(dom)
+            veredictos.append(veredicto)
+            registros.append({
                 'dom_id': dom.dom_id,
                 'nombre_cliente': dom.nombre_cliente.nombre_cliente,
-                'almacen_segun_planeacion': dom.dom_entregado_ok,
-                'novedad_almacen': dom.novedades_cumplimiento,
-                'produccion_segun_planeacion': dom.dom_entregado_ok,
-                'novedad_produccion': None,
-                'tratamiento_segun_planeacion': dom.dom_entregado_ok,
-                'novedad_tratamiento': None,
-                'cumplimiento_global_registro': dom.dom_entregado_ok,
-            }
+                'fecha_entrega_pactada': dom.fecha_entrega_pactada,
+                'veredicto_despacho': veredicto,
+                'novedad': dom.novedades_cumplimiento,
+            })
 
-            if dom.dom_entregado_ok:
-                registros_segun_planeacion.append(resumen)
-            else: 
-                registros_segun_no_planeacion.append(resumen)
+        total_cumplieron = veredictos.count(CUMPLIO)
+        total_no_cumplieron = veredictos.count(NO_CUMPLIO)
+        total_pendientes = veredictos.count(PENDIENTE)
 
-        # Nivel 2 - cumplimiento por tipo de etapa
-        cumplimiento_despacho = calcular_cumplimiento(total_entregados_ok, total_doms)
+        # El pendiente sale del denominador: no haber contestado todavía no es
+        # haber incumplido. El bucle anterior partía en dos con un if/else, y ese
+        # else recogía el falso y el nulo juntos: de ahí salía que el encabezado
+        # dijera 2 y la lista trajera 4 en la misma respuesta.
+        total_evaluables = total_cumplieron + total_no_cumplieron
+        porcentaje_cumplimiento = round(
+            (total_cumplieron / total_evaluables * 100) if total_evaluables > 0 else 0, 2
+        )
 
-        # Nivel 3 - consolidado del informe
-        niveles = [cumplimiento_despacho]
-        if all(n == 'CUMPLIÓ' for n in niveles):
-            cumplimiento_consolidado = 'CUMPLIÓ'
-        elif all(n == 'NO_CUMPLIÓ' for n in niveles):
-            cumplimiento_consolidado = 'NO_CUMPLIÓ'
-        elif all(n == 'SIN_DATOS' for n in niveles):
-            cumplimiento_consolidado = 'SIN_DATOS'
-        else:
-            cumplimiento_consolidado = 'PARCIAL'
-        
+        # Ningún rango puede contenerlos, así que el conteo es necesariamente
+        # global. Se declara para que la exclusión deje de ser invisible.
+        total_doms_sin_fecha_pactada = Dom.objects.filter(
+            fecha_entrega_pactada__isnull=True
+        ).count()
+
         data = {
             'fecha_inicio': fecha_inicio,
             'fecha_fin': fecha_fin,
-            'total_doms_evaluados': total_doms,
-            'total_entregados_ok': total_entregados_ok,
-            'total_no_entregados_ok': total_no_entregados_ok,
+            'total_doms_en_rango': len(registros),
+            'total_cumplieron': total_cumplieron,
+            'total_no_cumplieron': total_no_cumplieron,
+            'total_pendientes': total_pendientes,
+            'total_evaluables': total_evaluables,
             'porcentaje_cumplimiento': porcentaje_cumplimiento,
-            'cumplimiento_despacho': cumplimiento_despacho,
-            'cumplimiento_consolidado': cumplimiento_consolidado,
-            'registros_segun_planeacion': registros_segun_planeacion,
-            'registros_no_segun_planeacion': registros_segun_no_planeacion,
+            'total_doms_sin_fecha_pactada': total_doms_sin_fecha_pactada,
+            'cumplimiento_despacho': consolidar(veredictos),
+            'registros': registros,
         }
 
         serializer = InformeDespachoSerializer(data)
