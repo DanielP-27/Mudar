@@ -27,7 +27,7 @@ models.py → serializers.py → views.py → urls.py
 | 3 | Registro de Producción | Validado |
 | 4 | Registro de Planeación | Validado |
 | 5 | Cronómetro | Validado — backend; falta política de olvidados (8.1.3) |
-| 6 | Dashboard / Reportes | **En corrección (Bloque 1.0)** — el backend responde, pero los veredictos son incorrectos (ver 5.6). Las 3 páginas de informes del frontend son *placeholders* de 7 líneas |
+| 6 | Dashboard / Reportes | **En corrección (Bloque 1.0)** — los 4 endpoints responden. Veredictos correctos en **1 de 4**: el informe de despacho (`4990402`). Los otros tres siguen contando el nulo como incumplimiento (ver 5.6 y 5.9). Las 3 páginas de informes del frontend son *placeholders* de 7 líneas |
 
 > **Sobre las referencias de línea de este archivo.** Se desplazan con cada cambio y envejecen mal. Verificadas contra código el **2026-08-02**; cuando no cuadren, buscar por el nombre del símbolo, que es lo estable.
 
@@ -80,9 +80,19 @@ Cada etapa tiene un campo boolean de bloqueo. Una vez marcado `True`, la etapa n
 > | 3 — Almacén | `materias_liberadas` | `dom_realizado_planeacion` |
 > | 4 — Producción | `cierre_produccion` | `segun_planeacion`, `numero_personas_asignadas` y cronómetro finalizado |
 > | 5 — Tratamiento | `tratamiento_completado` | `tratamiento_segun_planeacion` |
-> | 6 — Despacho | `dom_liberado_cierre` | `dom_entregado_ok` |
+> | 6 — Despacho | `dom_liberado_cierre` | `dom_entregado_ok` y `fecha_entrega_pactada` |
 >
-> ⚠️ **La etapa 4 está declarada en `REQUISITOS_CIERRE` pero NO cableada.** `RegistroProduccionDetalleView.put` conserva su bloque propio, que solo exige el cronómetro. Se dejó así a propósito: es la única de las cuatro que sustituye código en funcionamiento. Al cablearla se ganan dos requisitos que hoy no se exigen. La etapa 2 no tiene campo de veredicto; su guarda —turno, fecha, operarios, duración y al menos un producto con cantidad— queda para el bloque de endurecimiento previo al piloto.
+> ⚠️ **La etapa 4 está declarada en `REQUISITOS_CIERRE` pero NO cableada.** `RegistroProduccionDetalleView.put` conserva su bloque propio (`views.py:3091`), que solo exige el cronómetro. Al cablearla se ganan dos requisitos que hoy no se exigen: el veredicto y el número de personas asignadas. **`segun_planeacion` es hoy el único de los cuatro booleanos de informe que puede quedar en nulo con la etapa cerrada.**
+> > *Verificado el 2026-08-05: el `put` **no tiene restricciones de secuencia** —rol, obtener registro, verificar bloqueo, cronómetro, serializer, auditoría, respuesta y nada más—, así que la razón registrada el 2026-08-01 para aplazarlo no se sostiene contra el código. Lo único que se pierde al cablearla es el mensaje específico del cronómetro («Finalice el cronómetro antes de cerrar este registro») a cambio del genérico de `validar_cierre`.*
+
+> **La etapa 2 no tiene campo de veredicto** —produce insumos, no un juicio—, así que su guarda no encaja en el molde de las otras cuatro. Revisada contra código el **2026-08-05**, se parte en **dos mitades con estados distintos**:
+>
+> - **Mitad A — turno, fecha y existencia del turno-día. VIABLE, ≈1 h, prioridad ANTES del piloto.** El backend ya resuelve valores efectivos a mano (`turno_eval` / `fecha_eval`, `views.py:2226-2230`) y ya rechaza cuando es el primer registro de ese turno-día y faltan operarios o duración (`views.py:2248`). **El hueco exacto es que todo ese bloque vive dentro de `if turno_nuevo or fecha_nueva:`**: un PUT que solo mande `planeacion_completa: true` se lo salta entero, y una planeación con turno y fecha en nulo queda cerrada. Como un `RegistroTurnoDia` no puede crearse sin operarios ni duración, comprobar que existe cubre los cuatro requisitos de una vez. Exige extender la firma de las comprobaciones de `validar_cierre` a `prueba(instancia, datos)` —turno y fecha viajan en el mismo PUT—; hoy solo hay **una** comprobación en todo el mapa (la del cronómetro de la etapa 4, aún sin cablear), así que el cambio es de una línea. **Se hace en la misma sesión que el cableado de la etapa 4**, que comparte esa firma: juntas ≈2,5 h, separadas ≈3,25 h.
+> - **Mitad B — al menos un producto con cantidad proyectada. BLOQUEADA. Pasa a deuda técnica (ver 8.3.6).** Depende del refactor 8.3.1.
+>
+> **Por qué la mitad A es la que importa:** una planeación con fecha y turno pero sin cantidades **sí aparece** en el informe, aportando cero tiempo proyectado — y un cero se ve. La que desaparece de la consulta es la que no tiene fecha (ver 5.7). La mitad barata cierra el daño irreversible; la cara se puede posponer.
+>
+> ⚠️ **Efecto colateral al aplicarla:** cualquier guion que escriba por API tendrá que mandar turno y fecha. Los de las oleadas hacían PUT directo sin ellos.
 
 ### 5.2 Sistema de roles (`PerfilUsuario`)
 Define 6 roles con permisos diferenciados por etapa via `puede_editar_etapas(etapa)`:
@@ -115,7 +125,9 @@ Las siguientes propiedades se calculan en tiempo de ejecución y **no se almacen
 
 ### 5.6 Predicado único de cumplimiento — `server/cumplimiento.py` (2026-08-02)
 
-Módulo nuevo que responde "¿esta etapa cumplió?" en un solo lugar. Vive **fuera de `views.py`** a propósito: en las vistas la regla sólo existe si alguien abre una pantalla; en módulo aparte queda disponible para informes, migraciones y tareas. **Todavía no lo llama nadie** — el cableado es la F3.4.
+Módulo nuevo que responde "¿esta etapa cumplió?" en un solo lugar. Vive **fuera de `views.py`** a propósito: en las vistas la regla sólo existe si alguien abre una pantalla; en módulo aparte queda disponible para informes, migraciones y tareas.
+
+> **Estado del cableado al 2026-08-04.** Lo consume **un solo consumidor**: `InformeDespachoView`, desde el commit `4990402`. El informe de cumplimiento, el dashboard y el reporte DOM siguen con `calcular_cumplimiento` y `SIN_DATOS`. `veredicto_tiempo` y la etiqueta `ANÓMALO` **no tienen todavía ningún consumidor**: el suyo es el informe DOM, que está aparcado (ver 5.9).
 
 **El vocabulario son cuatro etiquetas, no dos.** La distinción que importa es entre las dos últimas:
 - `PENDIENTE` — no hay dato. Es legítimo y **el tiempo lo resuelve solo**: el DOM avanza de etapa y deja de estar pendiente.
@@ -154,13 +166,18 @@ Ninguno entra al denominador del porcentaje, pero salen por razones opuestas y c
 
 **Universo real del informe: 59 de 79 planeaciones.** Las otras **20 no tienen fecha** y el filtro `fecha_planeacion__range` las descarta **en silencio**. `fecha_planeacion` es **nulable por diseño** (`models.py:358`), así que esto **no se cura vaciando la base**: se repetirá en producción. Las 20 tampoco tienen turno, y sin fecha ni turno no hay cálculo de capacidad (`models.py:404`) — están planeadas sólo de nombre.
 - **Se decidió NO fecharlas:** son la evidencia de que la app permite ese estado incompleto, y son el caso de prueba del aviso de excluidas. Fecharlas además haría que consumieran capacidad de su turno-día, alterando el `tiempo_restante_dia` de planeaciones del grupo de control.
-- **Arreglo acordado, dentro del cableado:** que el informe **declare lo que excluyó** ("20 planeaciones sin fecha quedaron fuera"). Convierte un hueco invisible en un aviso.
+- ⛔ **Descartado el 2026-08-04:** se había acordado que el informe **declarara lo que excluyó** ("20 planeaciones sin fecha quedaron fuera"). Angel lo retiró del alcance: sobre una base sembrada para ejercitar otras funcionalidades, ese conteo no informa de nada.
+  > ⚠️ **No confundir con la regla del nulo, que es permanente y de otra naturaleza.** Un veredicto sin diligenciar **sí entra** al informe, se etiqueta `PENDIENTE` y **sale del denominador**, porque contarlo como incumplimiento atribuye fallas que nadie cometió. Aquí la exclusión es distinta: el registro **no llega siquiera a la consulta**, así que no se ve. El mecanismo que lo produce —campo nulable más filtro por rango— es estructural y se repetirá en producción; su sitio es el bloque de endurecimiento. En despacho el hueco equivalente ya se cerró por la vía correcta: `fecha_entrega_pactada` es requisito de cierre de la etapa 6.
 - **Pendiente de Angel, para el bloque de endurecimiento:** ¿es legítimo crear una planeación sin fecha y ponérsela después, o siempre es un error? De eso depende si el campo pasa a obligatorio.
 - Los **6 DOMs sin ninguna planeación NO son un hueco**: un pedido nunca planeado no tiene cumplimiento de planeación que reportar.
 
 ### 5.8 Informe de despacho — los defectos, con causa exacta (2026-08-02)
 
-Reproducidos en vivo sobre la base de pruebas.
+> ✅ **LOS TRES ESTÁN CORREGIDOS desde el 2026-08-03, commit `4990402`.** Esta sección se conserva como registro de qué estaba mal y por qué, porque los otros tres informes comparten el mismo molde y van a mostrar los mismos síntomas. **Las referencias de línea son al código ANTERIOR al arreglo** y ya no cuadran con el archivo actual.
+>
+> **Efecto medido, antes y después, sobre los 7 DOMs del rango:** encabezado y lista dejaron de contradecirse —los 2 nulos pasaron de engrosar la lista de incumplimientos a contarse como `PENDIENTE`—, el denominador bajó de 7 a 5 evaluables y el porcentaje pasó de **42,86 % a 60 %**. El número no subió porque el negocio mejorara: subió porque dejó de castigar a quien todavía no había respondido.
+
+Reproducidos en vivo sobre la base de pruebas, tal como estaban antes del arreglo.
 
 **El "2 contra 4".** `views.py:4134` cuenta `dom_entregado_ok=False` y da 2. Pero el bucle de `:4157` usa `if dom.dom_entregado_ok: ... else: ...`, y ese `else` **atrapa el falso y el nulo juntos**. De 7 DOMs en rango: 3 verdaderos, 2 falsos, 2 nulos → el encabezado dice 2 y la lista trae 4, en la misma respuesta.
 
@@ -168,7 +185,30 @@ Reproducidos en vivo sobre la base de pruebas.
 
 **Ceremonia muerta, no inventariada antes.** `views.py:4166-4174` construye una lista de **un solo elemento** y le aplica tres `all(...)`. `cumplimiento_consolidado` siempre acaba igual a `cumplimiento_despacho`. Nueve líneas que no deciden nada.
 
-> ⚠️ **RESTRICCIÓN DE SECUENCIA PARA EL CABLEADO.** `ResumenCumplimientoEtapaSerializer` **lo comparten los dos informes**, y sus campos de etapa son `BooleanField` (`serializers.py:1021`, `:1026`, `:1030`). Al pasar de booleanos a etiquetas hay que volverlos `CharField`, y eso **rompe el otro informe en el mismo momento**. La unidad de trabajo **no es "un informe": son los dos informes y el serializer compartido, en un solo paso.** Cablearlos por separado deja el sistema roto en el medio.
+> ✅ **RESUELTO el 2026-08-03 (commit `4990402`) — la restricción de secuencia ya no existe.** Decía que `ResumenCumplimientoEtapaSerializer` lo compartían los dos informes y que por eso había que cablearlos en un solo paso. Se resolvió por la vía contraria y mejor: **separar los serializers**. Despacho tiene ahora `ResumenDespachoDomSerializer` propio; el compartido quedó con un único usuario y se puede modificar sin coordinar con nada. La propuesta fue de Angel, con el argumento de que son informes distintos que viajan por rutas distintas. Consecuencias: las tres columnas clonadas de despacho **no se arreglaron, dejaron de existir**, y el informe de cumplimiento pasó a poder cablearse solo.
+
+### 5.9 Alcance del módulo de informes — decidido el 2026-08-04
+
+Recapitulación hecha tras contrastar el prompt original (4 informes, 3 formatos de salida) contra el código y contra los esquemas de Descargas.
+
+**Los cuatro informes se parten en dos familias, y el criterio es la naturaleza del dato.** Lo propuso Angel y el código ya estaba partido así sin que nadie lo hubiera notado:
+- **Familia booleana — informes 2 (cumplimiento de planeación) y 3 (despacho). SE TRABAJAN AHORA.** Leen cuatro campos del mismo tipo: `dom_realizado_planeacion`, `segun_planeacion`, `tratamiento_segun_planeacion` y `dom_entregado_ok`. Booleanos nulables que diligencia una persona. Mismo predicado, mismo problema del nulo, mismo denominador.
+- **Familia numérica — informe 1 (DOM). SE APARCA.** Mide cantidades, minutos y diferencias, con vocabulario propio (`POSITIVO / NEUTRO / NEGATIVO`). Puede quedar **para después de lanzar la V1.0 a pruebas**.
+- **Informe 4 (auditoría). SE APARCA.** No tiene veredictos ni denominadores: es un registro de eventos. Queda pendiente revisar su anidación y qué nivel de detalle muestra.
+
+> La confirmación de que la partición es correcta está en `server/cumplimiento.py`: cuatro de sus cinco predicados envuelven `_veredicto_booleano` y sirven a los informes 2 y 3; el quinto, `veredicto_tiempo`, es el único que mira magnitudes, el único que puede devolver `ANÓMALO` y el único **sin consumidor**, porque su consumidor natural es el informe DOM.
+
+**El informe 1 es híbrido, no puramente numérico.** Además de cantidades y minutos calcula los cuatro veredictos de etapa con el mismo `all(...)` sobre los mismos booleanos. Al retomarlo, esa mitad ya está resuelta —es llamar al módulo— y el trabajo real es el veredicto de tiempo, su unidad y qué hacer con `POSITIVO / NEUTRO / NEGATIVO`.
+
+**Bloque 4 del dashboard ("Cumplimiento") — SE DESACTIVA DE LA PANTALLA.** Decisión de Angel. No se corrige: se quita. Dos razones. La visible es que muestra datos imprecisos —los nulos cuentan como incumplimiento—. La de fondo es que **suma cosas que no son sumables**: almacén, producción y tratamiento se cuentan sobre planeaciones, despacho sobre DOMs, y el consolidado (20 de 266, 7,5 %) mezcla los dos denominadores en un solo porcentaje. Corregir el nulo no habría arreglado eso. El bloque nació cerca de la primera demo.
+- **Alcance exacto:** solo el bloque de cumplimiento de `PaginaDashboard.jsx`. Totales de DOMs, cantidades, próximos a vencer, vencidos y productos pendientes a 15 días **se quedan**: no dependen de los cuatro booleanos.
+- **El backend NO se toca.** `DashboardView` sigue calculando y devolviendo los cinco campos aunque nadie los pinte. Queda cálculo vivo sin consumidor, y por eso está anotado aquí. `SIN_DATOS` y `calcular_cumplimiento` no desaparecen del proyecto: dejan de verse.
+- **Se reabre junto con el informe DOM**, no por separado: son la misma familia. **Cuándo —antes o después del despliegue— se decide al terminar los informes 2 y 3, según el tiempo disponible para la V1.0.**
+
+**Exportación a PDF y Excel — APARCADA.** Es un tercio del prompt original (tres formatos para los informes 2, 3 y 4) y **no existe una sola línea en el backend**: búsqueda de `openpyxl`, `reportlab`, `xlsx`, escritura de CSV y `content_type` de PDF en todo `server/` da cero coincidencias. Cuándo se retoma se decide más adelante. No confundir con el PDF del reporte DOM, cuyo "backend listo" solo significa que el endpoint entrega los datos; el archivo se generaría en el frontend con jsPDF.
+
+**El líder sale del esquema del informe de cumplimiento.** El esquema mostraba *"3 jornadas en el rango · Leidy Becerra"* en el renglón del DOM. Los campos existen —`lider_produccion` (`models.py:361`) y `lider_almacen` (`:368`)— pero **son de la planeación, no del DOM**, y ahí está el defecto: medido en base, **8 DOMs con varias planeaciones tienen líderes de producción distintos entre ellas**, así que el renglón tendría que elegir uno y presentarlo como responsable del pedido — la misma distorsión del veredicto consolidado. Además **solo 14 de 79 planeaciones lo tienen diligenciado**. Cuando vuelva, va en el renglón de la jornada.
+- **El conteo de jornadas sí se queda.** No es lo mismo: sale gratis de la agrupación y es lo que evita que la repetición del mismo DOM se lea como duplicación (regla de pantalla de 5.7).
 
 ## 6. Seguridad y Entorno
 
@@ -195,7 +235,11 @@ Lo verificado y correcto: las **43 vistas declaran `permission_classes`**, todas
 
 **D. La auditoría no registra IP ni agente — media.** Sin eso no se reconstruye un incidente. Va junto con 8.1.2.
 
-**E. `coreapi` en `INSTALLED_APPS` sin usarse — baja.** Única mención en todo el proyecto: `settings.py:43`. Paquete sin mantenimiento activo. Quitar de ahí y de `requirements.txt`.
+**E. `coreapi` en `INSTALLED_APPS` — ✅ RESUELTO el 2026-08-06.** Se eliminó junto con las once dependencias que sólo existían para sostenerlo: la mitad de `requirements.txt`, que pasó de 24 paquetes a 12. Era el sistema de documentación de API que DRF deprecó en 2019; su reemplazo actual es `drf-spectacular`, que no reutiliza nada de esto. Verificado antes de quitarlo: los doce nombres de módulo no aparecen ni una vez en el código del proyecto, ninguno tiene un `Required-by` fuera del árbol de `coreapi`, y el orden importa —hay que quitar la línea de `INSTALLED_APPS` **antes** de desinstalar, o Django no arranca.
+
+> **Se van, pero pueden volver.** Reinstalar cualquiera es un `pip install`. Dos merecen nota por si el proyecto crece: **`requests`**, el cliente HTTP estándar de Python, que hará falta el día que la aplicación deba **consumir un servicio externo** (facturación electrónica, notificaciones, pasarelas de pago); y **`uritemplate`**, que DRF pide para generar esquemas OpenAPI si algún día se documenta la API.
+>
+> ⚠️ **No confundir `requests` con `request`.** `request` —singular, sin `s`— es el objeto que Django entrega a cada vista con la petición **entrante**: `request.data`, `request.user`, `request.query_params`, 148 usos sólo en `views.py`. Viene dentro de Django, no se instala ni se declara. `requests` —plural— es una librería de terceros para **enviar** peticiones HTTP hacia otros servidores, y hoy no se usa en ninguna parte. Se diferencian en una letra y confundirlas es lo más común en Django: la duda es razonable y la respuesta es que borrar la segunda no toca la primera.
 
 **F. HSTS en 1 hora — baja, no es código.** Subir a un año el día del despliegue, con el certificado ya estable.
 
@@ -227,6 +271,45 @@ Se aplicaron varias capas de fix (contraste de texto/fondo en `disabled:*`, over
 ### 7.3 Desbloqueo por ADMIN de etapas bloqueadas — ✅ RESUELTO
 Se implementó la opción preferida: **endpoint dedicado con auditoría**, no excepción de rol. `POST /api/desbloqueo/` (`urls.py:108`) → `DesbloqueoEtapaView` (`views.py:1859`) recibe `tipo` y `registro_id`, valida rol ADMIN, baja el candado con `save(update_fields=[campo])` y registra `DESBLOQUEO_ETAPA` en `AuditoriaDom` con el antes/después. Los checks de bloqueo de las etapas siguen **sin** excepción de rol, que es lo correcto: el desbloqueo es un acto explícito y trazable, no un permiso silencioso. Detalle en la nota de la sección 5.1.
 > *(Corregido el 2026-07-31, verificado contra código: figuraba como funcionalidad faltante con la decisión abierta.)*
+
+### 7.4 PLAN DE IMPLEMENTACIÓN — guardas de cierre de etapa (2026-08-05)
+
+> Documento completo en `Descargas/Mudar_Plan_Guardas_Cierre_20260805.docx`. Referencias de línea verificadas contra código el 2026-08-05, HEAD `4990402`.
+
+**Alcance: cuatro piezas. Dos son protección del dato, una es comodidad.**
+
+| Pieza | Estado hoy | Qué compra |
+|---|---|---|
+| Etapa 2, backend (turno, fecha, turno-día) | No existe | **PROTECCIÓN** |
+| Etapa 4, backend | Declarada en el mapa, sin cablear | **PROTECCIÓN** |
+| Etapas 3 y 5, backend | Ya cableadas y probadas | Sin trabajo |
+| Frontend de almacén, producción y tratamiento | No existe | COMODIDAD |
+
+Despacho queda fuera del pedido; su backend ya está cableado y su caja sería una cuarta pieza de ~30 min.
+
+**Fase 0 — Preparación · 20 min.** Dejar el árbol limpio (hoy `CLAUDE.md` está sin commitear; si el trabajo arranca encima, el diff mezcla documentación con código). Armar el andamio de verificación: **no existe ni un solo archivo de pruebas en el repositorio** —no hay `tests.py`, no hay suite— y los guiones del 1 de agosto vivían en un scratchpad que ya no existe. La verificación es un guion independiente con `APIRequestFactory` + `force_authenticate` envuelto en `transaction.atomic()` con reversión.
+
+**Fase 1 — Extender el mecanismo · 20 min · dificultad 2/10.** `validar_cierre` invoca hoy `prueba(instancia)` (`views.py:232`); pasa a `prueba(instancia, datos)`, y la única comprobación del mapa (cronómetro de etapa 4, `views.py:199`) pasa a `lambda inst, datos:`. **Riesgo casi nulo:** las etapas 3, 5 y 6 tienen la lista de comprobaciones vacía y la etapa 4 no está cableada. Es el momento exacto para cambiar la firma: después habría un camino en producción dependiendo de ella.
+
+**Fase 2 — Guarda de la etapa 2 · 40 min · dificultad 3/10.** Entrada nueva en `REQUISITOS_CIERRE`: candado `planeacion_completa`, campos `turno` y `fecha_planeacion`, comprobación de que existe el `RegistroTurnoDia`. Como un turno-día no se crea sin operarios ni duración, comprobar su existencia cubre los cuatro requisitos de una vez.
+> 🔴 **La llamada va DESPUÉS del bloque de turno-día, no antes.** Ese bloque (`views.py:2225-2259`) **crea** el `RegistroTurnoDia` como efecto secundario. Si la validación corriera antes, un PUT que traiga turno, fecha, operarios, duración y el candado todo junto —lo que manda el frontend la primera vez que se usa un turno-día— sería rechazado porque el turno-día aún no existe. Es la trampa del PUT único en su versión más difícil de ver. Sitio correcto: entre la línea 2259 y el `serializer` de la 2296. Los cinco escenarios posibles salen bien ahí, incluido aquel en que el bloque devuelve su propio 400 por falta de operarios y conserva su mensaje específico.
+>
+> **Detalle:** `valor_efectivo` devuelve tipos heterogéneos —`turno` es un entero desde el payload y un objeto `Turno` desde la instancia; la fecha es cadena o `date`—. **Django acepta las dos formas en un `filter`**, pero conviene comentarlo porque parece un descuido.
+>
+> **Variante mínima:** solo `turno` y `fecha_planeacion` como campos, sin comprobar el turno-día → la Fase 1 deja de ser necesaria y esta baja a ~20 min. Lo que se pierde: verificado que **el POST de creación no crea el turno-día** (`views.py:2145`), así que una planeación puede nacer con turno y fecha y sin turno-día. Lo que **no** se pierde: esa planeación **sí aparece en los informes**, porque tiene fecha. La variante mínima cubre el agujero que importa; la comprobación del turno-día protege el cálculo de capacidad, que es otra cosa.
+
+**Fase 3 — Cablear la etapa 4 · 30 min · dificultad 3/10.** Quitar el bloque de `views.py:3091-3097` y llamar a `validar_cierre` con `'etapa_4'`. Se gana que `segun_planeacion` deje de poder quedar en nulo con la etapa cerrada y se cierra el hueco de `numero_personas_asignadas` (8 producciones a un clic de cerrarse sin ese dato). Se pierde el mensaje específico del cronómetro a cambio del genérico. **Es la única fase que sustituye un camino en funcionamiento**, por eso va tercera y con verificación ya escrita.
+
+**Fase 4 — Verificación · 50 min.** Doce casos con reversión. Etapa 2: sin fecha · sin turno · sin turno-día · con los tres · el PUT que trae todo junto · un guardado que no intenta cerrar. Etapa 4: sin veredicto · sin personas · sin cronómetro · con los tres · **`False` como veredicto válido**, que es el caso que más fácil se rompe. Etapas 3, 5 y 6: un caso cada una para confirmar que la Fase 1 no las movió.
+
+**Fase 5 — Frontend, las tres cajas · 2,5 a 3 h · dificultad 3/10.** **El patrón ya existe y funciona:** `PaginaEditarDom.jsx:2155-2162` deshabilita el control de bloqueo mientras el cronómetro no esté finalizado y muestra la nota debajo. Ayudante compartido en `CAMPO_BLOQUEO_POR_TIPO` (`:446`), que ya mapea tipo → campo de bloqueo (30 min) · almacén `:1948` (25 min) · tratamiento `:2235` (25 min) · producción (35 min, la única que integra sobre lógica existente) · **pruebas en navegador 1,5 h, y eso domina la fase**: tres etapas × dos caminos + el caso del ADMIN que reabre.
+> **Sobre la duplicación de la regla en el frontend:** se acepta, y la razón es que **no es la misma clase de duplicación que `capacidad_turno_dia`**. Allá una divergencia produce un número equivocado en silencio; aquí la copia es solo UX y el backend sigue siendo la garantía. El peor caso es que el control aparezca habilitado y el guardado se rechace: molesto, inmediato y visible. **Nunca corrompe un dato.** Va con un comentario que apunte al backend como fuente de verdad.
+
+**Totales:** backend 2 h 20 min · frontend 2,5-3 h · **5 a 5,5 h, con margen 6 a 7 h**. Si el tiempo se acorta, **el corte natural es después de la Fase 4**: el dato queda protegido y lo que falta es que el usuario se entere antes en vez de después.
+
+**Riesgo y vuelta atrás:** ninguna fase toca el esquema → sin migración, vuelta atrás con `git revert`, datos existentes intactos. ⚠️ **Efecto colateral: cualquier guion que escriba por API tendrá que mandar turno y fecha** — los de las oleadas hacían PUT directo sin ellos.
+
+**Dos decisiones pendientes antes de arrancar:** (1) desactivar el bloque 4 del dashboard, autorización pendiente; (2) comprobación completa del turno-día o variante mínima.
 
 ## 8. Deuda Técnica / Mejoras a Futuro (post-pruebas)
 
@@ -292,6 +375,7 @@ Efecto: el 40.9 % de cumplimiento de almacén **no es real**; descontando los fa
 ### 8.3 Refactors
 
 **8.3.1 PUT atómico planeación + cantidades (Opción A)** — hoy la planeación y sus cantidades se guardan en dos pasos separados. Se decidió unificarlos en un único PUT atómico, pero DIFERIDO para después de pruebas; los endpoints actuales se mantienen intactos para no romper el flujo de pruebas.
+> **Dejó de ser solo un refactor de elegancia el 2026-08-05: ahora bloquea la mitad B de la guarda de la etapa 2 (ver 8.3.6 y la nota de 5.1).** Mientras el guardado sea en dos pasos, ninguna validación de cierre puede exigir nada sobre las cantidades.
 
 **8.3.2 Wrapper `CampoSiNo`** — componente envoltorio que centralice permiso por etapa + variante + estado de bloqueo, en vez de repetir `soloLectura`/`disabled` en ~25 campos de `PaginaEditarDom.jsx`. Post-pruebas.
 
@@ -300,6 +384,14 @@ Efecto: el 40.9 % de cumplimiento de almacén **no es real**; descontando los fa
 **8.3.4 Código muerto que fabrica documentación falsa** — `MINUTOS_HORAS_EXTRAS = 120` (`models.py:9`) **no se usa en ninguna parte** y no existe ningún campo `horas_extras` en ningún modelo. Pero **dos comentarios describen ese comportamiento inexistente**: `models.py:8` y `models.py:121`. Esos comentarios son el **origen del error de la sección 5.3** — quien escribió la documentación leyó el comentario y le creyó, y de ahí pasó a razonamientos posteriores. Es una categoría distinta de las divergencias entre implementaciones: es divergencia **entre la descripción y el código**, y se propaga. Arreglo: borrar la constante y los dos comentarios.
 
 **8.3.5 Revisión de comentarios y declaración de unidades** — barrido de los comentarios existentes en `models.py` y `views.py` para detectar los que describen comportamiento distinto del que implementan, y adición de comentarios donde falta contexto que hoy solo vive en la cabeza de quien lo escribió. Casos concretos ya detectados: el comentario de `minutos_hombre_produccion_dom` (`models.py:700`) describe `tiempo_proyectado`, no la propiedad que encabeza; el `help_text` de `tiempo_produccion_unitario` está **vacío** y debería decir que es el promedio de minutos que **una persona** tarda en una unidad, obtenido de año y medio de registros en papel; `capacidad_turno_dia` no declara que su resultado son minutos-persona (ver 5.4). **La regla:** cuando una propiedad devuelve una magnitud, el comentario debe decir **en qué unidad** y **de dónde sale el dato**. No es documentación por documentar — es que estas confusiones no producen ningún error visible y sobreviven meses.
+
+**8.3.6 Mitad B de la guarda de la etapa 2 — exigir al menos un producto con cantidad proyectada al cerrar la planeación** *(pasa a deuda el 2026-08-05, decisión de Angel)*. Es la única parte de la salvaguarda de cierre que no se puede construir hoy, y no por falta de tiempo sino por dependencia: **`guardarPlaneacion` hace el PUT de la planeación PRIMERO y vuelca las cantidades DESPUÉS** (`PaginaEditarDom.jsx:730-743`), así que en el instante en que el candado llega al backend las cantidades todavía no se han escrito. Una guarda que las exigiera rechazaría un guardado válido y produciría el error más frustrante posible: *«no me deja cerrar aunque acabo de llenar las cantidades»*.
+
+El orden **no es arbitrario** — el comentario del propio código explica que la planeación va primero *«para que el turno-día exista antes de mandar las cantidades»*. Invertirlo rompe la creación del turno-día. **Por tanto esto se desbloquea con 8.3.1, no antes.**
+
+> **Criterio de Angel al diferirlo:** no es un objetivo de reserva para el final de una sesión. Se retoma solo si aparece **un día completo de trabajo antes de producción**; en caso contrario queda como deuda sin fecha de vuelta. El riesgo de intentarlo con prisa es precisamente pisar la trampa del guardado en dos pasos.
+>
+> **Severidad real: baja.** Una planeación cerrada sin cantidades **sí aparece** en los informes, aportando cero tiempo proyectado. Es un dato pobre, no un dato ausente — a diferencia de la planeación sin fecha, que no llega siquiera a la consulta (5.7) y que sí se cierra ahora con la mitad A.
 
 ## 9. Historial de Sesiones
 

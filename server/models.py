@@ -895,7 +895,7 @@ class RegistroTratamiento(models.Model):
     novedad_cumplimiento_tratamiento = models.TextField(blank=True, null=True, verbose_name='Novedades en la realización o cumplimiento del tratamiento termico', help_text='Incluya en este campo cualquier novedad o hecho relevante relativo al cumplimiento del tratamiento fitosanitario respecto de este DOM')
     tratamiento_segun_planeacion = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Tratamiento termico realizado según planeación para este DOM?')
 
-    # bloque etapa 5 
+    # bloqueo etapa 5 
     tratamiento_completado = models.BooleanField(default=False, verbose_name='¿Tratamiento termico realizado respecto de todos los productos de este DOM?', help_text='Si selecciona la opción si, este campo ya no podrá realizar ningún cambio respecto de esta etapa')
 
     # auditoria 

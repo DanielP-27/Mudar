@@ -23,6 +23,12 @@ const ROLES_CREAR_DOM = [ROLES.ADMIN, ROLES.ANALISTA_1, ROLES.ANALISTA_2]
 // Roles con permiso de desactivar DOM
 const ROLES_DESACTIVAR_DOM = [ROLES.ADMIN]
 
+// Módulo de informes CONGELADO hasta después de la V1.0 (2026-08-05).
+// Las 3 pantallas son placeholders: el menú prometía algo que no existe.
+// Las rutas y los archivos siguen en su sitio; solo se oculta la entrada.
+// Para reactivarlo, poner en true.
+const MOSTRAR_INFORMES = false
+
 function Layout({ modoLogin = false }) {
   const { usuario, cerrarSesion }   = useAutenticacion()
   const [expandido, setExpandido]   = useState(!modoLogin)
@@ -221,6 +227,7 @@ function Layout({ modoLogin = false }) {
             )}
 
             {/* Informes — todos los roles */}
+            {MOSTRAR_INFORMES && (
             <div>
               <button
                 onClick={() => !colapsado && toggleMenu('informes')}
@@ -255,6 +262,7 @@ function Layout({ modoLogin = false }) {
                 </div>
               )}
             </div>
+            )}
 
           </nav>
         )}

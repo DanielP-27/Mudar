@@ -4,6 +4,14 @@ import { obtenerDashboard } from '../../api/dashboard'
 import { extraerMensajeError } from '../../utils/errores'
 import { formatearFecha } from '../../utils/formatters'
 
+// Bloque de cumplimiento DESACTIVADO hasta después de la V1.0 (2026-08-05).
+// Dos razones: los nulos cuentan como incumplimiento, y el consolidado suma dos
+// denominadores distintos (planeaciones para almacén/producción/tratamiento, DOMs
+// para despacho). Corregir el nulo no habría arreglado lo segundo.
+// El backend sigue calculando y devolviendo los 5 campos: aquí solo se dejan de
+// pintar. No se borra nada. Para reactivarlo, poner en true.
+const MOSTRAR_CUMPLIMIENTO = false
+
 // Colores de fondo/texto según el resultado de cumplimiento
 const ESTILOS_CUMPLIMIENTO = {
   CUMPLIÓ:    'bg-green-100 text-green-700',
@@ -170,6 +178,7 @@ function PaginaDashboard() {
       </div>
 
       {/* Bloque 4 — Cumplimiento */}
+      {MOSTRAR_CUMPLIMIENTO && (
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         <h2 className="px-4 py-3 text-sm font-medium text-gray-700 border-b border-gray-200">
           Cumplimiento
@@ -209,6 +218,7 @@ function PaginaDashboard() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   )
 }
