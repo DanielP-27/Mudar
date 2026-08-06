@@ -4,7 +4,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   FiEye, FiFileText, FiBriefcase, FiPackage,
   FiSettings, FiThermometer, FiTruck, FiPlus,
-  FiChevronRight, FiChevronDown, FiLock, FiUnlock, FiUser
+  FiChevronRight, FiChevronDown, FiLock, FiUnlock, FiUser, FiInfo
 } from 'react-icons/fi'
 import { useAutenticacion } from '../../context/AuthContext'
 import { puedeEditarEtapa, esSoloLectura } from '../../utils/permisos'
@@ -1178,7 +1178,6 @@ function PaginaEditarDom() {
                   <CampoConsolidado label="Minutos restantes"                valor={produccionActual?.minutos_restantes_dom} />
                   <CampoConsolidado label="Número personas asignadas"        valor={produccionActual?.numero_personas_asignadas} />
                   <CampoConsolidado label="¿Producción según planeación?"    valor={boolLabel(produccionActual?.segun_planeacion)} />
-                  <CampoConsolidado label="Producción no completada"         valor={boolLabel(produccionActual?.produccion_no_completada)} />
                   <CampoConsolidado label="Cierre producción"                valor={boolLabel(produccionActual?.cierre_produccion)} />
                 </SeccionConsolidado>
 
@@ -1882,7 +1881,7 @@ function PaginaEditarDom() {
                   {/* Editores → radios (control de acción). Solo-lectura por rol → pill ámbar. */}
                   <SelectSiNo name="planeacion_completa" soloLectura={!esEditable('etapa_2')} value={boolToStr(planActual.planeacion_completa)}
                     onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
-                    disabled={!esEditable('etapa_2')} />
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                   <p className="text-xs text-amber-600 mt-1">
                     Importante: una vez marque Sí y guarde, no podrá realizar
                     modificaciones posteriores a esta etapa.
@@ -1939,12 +1938,14 @@ function PaginaEditarDom() {
                       rows={2}
                       className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
+                </div>
+                <CampoRequeridoCierre>
                   <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
                     <SelectSiNo name="almacen_dom_realizado_planeacion" soloLectura={!esEditable('etapa_3')} variante="lectura" value={boolToStr(almacenActual.dom_realizado_planeacion)}
                       onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
                   </CampoFormulario>
-                </div>
+                </CampoRequeridoCierre>
                 <BloqueoEtapa
                   puedeDesbloquear={esAdmin && almacenActualOriginal?.materias_liberadas === true}
                   onDesbloquear={() => desbloquear('almacen', almacenActual.id, 'Almacén')}
@@ -2135,17 +2136,14 @@ function PaginaEditarDom() {
                       rows={2}
                       className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
+                </div>
+                <CampoRequeridoCierre>
                   <CampoFormulario label="¿Actividades de producción realizadas según registro de planeación?">
                     <SelectSiNo name="produccion_segun_planeacion" soloLectura={!esEditable('etapa_4')} variante="lectura" value={boolToStr(produccionActual.segun_planeacion)}
                       onChange={v => actualizarCampoHijo('produccion', 'segun_planeacion', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
                   </CampoFormulario>
-                  <CampoFormulario label="Producción no completada">
-                    <SelectSiNo name="produccion_no_completada" soloLectura={!esEditable('etapa_4')} variante="lectura" value={boolToStr(produccionActual.produccion_no_completada)}
-                      onChange={v => actualizarCampoHijo('produccion', 'produccion_no_completada', strToBool(v), idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
-                  </CampoFormulario>
-                </div>
+                </CampoRequeridoCierre>
                 <BloqueoEtapa
                   puedeDesbloquear={esAdmin && produccionActualOriginal?.cierre_produccion === true}
                   onDesbloquear={() => desbloquear('produccion', produccionActual.id, 'Producción')}
@@ -2226,12 +2224,14 @@ function PaginaEditarDom() {
                       rows={2}
                       className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
                   </CampoFormulario>
+                </div>
+                <CampoRequeridoCierre>
                   <CampoFormulario label="Tratamiento según planeación">
                     <SelectSiNo name="tratamiento_segun_planeacion" soloLectura={!esEditable('etapa_5')} variante="lectura" value={boolToStr(tratamientoActual.tratamiento_segun_planeacion)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_segun_planeacion', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
                   </CampoFormulario>
-                </div>
+                </CampoRequeridoCierre>
                 <BloqueoEtapa
                   puedeDesbloquear={esAdmin && tratamientoActualOriginal?.tratamiento_completado === true}
                   onDesbloquear={() => desbloquear('tratamiento', tratamientoActual.id, 'Tratamiento')}
@@ -2262,16 +2262,18 @@ function PaginaEditarDom() {
             onGuardar={() => guardarDom('Despacho guardado correctamente.', 'etapa_6')}
             onCancelar={() => setMostrarModalCancelar(true)}
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Etiqueta "Fecha de entrega planificada" por convención del cliente; el dato
-                  subyacente es fecha_entrega_pactada (ver nota de deuda técnica en el modelo Dom).
-                  fecha_entrega_planificada se retiró de la UI. */}
+            {/* Etiqueta "Fecha de entrega planificada" por convención del cliente; el dato
+                subyacente es fecha_entrega_pactada (ver nota de deuda técnica en el modelo Dom).
+                fecha_entrega_planificada se retiró de la UI. */}
+            <CampoRequeridoCierre>
               <CampoFormulario label="Fecha de entrega planificada">
                 <input type="date" value={datosDom.fecha_entrega_pactada ?? ''}
                   onChange={e => actualizarCampoDom('fecha_entrega_pactada', e.target.value)}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
+            </CampoRequeridoCierre>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Solo-lectura en Despachos: se editan en otras etapas.
                   fecha_solicitada_cliente → etapa 0 (creación); fecha_entrega_proyectada → etapa 2 (planeación). */}
               <CampoFormulario label="Fecha de entrega solicitada por el cliente">
@@ -2343,12 +2345,14 @@ function PaginaEditarDom() {
                   rows={2}
                   className="campo-input resize-none disabled:bg-gray-100 disabled:text-gray-700" />
               </CampoFormulario>
+            </div>
+            <CampoRequeridoCierre>
               <CampoFormulario label="DOM entregado OK">
                 <SelectSiNo name="dom_entregado_ok" soloLectura={!esEditable('etapa_6')} variante="lectura" value={boolToStr(datosDom.dom_entregado_ok)}
                   onChange={v => actualizarCampoDom('dom_entregado_ok', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
               </CampoFormulario>
-            </div>
+            </CampoRequeridoCierre>
             <BloqueoEtapa
               puedeDesbloquear={esAdmin && datosDomOriginal?.dom_liberado_cierre === true}
               onDesbloquear={() => desbloquear('despacho', domId, 'Despacho')}
@@ -2554,6 +2558,25 @@ function FormEtapa({ titulo, editable, guardando, onGuardar, onCancelar, sinRegi
 // es el control de bloqueo (antes se confundía con un campo más del formulario).
 // Si puedeDesbloquear (solo ADMIN, y solo si la etapa está bloqueada según el
 // snapshot *Original), suma abajo el botón que la reabre.
+function CampoRequeridoCierre({ children, plural = false }) {
+  return (
+    <div className="mt-1 p-4 rounded-lg border border-blue-200 bg-blue-50">
+      <div className="flex items-center gap-2 mb-3 text-blue-800">
+        <FiInfo size={15} />
+        <h3 className="text-xs font-semibold uppercase tracking-wide">
+          Requisito de cierre
+        </h3>
+      </div>
+      {children}
+      <p className="text-xs text-blue-700 mt-2">
+        {plural
+          ? 'Estos campos deben ser diligenciados para dar por cerrada esta etapa.'
+          : 'Este campo debe ser diligenciado para dar por cerrada esta etapa.'}
+      </p>
+    </div>
+  )
+}
+
 function BloqueoEtapa({ children, puedeDesbloquear, onDesbloquear, guardando }) {
   return (
     <div className="mt-1 p-4 rounded-lg border border-amber-300 bg-amber-50">
