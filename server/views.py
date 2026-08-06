@@ -199,12 +199,6 @@ REQUISITOS_CIERRE = {
         [('dom_realizado_planeacion',
           'la respuesta sobre si las actividades de almacén se realizaron según planeación')],
         []),
-    # ⚠ DECLARADA PERO NO CABLEADA (2026-08-01). RegistroProduccionDetalleView.put
-    # sigue usando su bloque propio, que solo exige el cronómetro. Se dejó así a
-    # propósito: es la única de las cuatro que sustituye código en funcionamiento,
-    # y la etapa tiene restricciones de secuencia que conviene revisar antes.
-    # Al cablearla se retira ese bloque y se ganan dos requisitos que hoy no existen:
-    # el veredicto y el número de personas asignadas.
     'etapa_4': ('cierre_produccion',
         [('segun_planeacion',
           'la respuesta sobre si las actividades de producción se realizaron según planeación'),
@@ -3107,14 +3101,10 @@ class RegistroProduccionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Verifica que exista cronómetro finalizado antes de permitir el cierre
-        if request.data.get('cierre_produccion') is True:
-            cronometro_finalizado = registro.registros_tiempo.filter(estado='FINALIZADO').exists()
-            if not cronometro_finalizado:
-                return Response(
-                    {'error': 'No es posible cerrar la producción sin un cronómetro finalizado. Finalice el cronómetro antes de cerrar este registro.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # No se puede cerrar la etapa sin el dato que esta etapa produce
+        error_cierre = validar_cierre(registro, request.data, 'etapa_4')
+        if error_cierre:
+            return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = RegistroProduccionSerializer(registro, data=request.data, partial=True)
 
