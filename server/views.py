@@ -178,12 +178,26 @@ def valor_efectivo(instancia, datos, campo):
     return getattr(instancia, campo, None)
 
 
+def existe_turno_dia(inst, datos):
+    """El turno-día no puede crearse sin operarios ni duración, así que su
+    existencia acredita los dos datos."""
+    return RegistroTurnoDia.objects.filter(
+        turno=valor_efectivo(inst, datos, 'turno'),
+        fecha=valor_efectivo(inst, datos, 'fecha_planeacion')
+    ).exists()
+
+
 # etapa → (campo_candado, [(campo, etiqueta)], [(comprobación, etiqueta)])
 # Las etiquetas son el texto que lee el usuario cuando se rechaza el cierre.
 REQUISITOS_CIERRE = {
+    'etapa_2': ('planeacion_completa',
+        [('turno',            'el turno'),
+         ('fecha_planeacion', 'la fecha planeada')],
+        [(existe_turno_dia, 'el número de operarios'),
+         (existe_turno_dia, 'la duración del turno')]),
     'etapa_3': ('materias_liberadas',
         [('dom_realizado_planeacion',
-          'si las actividades de almacén se realizaron según planeación')],
+          'la respuesta sobre si las actividades de almacén se realizaron según planeación')],
         []),
     # ⚠ DECLARADA PERO NO CABLEADA (2026-08-01). RegistroProduccionDetalleView.put
     # sigue usando su bloque propio, que solo exige el cronómetro. Se dejó así a
@@ -193,18 +207,18 @@ REQUISITOS_CIERRE = {
     # el veredicto y el número de personas asignadas.
     'etapa_4': ('cierre_produccion',
         [('segun_planeacion',
-          'si las actividades de producción se realizaron según planeación'),
+          'la respuesta sobre si las actividades de producción se realizaron según planeación'),
          ('numero_personas_asignadas',
           'el número de personas asignadas a la producción')],
-        [(lambda inst: inst.registros_tiempo.filter(estado='FINALIZADO').exists(),
+        [(lambda inst, datos: inst.registros_tiempo.filter(estado='FINALIZADO').exists(),
           'que el cronómetro de producción esté finalizado')]),
     'etapa_5': ('tratamiento_completado',
         [('tratamiento_segun_planeacion',
-          'si el tratamiento térmico se realizó según planeación')],
+          'la respuesta sobre si el tratamiento térmico se realizó según planeación')],
         []),
     'etapa_6': ('dom_liberado_cierre',
         [('dom_entregado_ok',
-          'si el DOM fue entregado según planeación'),
+          'la respuesta sobre si el DOM fue entregado según planeación'),
          # Se incluye la fecha de entrega pactada como campo obligatorio para el
          # cierre de la etapa 6 porque es dato fundamental del informe de despachos.
          ('fecha_entrega_pactada',
@@ -229,14 +243,14 @@ def validar_cierre(instancia, datos, etapa):
     faltantes = [etiqueta for campo, etiqueta in campos
                  if valor_efectivo(instancia, datos, campo) in (None, '')]
     faltantes += [etiqueta for prueba, etiqueta in comprobaciones
-                  if not prueba(instancia)]
+                  if not prueba(instancia, datos)]
 
     if not faltantes:
         return None
 
     detalle = (faltantes[0] if len(faltantes) == 1
                else ', '.join(faltantes[:-1]) + ' y ' + faltantes[-1])
-    return 'No es posible cerrar esta etapa sin indicar %s.' % detalle
+    return 'No es posible cerrar esta etapa sin %s.' % detalle
 
 # Centraliza que  la creación de registros de AuditoriaDom ante accciones relevantes (creacion, edicion, bloqueo o desbloqueo etapa, eliminación)
 def registrar_auditoria(dom, usuario, accion, etapa=None, campos_modificados=None):
@@ -1938,8 +1952,9 @@ class DomDetalleView(APIView):
             )
 
         # No se puede cerrar la etapa sin el veredicto que esta etapa produce.
-        # Este endpoint atiende las etapas 0, 1, 2 y 6; solo la 6 tiene requisitos.
-        if etapa in REQUISITOS_CIERRE:
+        # Este endpoint atiende las etapas 0, 1, 2 y 6. Los requisitos de la 2 son
+        # del registro de planeación, no del DOM: los valida su propio endpoint.
+        if etapa == 'etapa_6':
             error_cierre = validar_cierre(dom, request.data, etapa)
             if error_cierre:
                 return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
@@ -2284,6 +2299,11 @@ class RegistroPlaneacionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # No se puede cerrar la etapa sin el dato que esta etapa produce
+        error_cierre = validar_cierre(registro, request.data, 'etapa_2')
+        if error_cierre:
+            return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = RegistroPlaneacionSerializer(registro, data=request.data, partial=True)
 
         if not serializer.is_valid():
