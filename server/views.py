@@ -3512,7 +3512,15 @@ class CronometroIniciarView(APIView):
                 {'error': 'Registro de producción no encontrado'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
+        # Cero personas no es dato válido aquí, a diferencia del resto del sistema
+        personas = registro_produccion.numero_personas_asignadas
+        if personas is None or personas < 1:
+            return Response(
+                {'error': 'Debe registrar el número de personas asignadas antes de iniciar el cronómetro'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Verifica que no exista cronómetro EN_CURSO para este registro
         cronometro_activo = RegistroTiempoProduccion.objects.filter(
             registro_produccion=registro_produccion,
@@ -3535,7 +3543,7 @@ class CronometroIniciarView(APIView):
 
         return Response(
             {
-                'mensaje': 'Cronómetro inciado corrextamente',
+                'mensaje': 'Cronómetro iniciado correctamente',
                 'cronometro': RegistroTiempoProduccionSerializer(cronometro).data
             },
             status=status.HTTP_201_CREATED
