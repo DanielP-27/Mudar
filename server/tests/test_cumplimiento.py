@@ -4,8 +4,16 @@ SimpleTestCase y no TestCase a propósito: prohíbe el acceso a base de datos, a
 que estas pruebas demuestran además que las funciones no consultan nada. Los
 modelos se instancian SIN guardar; leer un campo no dispara ninguna consulta.
 
-veredicto_tiempo, veredictos_planeacion y veredictos_dom no están aquí: recorren
-relaciones y necesitan fixtures. Van después del catálogo semilla.
+Se suspende la realización de las pruebas respecto de veredicto_tiempo,
+veredictos_planeacion y veredictos_dom en razón a que están relacionadas con la
+funcionalidad de informes, cuyo desarrollo ha sido suspendido hasta el despliegue
+de la versión 1.0 en producción; esto en razón a la necesidad de revisar y
+modificar el diseño de generación de la información.
+
+Verificado el 2026-08-11: las tres tienen cero consumidores en todo el proyecto.
+No es deuda pendiente, es alcance suspendido: se diseñarán y ejecutarán las
+pruebas una vez se haya corregido en lo pertinente el diseño de la referida
+funcionalidad.
 
 Se importan las CONSTANTES y no sus textos, para que renombrar una etiqueta no
 ponga en rojo diez pruebas sin que ninguna regla haya cambiado.
