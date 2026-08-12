@@ -504,15 +504,25 @@ function PaginaEditarDom() {
       : capacidadCalculo
     if (!capacidad) return null   // sin capacidad conocida aquí → la valida el backend
 
+    // Catálogo VIGENTE. Solo aplica a filas que todavía no existen: al crearlas, el
+    // backend fotografiará este mismo número. No sustituir por el efectivo del DOM.
     const unitarioDe = (id) =>
       datosDom.productos?.find(p => p.id === id)?.tipo_producto_detalle?.tiempo_produccion_unitario ?? 0
+
+    // Estándar con el que debe calcularse ese producto: el de su fila de planeación si
+    // ya existe (fotografía), el del catálogo si se está creando ahora. Reproduce lo que
+    // hace el backend, para que esta validación no rechace guardados que él aceptaría.
+    const unitarioAplicableDe = (id) => {
+      const pp = (planActual?.productos_planeacion ?? []).find(x => x.dom_producto === id)
+      return pp?.tiempo_unitario_efectivo ?? unitarioDe(id)
+    }
 
     // Tiempo de los OTROS productos ya proyectados en esta planeación (excluye el que se edita)
     const tiempoOtros = (planActual?.productos_planeacion ?? [])
       .filter(pp => pp.dom_producto !== domProductoId)
-      .reduce((acc, pp) => acc + (pp.cantidad_proyectada ?? 0) * unitarioDe(pp.dom_producto), 0)
+      .reduce((acc, pp) => acc + (pp.cantidad_proyectada ?? 0) * unitarioAplicableDe(pp.dom_producto), 0)
 
-    const requerido = tiempoOtros + cantidadNueva * unitarioDe(domProductoId)
+    const requerido = tiempoOtros + cantidadNueva * unitarioAplicableDe(domProductoId)
 
     if (requerido > capacidad) {
       return `No hay capacidad suficiente en el turno. Disponible: ${capacidad} min, Requerido: ${requerido} min.`
@@ -701,6 +711,7 @@ function PaginaEditarDom() {
     // TODAS las cantidades intencionadas (la del buffer si el usuario la cambió, o la
     // persistida si no) y valida contra la capacidad ANTES de escribir nada. Evita
     // guardados parciales por exceso de capacidad. Reutiliza la fórmula de validarCapacidadLocal.
+    // Catálogo VIGENTE: solo para los productos que aún no tienen fila de planeación.
     const unitarioDe = (id) =>
       datosDom.productos?.find(p => p.id === id)?.tipo_producto_detalle?.tiempo_produccion_unitario ?? 0
     const capacidad = turnoDiaExistente
@@ -711,7 +722,8 @@ function PaginaEditarDom() {
       const key = pp ? pp.id : `new_${prod.id}`
       const buf = proyectadaLocal[key]
       const cant = (buf !== undefined && buf !== '') ? toInt(buf) : (pp?.cantidad_proyectada ?? 0)
-      return acc + cant * unitarioDe(prod.id)
+      // Fila existente: su fotografía. Fila nueva: catálogo vigente. Igual que el backend.
+      return acc + cant * (pp?.tiempo_unitario_efectivo ?? unitarioDe(prod.id))
     }, 0)
     if (capacidad && tiempoTotalIntencionado > capacidad) {
       setError(`No hay capacidad suficiente en el turno. Disponible: ${capacidad} min, Requerido: ${tiempoTotalIntencionado} min.`)
@@ -2714,7 +2726,9 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
                     {p.tipo_producto_detalle?.nombre_producto ?? '—'}
                   </td>
                   <td className="px-3 py-2 text-center text-gray-600">
-                    {p.tipo_producto_detalle?.tiempo_produccion_unitario ?? '—'}
+                    {/* Valor APLICADO, no el vigente del catálogo: es el que alimenta el
+                        tiempo proyectado total del DOM que se muestra en esta misma pantalla. */}
+                    {p.tiempo_unitario_efectivo ?? '—'}
                   </td>
                   <td className="px-3 py-2 text-center text-gray-600">{p.cantidad_pedido ?? '—'}</td>
                   <td className="px-3 py-2 text-center text-gray-600">{proyectada || '—'}</td>
@@ -2796,7 +2810,8 @@ function TablaConsolidadoProductos({ productos, planeaciones, elaboradaPorProduc
             <div className="font-medium text-gray-800 mb-2">
               {p.tipo_producto_detalle?.nombre_producto ?? '—'}
             </div>
-            <Par etiqueta="Tiempo unit. (min)">{p.tipo_producto_detalle?.tiempo_produccion_unitario ?? '—'}</Par>
+            {/* Valor APLICADO, no el vigente del catálogo. Ver la tabla de escritorio. */}
+            <Par etiqueta="Tiempo unit. (min)">{p.tiempo_unitario_efectivo ?? '—'}</Par>
             <Par etiqueta="Cantidad pedido">{p.cantidad_pedido ?? '—'}</Par>
             <Par etiqueta="Cantidad planeada">{proyectada || '—'}</Par>
             <Par etiqueta="Pendiente por planear">

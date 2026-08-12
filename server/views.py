@@ -2269,7 +2269,7 @@ class RegistroPlaneacionDetalleView(APIView):
 
                 planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_eval)
                 tiempo_total = sum(
-                    pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                    pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
                     for pp in registro.productos_planeacion.select_related('dom_producto__tipo_producto').all()
                     if pp.cantidad_proyectada and pp.dom_producto
                 )
@@ -2406,7 +2406,7 @@ class ProductoPlaneacionListView(APIView):
             # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
             tiempo_nuevo_producto = cantidad_proyectada_nueva * dom_producto.tipo_producto.tiempo_produccion_unitario
             tiempo_otros_productos = sum(
-                pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
                 for pp in planeacion.productos_planeacion.select_related('dom_producto__tipo_producto').all()
                 if pp.cantidad_proyectada and pp.dom_producto
             )
@@ -2502,9 +2502,9 @@ class ProductoPlaneacionDetalleView(APIView):
 
             # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
             registro_planeacion = producto.registro_planeacion
-            tiempo_nuevo_producto = cantidad_proyectada_nueva * producto.dom_producto.tipo_producto.tiempo_produccion_unitario
+            tiempo_nuevo_producto = cantidad_proyectada_nueva * producto.tiempo_unitario_efectivo
             tiempo_otros_productos = sum(
-                pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
                 for pp in registro_planeacion.productos_planeacion.select_related('dom_producto__tipo_producto').exclude(id=producto_id)
                 if pp.cantidad_proyectada and pp.dom_producto
             )

@@ -152,7 +152,7 @@ class RegistroTurnoDia(models.Model):
         sumatoria_minutos_ocupados = 0
         for planeacion in planeaciones:
             minutos_ocupados = sum(
-                pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
                 for pp in planeacion.productos_planeacion.all()
                 if pp.cantidad_proyectada and pp.dom_producto
             )
@@ -313,7 +313,7 @@ class Dom(models.Model):
         # Tiempo proyectado del DOM completo: cantidad_pedido x tiempo_produccion_unitario de cada producto registrado en el DOM
         total = 0
         for p in self.productos.select_related('tipo_producto').all():
-            total += p.cantidad_pedido * p.tipo_producto.tiempo_produccion_unitario
+            total += p.cantidad_pedido * p.tiempo_unitario_efectivo
         return total or None
 
     def etapa_1_bloqueada(self):
@@ -330,16 +330,40 @@ class ProductosDom(models.Model):
     productoDom = models.ForeignKey(Dom, on_delete=models.CASCADE, related_name='productos', verbose_name='DOM')
     tipo_producto = models.ForeignKey(Productos, on_delete=models.RESTRICT, related_name='dom_productos', verbose_name='Tipo de Producto')
     cantidad_pedido = models.IntegerField(verbose_name='Cantidad del pedido')
+    tiempo_unitario_aplicado = models.IntegerField(
+        blank=True, null=True,
+        verbose_name='Tiempo unitario aplicado',
+        help_text='Minutos por unidad vigentes en el catálogo cuando se registró este '
+                  'producto en el DOM. Se copia una sola vez y no se actualiza: congela '
+                  'el estándar para que el histórico no cambie si el catálogo cambia.'
+    )
 
-    class Meta: 
+    class Meta:
         db_table = 'dom_productos'
         verbose_name = 'Producto del DOM'
         verbose_name_plural = 'Productos del DOM'
         unique_together = ('productoDom', 'tipo_producto')
-    
+
     def __str__(self):
         return f"DOM # {self.productoDom.dom_id} - {self.tipo_producto.nombre_producto} x {self.cantidad_pedido}"
-    
+
+    def save(self, *args, **kwargs):
+        # Fotografía del estándar: se toma solo al crear la fila, nunca al actualizarla.
+        # Va aquí y no en la vista para que la cumplan TODOS los caminos de creación
+        # (API, panel de Django, shell, comandos futuros).
+        if self._state.adding:
+            self.tiempo_unitario_aplicado = self.tipo_producto.tiempo_produccion_unitario
+        super().save(*args, **kwargs)
+
+    @property
+    def tiempo_unitario_efectivo(self):
+        # Minutos por unidad con los que debe calcularse ESTA fila. Respalda en el
+        # catálogo vigente para las filas anteriores a la migración, que no tienen
+        # fotografía. 'is not None' y no verdad, para que un cero no caiga al respaldo.
+        if self.tiempo_unitario_aplicado is not None:
+            return self.tiempo_unitario_aplicado
+        return self.tipo_producto.tiempo_produccion_unitario
+
 
 # clase correspondiente a etapa 2 proceso Mudar, Planeación de la producción
 
@@ -416,7 +440,7 @@ class RegistroPlaneacion(models.Model):
         total = 0
         for pp in self.productos_planeacion.select_related('dom_producto__tipo_producto').all():
             if pp.cantidad_proyectada and pp.dom_producto:
-                total += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                total += pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
         return total or None
     
     @property
@@ -431,7 +455,7 @@ class RegistroPlaneacion(models.Model):
         for p in planeaciones:
             for pp in p.productos_planeacion.all():
                 if pp.cantidad_proyectada and pp.dom_producto:
-                    total += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                    total += pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
         return total
     
     @property
@@ -471,7 +495,7 @@ class RegistroPlaneacion(models.Model):
         for p in planeaciones:
             for pp in p.productos_planeacion.all():
                 if pp.cantidad_proyectada and pp.dom_producto:
-                    sumatoria += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                    sumatoria += pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
         disponible_actual = capacidad - sumatoria
         return disponible_actual, disponible_actual - tiempo_nuevo
 
@@ -527,7 +551,7 @@ class RegistroPlaneacion(models.Model):
                         'nombre': pp.dom_producto.tipo_producto.nombre_producto,
                         'cantidad': pp.cantidad_proyectada,
                     })
-                    minutos_ocupados += pp.cantidad_proyectada * pp.dom_producto.tipo_producto.tiempo_produccion_unitario
+                    minutos_ocupados += pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
             detalle.append({
                 'dom_id': p.dom.dom_id,
                 'nombre_cliente': p.dom.nombre_cliente.nombre_cliente,
@@ -555,6 +579,13 @@ class ProductoPlaneacion(models.Model):
         blank=True, null=True,
         verbose_name='Cantidad proyectada a elaborar'
     )
+    tiempo_unitario_aplicado = models.IntegerField(
+        blank=True, null=True,
+        verbose_name='Tiempo unitario aplicado',
+        help_text='Minutos por unidad vigentes en el catálogo cuando se proyectó esta '
+                  'cantidad. Se copia una sola vez y no se actualiza: congela el estándar '
+                  'para que el histórico no cambie si el catálogo cambia.'
+    )
 
     class Meta:
         db_table = 'productos_planeacion'
@@ -564,6 +595,24 @@ class ProductoPlaneacion(models.Model):
 
     def __str__(self):
         return f"Planeación #{self.registro_planeacion.numero_registro} - {self.dom_producto.tipo_producto.nombre_producto} x {self.cantidad_proyectada}"
+
+    def save(self, *args, **kwargs):
+        # Fotografía del estándar vigente el día en que se planeó esta jornada. Se toma
+        # del CATÁLOGO y no de la fotografía del ProductosDom a propósito: planear es una
+        # decisión nueva, y debe hacerse con el estándar vigente en ese momento, aunque el
+        # pedido se haya creado meses antes con otro.
+        if self._state.adding:
+            self.tiempo_unitario_aplicado = self.dom_producto.tipo_producto.tiempo_produccion_unitario
+        super().save(*args, **kwargs)
+
+    @property
+    def tiempo_unitario_efectivo(self):
+        # Minutos por unidad con los que debe calcularse ESTA fila. Respalda en el
+        # catálogo vigente para las filas anteriores a la migración, que no tienen
+        # fotografía. 'is not None' y no verdad, para que un cero no caiga al respaldo.
+        if self.tiempo_unitario_aplicado is not None:
+            return self.tiempo_unitario_aplicado
+        return self.dom_producto.tipo_producto.tiempo_produccion_unitario
 
     @property
     def cantidad_elaborada(self):
@@ -691,7 +740,7 @@ class RegistroProduccion(models.Model):
             'producto_planeacion__dom_producto__tipo_producto'
         ).all():
             if pp.cantidad_elaborada and pp.producto_planeacion:
-                total += pp.cantidad_elaborada * pp.producto_planeacion.dom_producto.tipo_producto.tiempo_produccion_unitario
+                total += pp.cantidad_elaborada * pp.producto_planeacion.tiempo_unitario_efectivo
         return total or None
     
     @property

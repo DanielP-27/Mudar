@@ -135,14 +135,18 @@ class ProductosDomSerializer(serializers.ModelSerializer):
     tipo_producto = serializers.PrimaryKeyRelatedField(
     queryset=Productos.objects.all()
     )
+    # Minutos por unidad ya resueltos para esta fila. Es el valor con el que se calcula
+    # 'tiempo_proyectado_total' del DOM, así que es el que debe mostrar la pantalla.
+    tiempo_unitario_efectivo = serializers.ReadOnlyField()
 
-    class Meta: 
+    class Meta:
         model = ProductosDom
         fields = [
             'id',
             'tipo_producto',
             'tipo_producto_detalle',
-            'cantidad_pedido', 
+            'cantidad_pedido',
+            'tiempo_unitario_efectivo',
         ]
 
 # Serializer : DomListSerializer
@@ -474,6 +478,10 @@ class ProductoPlaneacionSerializer(serializers.ModelSerializer):
     dom_producto = serializers.PrimaryKeyRelatedField(queryset=ProductosDom.objects.all())
     cantidad_elaborada = serializers.ReadOnlyField()
     cantidad_pendiente = serializers.ReadOnlyField()
+    # Minutos por unidad ya resueltos: fotografía de la fila, o catálogo vigente si es
+    # anterior a la migración 0021. Se expone la propiedad y no la columna para que la
+    # cascada viva en un solo lugar y el frontend nunca reciba un nulo.
+    tiempo_unitario_efectivo = serializers.ReadOnlyField()
 
     class Meta:
         model = ProductoPlaneacion
@@ -485,6 +493,7 @@ class ProductoPlaneacionSerializer(serializers.ModelSerializer):
             'cantidad_proyectada',
             'cantidad_elaborada',
             'cantidad_pendiente',
+            'tiempo_unitario_efectivo',
         ]
         read_only_fields = ['registro_planeacion']
 
