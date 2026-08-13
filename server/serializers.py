@@ -1141,6 +1141,7 @@ class InformeAuditoriaSerializer(serializers.Serializer):
     total_ediciones = serializers.IntegerField(read_only = True)
     total_bloqueos = serializers.IntegerField(read_only = True)
     total_eliminaciones = serializers.IntegerField(read_only = True)
+    total_desbloqueos = serializers.IntegerField(read_only = True)
 
     # Detalle cronologico de acciones 
     acciones = AuditoriaDomSerializer(many = True, read_only = True)

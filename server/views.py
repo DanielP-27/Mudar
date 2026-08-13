@@ -246,15 +246,29 @@ def validar_cierre(instancia, datos, etapa):
                else ', '.join(faltantes[:-1]) + ' y ' + faltantes[-1])
     return 'No es posible cerrar esta etapa sin %s.' % detalle
 
+# Detrás de un proxy REMOTE_ADDR es el proxy: la IP real viaja en X-Forwarded-For
+def obtener_ip(request):
+    reenviada = request.META.get('HTTP_X_FORWARDED_FOR')
+    if reenviada:
+        return reenviada.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
 # Centraliza que  la creación de registros de AuditoriaDom ante accciones relevantes (creacion, edicion, bloqueo o desbloqueo etapa, eliminación)
-def registrar_auditoria(dom, usuario, accion, etapa=None, campos_modificados=None):
+def registrar_auditoria(dom, usuario, accion, request, etapa=None, campos_modificados=None):
+
+    # objects.create() no valida choices: sin esta guarda entra cualquier cadena
+    if accion not in dict(AuditoriaDom.ACTION_CHOICES):
+        raise ValueError('Acción de auditoría no declarada: %r' % accion)
 
     AuditoriaDom.objects.create(
         dom = dom,
         usuario = usuario,
-        accion = accion, 
+        accion = accion,
         etapa = etapa,
-        campos_modificados = campos_modificados
+        campos_modificados = campos_modificados,
+        ip = obtener_ip(request),
+        agente = (request.META.get('HTTP_USER_AGENT') or '')[:255] or None,
     )
 
 def instantanea(objeto, request_data):
@@ -292,17 +306,17 @@ def calcular_campos_modificados(campos_antes, objeto_despues):
 # frontend los mande en el mismo PUT. Antes se auditaban como una sola fila
 # etiquetada BLOQUEO_ETAPA, y los campos de contenido quedaban escondidos ahí
 # dentro: invisibles como edición y sin contar en total_ediciones.
-def registrar_edicion_y_bloqueo(dom, usuario, etapa, campos, campo_bloqueo, bloqueada):
+def registrar_edicion_y_bloqueo(dom, usuario, etapa, campos, campo_bloqueo, bloqueada, request):
     campos = dict(campos) if campos else {}
     candado = campos.pop(campo_bloqueo, None)
 
     # El 'or not candado' conserva el caso "guardó sin cambiar nada", que hoy
     # se registra como una edición con campos_modificados en None.
     if campos or not candado:
-        registrar_auditoria(dom, usuario, 'EDICION', etapa, campos or None)
+        registrar_auditoria(dom, usuario, 'EDICION', request, etapa, campos or None)
 
     if bloqueada and candado:
-        registrar_auditoria(dom, usuario, 'BLOQUEO_ETAPA', etapa,
+        registrar_auditoria(dom, usuario, 'BLOQUEO_ETAPA', request, etapa,
                             {campo_bloqueo: candado})
 
 # FIN HELPERS
@@ -1784,7 +1798,8 @@ class DomListView(APIView):
                     usuario=request.user,
                     accion='CREACION',
                     etapa='etapa_0',
-                    campos_modificados=foto_inicial(dom)
+                    campos_modificados=foto_inicial(dom),
+                    request=request,
                 )
 
                 for producto in productos_creados:
@@ -1793,7 +1808,8 @@ class DomListView(APIView):
                         usuario=request.user,
                         accion='CREACION',
                         etapa='etapa_0',
-                        campos_modificados=foto_inicial(producto)
+                        campos_modificados=foto_inicial(producto),
+                        request=request,
                     )
         except Exception as e:
             return Response(
@@ -1984,6 +2000,7 @@ class DomDetalleView(APIView):
             campos=calcular_campos_modificados(campos_antes, dom),
             campo_bloqueo=campo_bloqueo,
             bloqueada=bool(verificar_bloqueo and verificar_bloqueo()),
+            request=request,
         )
 
         return Response(
@@ -2066,7 +2083,8 @@ class DesbloqueoEtapaView(APIView):
             usuario=request.user,
             accion='DESBLOQUEO_ETAPA',
             etapa=etiqueta,
-            campos_modificados={campo: {'antes': 'True', 'despues': 'False'}}
+            campos_modificados={campo: {'antes': 'True', 'despues': 'False'}},
+            request=request,
         )
 
         return Response(
@@ -2164,7 +2182,8 @@ class RegistroPlaneacionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_2',
-            campos_modificados=foto_inicial(registro)
+            campos_modificados=foto_inicial(registro),
+            request=request,
         )
 
         # Refresca el objeto con relaciones cargadas
@@ -2322,6 +2341,7 @@ class RegistroPlaneacionDetalleView(APIView):
             campos=calcular_campos_modificados(campos_antes, registro),
             campo_bloqueo='planeacion_completa',
             bloqueada=registro.etapa2_bloqueada(),
+            request=request,
         )
         
         # Refresca el objeto con relaciones cargadas
@@ -2445,7 +2465,8 @@ class ProductoPlaneacionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_2',
-            campos_modificados=foto_inicial(producto_planeacion)
+            campos_modificados=foto_inicial(producto_planeacion),
+            request=request,
         )
 
         return Response(
@@ -2545,7 +2566,8 @@ class ProductoPlaneacionDetalleView(APIView):
             usuario=request.user,
             accion='EDICION',
             etapa='etapa_2',
-            campos_modificados=calcular_campos_modificados(campos_antes, producto)
+            campos_modificados=calcular_campos_modificados(campos_antes, producto),
+            request=request,
         )
 
         return Response(
@@ -2588,7 +2610,8 @@ class ProductoPlaneacionDetalleView(APIView):
             usuario=request.user,
             accion='ELIMINACION',
             etapa='etapa_2',
-            campos_modificados={'dom_producto_id': str(producto.dom_producto.id)}
+            campos_modificados={'dom_producto_id': str(producto.dom_producto.id)},
+            request=request,
         )
 
         return Response(
@@ -2672,7 +2695,8 @@ class ProductoProduccionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_4',
-            campos_modificados=foto_inicial(producto)
+            campos_modificados=foto_inicial(producto),
+            request=request,
         )
 
         return Response(
@@ -2746,7 +2770,8 @@ class ProductoProduccionDetalleView(APIView):
             usuario=request.user,
             accion='EDICION',
             etapa='etapa_4',
-            campos_modificados=calcular_campos_modificados(campos_antes, producto)
+            campos_modificados=calcular_campos_modificados(campos_antes, producto),
+            request=request,
         )
 
         return Response(
@@ -2789,7 +2814,8 @@ class ProductoProduccionDetalleView(APIView):
             usuario=request.user,
             accion='ELIMINACION',
             etapa='etapa_4',
-            campos_modificados={'producto_planeacion_id': str(producto.producto_planeacion.id)}
+            campos_modificados={'producto_planeacion_id': str(producto.producto_planeacion.id)},
+            request=request,
         )
 
         return Response(
@@ -2873,7 +2899,8 @@ class RegistroAlmacenListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_3',
-            campos_modificados=foto_inicial(registro)
+            campos_modificados=foto_inicial(registro),
+            request=request,
         )
 
         return Response(
@@ -2959,6 +2986,7 @@ class RegistroAlmacenDetalleView(APIView):
             campos=calcular_campos_modificados(campos_antes, registro),
             campo_bloqueo='materias_liberadas',
             bloqueada=registro.etapa_3_bloqueada(),
+            request=request,
         )
 
         return Response(
@@ -3045,7 +3073,8 @@ class RegistroProduccionListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_4',
-            campos_modificados=foto_inicial(registro)
+            campos_modificados=foto_inicial(registro),
+            request=request,
         )
 
         return Response(
@@ -3130,6 +3159,7 @@ class RegistroProduccionDetalleView(APIView):
             campos=calcular_campos_modificados(campos_antes, registro),
             campo_bloqueo='cierre_produccion',
             bloqueada=registro.etapa_4_bloqueada(),
+            request=request,
         )
 
         return Response(
@@ -3219,7 +3249,8 @@ class RegistroTratamientoListView(APIView):
             usuario=request.user,
             accion='CREACION',
             etapa='etapa_5',
-            campos_modificados=foto_inicial(registro)
+            campos_modificados=foto_inicial(registro),
+            request=request,
         )
 
         return Response(
@@ -3308,6 +3339,7 @@ class RegistroTratamientoDetalleView(APIView):
             campos=calcular_campos_modificados(campos_antes, registro),
             campo_bloqueo='tratamiento_completado',
             bloqueada=registro.etapa_5_bloqueada(),
+            request=request,
         )
 
         return Response(
@@ -3456,7 +3488,8 @@ class RegistroTurnoDiaDetalleView(APIView):
                     campos_modificados={
                         'capacidad_turno_dia': {'antes': str(capacidad_anterior), 'despues': str(impacto['capacidad_propuesta'])},
                         'deficit_generado_minutos': {'antes': '0', 'despues': str(impacto['deficit_minutos'])},
-                    }
+                    },
+                    request=request,
                 )
 
         return Response(
@@ -3543,6 +3576,15 @@ class CronometroIniciarView(APIView):
             usuario=request.user
         )
 
+        registrar_auditoria(
+            dom=registro_produccion.registro_planeacion.dom,
+            usuario=request.user,
+            accion='CREACION',
+            etapa='etapa_4',
+            campos_modificados=foto_inicial(cronometro),
+            request=request,
+        )
+
         return Response(
             {
                 'mensaje': 'Cronómetro iniciado correctamente',
@@ -3593,6 +3635,15 @@ class CronometroPausaView(APIView):
 
         cronometro.estado = 'PAUSADO'
         cronometro.save()
+
+        registrar_auditoria(
+            dom=cronometro.registro_produccion.registro_planeacion.dom,
+            usuario=request.user,
+            accion='EDICION',
+            etapa='etapa_4',
+            campos_modificados={'estado': {'antes': 'EN_CURSO', 'despues': 'PAUSADO'}},
+            request=request,
+        )
 
         return Response(
             {
@@ -3653,6 +3704,15 @@ class CronometroReanudarView(APIView):
         cronometro.estado = 'EN_CURSO'
         cronometro.save()
 
+        registrar_auditoria(
+            dom=cronometro.registro_produccion.registro_planeacion.dom,
+            usuario=request.user,
+            accion='EDICION',
+            etapa='etapa_4',
+            campos_modificados={'estado': {'antes': 'PAUSADO', 'despues': 'EN_CURSO'}},
+            request=request,
+        )
+
         return Response(
             {
                 'mensaje': 'Cronómetro reanudado correctamente',
@@ -3705,6 +3765,18 @@ class CronometroFinalizarView(APIView):
         # modelo.save() actualiza minutos_asignados en RegistroProduccion Automáticamente
 
         cronometro.save()
+
+        registrar_auditoria(
+            dom=cronometro.registro_produccion.registro_planeacion.dom,
+            usuario=request.user,
+            accion='EDICION',
+            etapa='etapa_4',
+            campos_modificados={
+                'estado': {'antes': 'EN_CURSO', 'despues': 'FINALIZADO'},
+                'minutos_totales': {'antes': 'None', 'despues': str(cronometro.minutos_totales)},
+            },
+            request=request,
+        )
 
         return Response(
             {
@@ -4407,7 +4479,8 @@ class InformeAuditoriaView(APIView):
             total_creaciones=Count('id', filter=Q(accion='CREACION')),
             total_ediciones=Count('id', filter=Q(accion='EDICION')),
             total_bloqueos=Count('id', filter=Q(accion='BLOQUEO_ETAPA')),
-            total_eliminaciones=Count('id', filter=Q(accion='ELIMINACION'))
+            total_eliminaciones=Count('id', filter=Q(accion='ELIMINACION')),
+            total_desbloqueos=Count('id', filter=Q(accion='DESBLOQUEO_ETAPA'))
         )
 
         data = {
@@ -4420,6 +4493,7 @@ class InformeAuditoriaView(APIView):
             'total_ediciones': totales['total_ediciones'],
             'total_bloqueos': totales['total_bloqueos'],
             'total_eliminaciones': totales['total_eliminaciones'],
+            'total_desbloqueos': totales['total_desbloqueos'],
             'acciones': acciones
         }
 
