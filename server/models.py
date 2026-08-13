@@ -1032,9 +1032,12 @@ class AuditoriaDom(models.Model):
         verbose_name='DOM'
     )
 
+    # RESTRICT y no SET_NULL: borrar a quien tiene historial dejaría sus filas
+    # sin autor, y una auditoría sin autor no dice nada. Para sacar a alguien
+    # del sistema se desactiva, que es lo que ya hace la aplicación.
     usuario = models.ForeignKey(
         User,
-        on_delete=models.SET_NULL,
+        on_delete=models.RESTRICT,
         null=True,
         verbose_name='Usuario'
     )
@@ -1053,10 +1056,25 @@ class AuditoriaDom(models.Model):
     )
 
     campos_modificados = models.JSONField(
-        blank=True, 
+        blank=True,
         null=True,
         verbose_name='Campos Modificados',
         help_text='JSON: {"campo": {"antes": "valor_anterior", "despues": "valor_nuevo"}'
+    )
+
+    # Origen de la petición. Nulables porque las filas anteriores a la migración
+    # no lo tienen y no hay forma de reconstruirlo.
+    ip = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        verbose_name='IP de origen'
+    )
+
+    agente = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name='Agente'
     )
 
     timestamp = models.DateTimeField(auto_now_add=True, verbose_name='Fecha/Hora')

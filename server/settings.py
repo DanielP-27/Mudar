@@ -167,6 +167,12 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'server.authentication.ExpiringTokenAuthentication',
     ],
+    # El valor de fábrica de DRF es AllowAny: una vista futura sin
+    # permission_classes quedaría pública sin que nada avise. Con esto, olvidar
+    # la línea cierra en vez de abrir. Lo público se declara — LoginView lo hace.
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
