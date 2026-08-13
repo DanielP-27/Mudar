@@ -1,6 +1,5 @@
 from django.db import models
 from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.db.models.options import Options
 from django.db.models import Sum
@@ -77,21 +76,15 @@ class Productos(models.Model):
 
     def __str__(self):
         return f'{self.nombre_producto} ({self.tiempo_produccion_unitario})'
-    
-    def positive(self):
-        # función que verifica que el tiempo_produccion_unitario sea positivo siempre
-
-        if self.tiempo_produccion_unitario <= 0:
-            raise ValidationError ({'El tiempo de producción unitario debe ser mayor a 0'})
 
 
 # Tabla para el manejo de turnos (necesario para el manejo y de diferentes datos)
 class Turno(models.Model):
-    # Esta tabla se crea principalmente ante la necesidad de establecer un tiempo total por turno para la medición de ciertas metricas dentro del sistema.   
-    
+    # Catálogo de turnos: solo su identidad. La duración NO vive aquí — cada
+    # jornada la registra RegistroTurnoDia, que es de donde sale la capacidad.
+
     turno_id = models.AutoField(primary_key=True, verbose_name = 'código del turno')
     nombre_turno = models.CharField(max_length=100, verbose_name='Nombre del turno')
-    minutos_totales = models.IntegerField(verbose_name='Minutos totales del turno', help_text='Incluir tiempo de duración total del turno en minutos')
     activo = models.BooleanField(default=True, db_index=True, verbose_name = 'Turno activo')
 
     # Auditoria 
@@ -107,24 +100,31 @@ class Turno(models.Model):
         ordering = ['turno_id']
 
     def __str__(self):
-        return f'{self.nombre_turno} ({self.minutos_totales} min)'
-    
-    def positive(self):
-        # función que verifica que el tiempo total del turno siempre sea negativo
+        return self.nombre_turno
 
-        if self.minutos_totales <= 0: 
-            raise ValidationError ({'los minutos del turno deben ser mayores a 0'})
-        
+
 # Operarios disponibles y duración del turno, por turno y fecha. Base del
 # cálculo de capacidad_turno_dia.
 
 class RegistroTurnoDia(models.Model):
+    # Jornadas vigentes — las únicas que el formulario ofrece. Si cambia la
+    # legislación laboral, esta es la lista que se actualiza.
     OPCIONES_MINUTOS = [(420, '7 horas (420 min)'), (540, '9 horas (540 min)')]
+
+    # Jornadas de legislaciones anteriores. minutos_totales es la fotografía de
+    # un hecho: guarda la duración que tuvo ese turno ese día, no la que rige
+    # hoy. Por eso choices debe admitir todo lo que alguna vez fue legal, o el
+    # registro deja de poder guardarse en cuanto cambia la ley. El formulario
+    # no las ofrece, así que no se pueden introducir de nuevo.
+    OPCIONES_MINUTOS_HISTORICAS = [
+        (480, '8 horas (480 min) — jornada anterior'),
+        (600, '10 horas (600 min) — jornada anterior'),
+    ]
 
     turno = models.ForeignKey(Turno, on_delete=models.RESTRICT, related_name='registros_diarios', verbose_name='Turno')
     fecha = models.DateField(verbose_name='Fecha del turno', help_text='Fecha en que se registran los operarios para este turno')
     numero_operarios = models.IntegerField(verbose_name='Número de operarios', help_text='Total de operarios disponibles en este turno para esta fecha')
-    minutos_totales = models.IntegerField(choices=OPCIONES_MINUTOS, default=420, verbose_name='Duración del turno', help_text='Duración total del turno en minutos')
+    minutos_totales = models.IntegerField(choices=OPCIONES_MINUTOS + OPCIONES_MINUTOS_HISTORICAS, default=420, verbose_name='Duración del turno', help_text='Duración total del turno en minutos')
     registrado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='turnos_dia_registrados')
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 

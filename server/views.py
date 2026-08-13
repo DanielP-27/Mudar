@@ -426,7 +426,9 @@ class CambioPasswordView(APIView):
 
     def post(self, request):
 
-        serializer = CambioPasswordSerializer(data=request.data)
+        # El contexto lleva la petición: el serializer necesita request.user para
+        # comprobar que la contraseña nueva no se parezca a los datos del usuario.
+        serializer = CambioPasswordSerializer(data=request.data, context={'request': request})
 
         if not serializer.is_valid():
             return Response(

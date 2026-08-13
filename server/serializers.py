@@ -1,5 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import (
     Cliente,
     FamiliaProducto,
@@ -20,6 +22,21 @@ from .models import (
     PerfilUsuario,
     AuditoriaDom,
 )
+
+
+def validar_password(password, usuario=None, campo='password'):
+    """Aplica AUTH_PASSWORD_VALIDATORS (settings.py) y traduce el error de Django al de DRF.
+
+    Punto único de la política de contraseñas por API. Lo llaman desde su
+    validate() CrearUsuarioSerializer, CambioPasswordSerializer y
+    RestablecerPasswordSerializer. El usuario llega construido sin guardar en el
+    alta, de request.user en el cambio —lo que exige context={'request': request}
+    en CambioPasswordView— y cargado por user_id en el restablecimiento.
+    """
+    try:
+        validate_password(password, user=usuario)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError({campo: list(exc.messages)})
 
 
 # Uso: mostrar datos básicos del usuario en auditorías y perfiles; no incluye password al ser un serializer de lectura y referencia
@@ -77,19 +94,14 @@ class ProductosSerializer(serializers.ModelSerializer):
         return value
 
 # Serializer Turno
-# Uso: dropdown turnos etapa 2 y calculo propiedad tiempo_restante_dia, se expone minutos totales para no hacer llamadas adicionales a BackEnd.
+# Uso: dropdown de turnos de la etapa 2. El catálogo solo aporta identidad; la
+# duración de la jornada vive en RegistroTurnoDia, que es de donde sale la capacidad.
 class TurnoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Turno
-        fields = ['turno_id', 'nombre_turno', 'minutos_totales', 'activo']
+        fields = ['turno_id', 'nombre_turno', 'activo']
 
-    def validate_minutos_totales(self, value):
-        if value <= 0:
-            raise serializers.ValidationError(
-                'Los minutos del turno deben ser mayores a 0'
-            )
-        return value
-    
+
 class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
     turno_nombre = serializers.CharField(
         source='turno.nombre_turno',
@@ -100,8 +112,7 @@ class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
         model = RegistroTurnoDia
         fields = ['id', 'turno', 'turno_nombre', 'fecha', 'numero_operarios', 'minutos_totales', 'registrado_por', 'fecha_creacion']
         read_only_fields = ['registrado_por', 'fecha_creacion']
-        # minutos_totales lo valida DRF de forma nativa contra choices=OPCIONES_MINUTOS
-        # (models.py) — fuente única de verdad. Aquí solo personalizamos el mensaje.
+        # minutos_totales lo valida DRF de forma nativa contra el choices del modelo, que suma las jornadas vigentes y las históricas — fuente única de verdad. Ambas viven en la clase RegistroTurnoDia de models.py: las vigentes en OPCIONES_MINUTOS y las de legislaciones anteriores en OPCIONES_MINUTOS_HISTORICAS. El campo es una fotografía: debe poder conservar lo que fue legal cuando se registró. Aquí sólo personalizamos el mensaje.
         extra_kwargs = {
             'minutos_totales': {
                 'error_messages': {
@@ -697,7 +708,6 @@ class CambioPasswordSerializer(serializers.Serializer):
     nuevo_password = serializers.CharField(
         required = True,
         write_only = True,
-        min_length=8,
         style={'input_type': 'password'}
     )
     confirmar_password = serializers.CharField(
@@ -706,14 +716,6 @@ class CambioPasswordSerializer(serializers.Serializer):
         style = {'input_type' : 'password'}
     )
 
-    def validate_nuevo_password(self, value):
-        # validación de que la constraseña no sea completamente númerica 
-        if value.isdigit():
-            raise serializers.ValidationError(
-                'Contraseña no puede ser exclusivamente númerica'
-            )
-        return value
-    
     def validate(self, data):
 
         # validacion que nuevo_password y confirmar_password coincidan
@@ -721,13 +723,20 @@ class CambioPasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError({
                 'nuevo_password' : 'Por favor valide que la nueva contraseña y su confirmación coincidan'
             })
-        
-        # validacion que la nueva contraseña no sea igua identica a la contraseña acutal 
+
+        # validacion que la nueva contraseña no sea igua identica a la contraseña acutal
         if data['password_actual'] == data['nuevo_password']:
             raise serializers.ValidationError({
                 'nuevo_Password': 'la nueva contraseña debe ser diferente a la contraseña acutal, por favor valide'
             })
-        
+
+        # La fortaleza se comprueba al final: primero lo que el usuario puede
+        # corregir de un vistazo. El usuario autenticado llega por el contexto
+        # que pasa CambioPasswordView.
+        validar_password(data['nuevo_password'],
+                         self.context['request'].user,
+                         campo='nuevo_password')
+
         return data
 
 # Serializer: EditarUsuarioSerializer
@@ -757,7 +766,6 @@ class RestablecerPasswordSerializer(serializers.Serializer):
     nuevo_password = serializers.CharField(
         required=True,
         write_only=True,
-        min_length=8,
         style={'input_type': 'password'}
     )
     confirmar_password = serializers.CharField(
@@ -766,18 +774,18 @@ class RestablecerPasswordSerializer(serializers.Serializer):
         style={'input_type': 'password'}
     )
 
-    def validate_nuevo_password(self, value):
-        if value.isdigit():
-            raise serializers.ValidationError(
-                'La contraseña no puede ser completamente numérica'
-            )
-        return value
-
     def validate(self, data):
         if data['nuevo_password'] != data['confirmar_password']:
             raise serializers.ValidationError({
                 'confirmar_password': 'Las contraseñas no coinciden'
             })
+
+        # El usuario destino llega por id: se carga para poder comparar. Con
+        # filter().first() un id inexistente deja usuario en None y sigue siendo
+        # la vista quien responde por la identidad.
+        usuario = User.objects.filter(pk=data['user_id']).first()
+        validar_password(data['nuevo_password'], usuario, campo='nuevo_password')
+
         return data
 
 
@@ -790,9 +798,8 @@ class CrearUsuarioSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False, allow_blank = True)
 
     password = serializers.CharField(
-        required = True, 
+        required = True,
         write_only = True,
-        min_length = 8,
         style = {'input_type' : 'password'}
     )
 
@@ -816,20 +823,23 @@ class CrearUsuarioSerializer(serializers.Serializer):
             )
         return value
     
-    def validate_password(self, value):
-        # valida que constraseña no sea completamente númerica
-        if value.isdigit():
-            raise serializers.ValidationError(
-                'La contraseña no puede ser completamente númerica'
-            )
-        return value
-    
     def validate(self, data):
         # validación que las contraseñas coincidan
         if data ['password'] != data['confirmar_password']:
             raise serializers.ValidationError({
                 'confirmar_password': 'la contraseña y su confirmación no coinciden'
             })
+
+        # El usuario aún no existe: se construye sin guardar para que
+        # UserAttributeSimilarityValidator pueda comparar contra nombre,
+        # apellido, usuario y correo.
+        tentativo = User(
+            username=data.get('username', ''),
+            first_name=data.get('first_name', ''),
+            last_name=data.get('last_name', ''),
+            email=data.get('email', ''),
+        )
+        validar_password(data['password'], tentativo, campo='password')
         return data
     
     def create(self, validated_data):
