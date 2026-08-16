@@ -2380,6 +2380,53 @@ class RegistroPlaneacionDetalleView(APIView):
 
 # ── Endpoints ProductoPlaneacion ──────────────────────────────────────────────
 
+
+def validar_linea_planeacion(registro, dom_producto, cantidad, excluir_pp=None):
+    """Esta función valida tres cosas respecto de planeaciones y DOMs:
+
+      1. El producto pertenece al DOM de esta planeación.
+      2. La cantidad proyectada, sumando las otras planeaciones, no supera la pedida.
+      3. La cantidad proyectada no queda por debajo de lo ya elaborado en esa línea.
+
+    Devuelve None si la línea es válida, o el CUERPO del error 400 —un diccionario y
+    no un texto—, para conservar las claves que los clientes ya reciben.
+
+    `excluir_pp` es la línea que se está reemplazando, para que el acumulado no se
+    cuente a sí misma. En un alta va en None: la línea todavía no existe.
+    """
+    if dom_producto is None or dom_producto.productoDom_id != registro.dom_id:
+        return {'error': 'El producto indicado no pertenece a este DOM'}
+
+    if cantidad is None:
+        return None
+
+    otras = ProductoPlaneacion.objects.filter(
+        dom_producto=dom_producto,
+        registro_planeacion__dom=registro.dom,
+    )
+    if excluir_pp is not None:
+        otras = otras.exclude(id=excluir_pp.id)
+    ya_proyectado = otras.aggregate(total=Sum('cantidad_proyectada'))['total'] or 0
+
+    if ya_proyectado + cantidad > dom_producto.cantidad_pedido:
+        return {
+            'error': 'La cantidad proyectada supera la cantidad pedida del producto',
+            'cantidad_pedida': dom_producto.cantidad_pedido,
+            'cantidad_ya_proyectada': ya_proyectado,
+            'cantidad_solicitada': cantidad,
+            'disponible': dom_producto.cantidad_pedido - ya_proyectado,
+        }
+
+    if excluir_pp is not None and cantidad < excluir_pp.cantidad_elaborada:
+        return {
+            'error': 'No puede proyectar menos de lo ya elaborado',
+            'cantidad_elaborada': excluir_pp.cantidad_elaborada,
+            'cantidad_solicitada': cantidad,
+        }
+
+    return None
+
+
 class ProductoPlaneacionListView(APIView):
     permission_classes     = [IsAuthenticated]
 
@@ -2423,22 +2470,9 @@ class ProductoPlaneacionListView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            ya_proyectado = ProductoPlaneacion.objects.filter(
-                dom_producto=dom_producto,
-                registro_planeacion__dom=planeacion.dom
-            ).aggregate(total=Sum('cantidad_proyectada'))['total'] or 0
-
-            if ya_proyectado + cantidad_proyectada_nueva > dom_producto.cantidad_pedido:
-                return Response(
-                    {
-                        'error': 'La cantidad proyectada supera la cantidad pedida del producto',
-                        'cantidad_pedida': dom_producto.cantidad_pedido,
-                        'cantidad_ya_proyectada': ya_proyectado,
-                        'cantidad_solicitada': cantidad_proyectada_nueva,
-                        'disponible': dom_producto.cantidad_pedido - ya_proyectado
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            error = validar_linea_planeacion(planeacion, dom_producto, cantidad_proyectada_nueva)
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
             # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
             tiempo_nuevo_producto = cantidad_proyectada_nueva * dom_producto.tipo_producto.tiempo_produccion_unitario
@@ -2521,22 +2555,12 @@ class ProductoPlaneacionDetalleView(APIView):
 
         cantidad_proyectada_nueva = request.data.get('cantidad_proyectada')
         if cantidad_proyectada_nueva is not None:
-            ya_proyectado = ProductoPlaneacion.objects.filter(
-                dom_producto=producto.dom_producto,
-                registro_planeacion__dom=producto.registro_planeacion.dom
-            ).exclude(id=producto_id).aggregate(total=Sum('cantidad_proyectada'))['total'] or 0
-
-            if ya_proyectado + cantidad_proyectada_nueva > producto.dom_producto.cantidad_pedido:
-                return Response(
-                    {
-                        'error': 'La cantidad proyectada supera la cantidad pedida del producto',
-                        'cantidad_pedida': producto.dom_producto.cantidad_pedido,
-                        'cantidad_ya_proyectada': ya_proyectado,
-                        'cantidad_solicitada': cantidad_proyectada_nueva,
-                        'disponible': producto.dom_producto.cantidad_pedido - ya_proyectado
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            error = validar_linea_planeacion(
+                producto.registro_planeacion, producto.dom_producto,
+                cantidad_proyectada_nueva, excluir_pp=producto,
+            )
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
             # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
             registro_planeacion = producto.registro_planeacion
