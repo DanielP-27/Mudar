@@ -238,6 +238,61 @@ class ReglaCierreTests(BaseCierre):
         self.assertIsNotNone(error)
         self.assertIn('fecha', error)
 
+    # ── Mitad B: una planeación cerrada tiene que planear algo ──────────────
+
+    def test_etapa_2_sin_ninguna_cantidad_no_cierra(self):
+        """Cerrada y sin una sola línea, la planeación no dice nada. Y solo un ADMIN
+        puede reabrirla, así que el descuido no lo arregla quien lo comete."""
+        self.crear_turno_dia()
+        self.planeacion.productos_planeacion.all().delete()
+
+        error = validar_cierre(self.planeacion, {'planeacion_completa': True}, 'etapa_2')
+
+        self.assertIsNotNone(error)
+        self.assertIn('cantidad', error)
+
+    def test_etapa_2_con_todas_las_cantidades_en_cero_no_cierra(self):
+        """El umbral es mayor que cero y no «diligenciado»: un cero explícito en todos
+        los productos es una planeación que no planea nada."""
+        self.crear_turno_dia()
+        self.planeacion.productos_planeacion.update(cantidad_proyectada=0)
+
+        error = validar_cierre(self.planeacion, {'planeacion_completa': True}, 'etapa_2')
+
+        self.assertIsNotNone(error)
+        self.assertIn('cantidad', error)
+
+    def test_etapa_2_basta_una_cantidad_positiva_para_cerrar(self):
+        """Es «al menos uno», no «todos»: los productos de un DOM se reparten entre
+        varias planeaciones, así que exigirlos todos rompería esa forma de trabajar."""
+        self.crear_turno_dia()
+        self.planeacion.productos_planeacion.update(cantidad_proyectada=0)
+        otro_producto = Productos.objects.create(
+            nombre_producto='Tanque B', tiempo_produccion_unitario=30,
+        )
+        otro_producto_dom = ProductosDom.objects.create(
+            productoDom=self.dom, tipo_producto=otro_producto, cantidad_pedido=10,
+        )
+        ProductoPlaneacion.objects.create(
+            registro_planeacion=self.planeacion,
+            dom_producto=otro_producto_dom,
+            cantidad_proyectada=10,
+        )
+
+        error = validar_cierre(self.planeacion, {'planeacion_completa': True}, 'etapa_2')
+
+        self.assertIsNone(error, error)
+
+    def test_las_cantidades_solo_se_exigen_al_cerrar(self):
+        """Guardar una planeación sin cantidades sigue siendo legítimo. Lo obligatorio
+        se exige en el candado, no en el guardado."""
+        self.crear_turno_dia()
+        self.planeacion.productos_planeacion.update(cantidad_proyectada=0)
+
+        error = validar_cierre(self.planeacion, {'lider_produccion': 'Ana'}, 'etapa_2')
+
+        self.assertIsNone(error, error)
+
     def test_etapa_4_sin_cronometro_finalizado_no_cierra(self):
         error = validar_cierre(
             self.produccion,

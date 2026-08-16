@@ -521,8 +521,10 @@ class RegistroPlaneacion(models.Model):
         return total or None
     
     
-    def tiempo_disponible_turno(self, tiempo_nuevo, excluir_registro_id=None):
-        capacidad = self.capacidad_turno_dia
+    def tiempo_disponible_turno(self, tiempo_nuevo, excluir_registro_id=None, capacidad=None):
+        # `capacidad` evalúa un turno-día que aún no existe, con los valores que van a crearlo.
+        if capacidad is None:
+            capacidad = self.capacidad_turno_dia
         if capacidad is None:
             return None, None
         planeaciones = RegistroPlaneacion.objects.filter(

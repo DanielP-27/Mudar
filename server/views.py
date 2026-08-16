@@ -193,6 +193,15 @@ def existe_turno_dia(inst, datos):
     ).exists()
 
 
+def hay_cantidad_planeada(inst, datos):
+    """Al menos un producto con cantidad mayor que cero. «Al menos uno» y no «todos»
+    porque los productos de un DOM se reparten entre varias planeaciones.
+
+    Mira lo persistido: corre después de escribir las cantidades y en la misma
+    transacción, así que su rechazo las deshace."""
+    return inst.productos_planeacion.filter(cantidad_proyectada__gt=0).exists()
+
+
 # etapa → (campo_candado, [(campo, etiqueta)], [(comprobación, etiqueta)])
 # Las etiquetas son el texto que lee el usuario cuando se rechaza el cierre.
 REQUISITOS_CIERRE = {
@@ -200,7 +209,8 @@ REQUISITOS_CIERRE = {
         [('turno',            'el turno'),
          ('fecha_planeacion', 'la fecha planeada')],
         [(existe_turno_dia, 'el número de operarios'),
-         (existe_turno_dia, 'la duración del turno')]),
+         (existe_turno_dia, 'la duración del turno'),
+         (hay_cantidad_planeada, 'al menos un producto con cantidad planeada')]),
     'etapa_3': ('materias_liberadas',
         [('dom_realizado_planeacion',
           'la respuesta sobre si las actividades de almacén se realizaron según planeación')],
@@ -2219,6 +2229,19 @@ class RegistroPlaneacionListView(APIView):
 # Clase para obtener datos de los registros de planeación relacionados con un DOM todos los roles habilitados para consultar la información
 # Permite edición etapa 2 unicamente a ADMIN, ANALISTA_1, ANALISTA_2
 
+class ErrorEnTransaccion(Exception):
+    """Sale de la transacción con el cuerpo del 400 ya formado.
+
+    Solo dos comprobaciones viven dentro del bloque, y por el mismo motivo: dependen de
+    lo que se escribe ahí. El candado, del cerrojo recién tomado; el cierre de etapa, del
+    turno-día y las cantidades recién guardados.
+
+    Por excepción y no por return: un return dentro de atomic() confirma, no revierte."""
+
+    def __init__(self, cuerpo):
+        self.cuerpo = cuerpo
+
+
 class RegistroPlaneacionDetalleView(APIView):
 
     permission_classes = [IsAuthenticated]
@@ -2267,11 +2290,38 @@ class RegistroPlaneacionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Valida capacidad si cambia turno o fecha_planeacion
+        # Se separan porque productos_planeacion no es escribible en el serializer: el
+        # conjunto lo maneja la vista, para hacer upsert sin borrar lo no enviado.
+        cantidades = request.data.get('productos_planeacion', [])
+        datos_planeacion = {k: v for k, v in request.data.items() if k != 'productos_planeacion'}
+
+        existentes = {
+            pp.dom_producto_id: pp
+            for pp in registro.productos_planeacion.select_related('dom_producto__tipo_producto')
+        }
+
+        # Cada línea entrante contra las tres reglas de una línea de planeación
+        entrantes = {}
+        for item in cantidades:
+            dom_producto = ProductosDom.objects.filter(id=item.get('dom_producto')).first()
+            error = validar_linea_planeacion(
+                registro, dom_producto, item.get('cantidad_proyectada'),
+                excluir_pp=existentes.get(item.get('dom_producto')),
+            )
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+            entrantes[dom_producto.id] = item.get('cantidad_proyectada')
+
+        # Valida capacidad si cambia turno, fecha_planeacion o alguna cantidad: las
+        # cantidades alteran la carga del turno sin tocar ninguno de los otros dos.
         turno_nuevo = request.data.get('turno', None)
         fecha_nueva = request.data.get('fecha_planeacion', None)
-        if turno_nuevo or fecha_nueva:
-            turno_eval = turno_nuevo or (registro.turno.turno_id if registro.turno else None)
+        serializer_turno_dia = None
+        capacidad_nueva = None
+        turno_obj = None
+        fecha_eval = None
+        if turno_nuevo or fecha_nueva or cantidades:
+            turno_eval = turno_nuevo or registro.turno_id
             fecha_eval  = fecha_nueva or registro.fecha_planeacion
             if turno_eval and fecha_eval:
                 try:
@@ -2282,7 +2332,10 @@ class RegistroPlaneacionDetalleView(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
 
-                # Si es la primera vez que se usa este turno y fecha, crea el RegistroTurnoDia con los datos enviados
+                # Primera vez en este turno y fecha: el RegistroTurnoDia se valida aquí y se
+                # escribe en la transacción. Por el serializer y no por objects.create(),
+                # que no aplica los choices de minutos_totales y admitiría una jornada
+                # que la ley nunca contempló.
                 registro_turno_dia = RegistroTurnoDia.objects.filter(
                     turno=turno_obj,
                     fecha=fecha_eval
@@ -2295,22 +2348,34 @@ class RegistroPlaneacionDetalleView(APIView):
                             {'error': 'Es el primer registro para este turno y fecha. Indique el número de operarios y la duración del turno.'},
                             status=status.HTTP_400_BAD_REQUEST
                         )
-                    RegistroTurnoDia.objects.create(
-                        turno=turno_obj,
-                        fecha=fecha_eval,
-                        numero_operarios=numero_operarios,
-                        minutos_totales=minutos_totales,
-                        registrado_por=request.user
-                    )
+                    serializer_turno_dia = RegistroTurnoDiaSerializer(data={
+                        'numero_operarios': numero_operarios,
+                        'minutos_totales': minutos_totales,
+                    })
+                    if not serializer_turno_dia.is_valid():
+                        return Response(
+                            {'error': 'Datos invalidos', 'detalle': serializer_turno_dia.errors},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    # Los valores que van a crearlo son los mismos que leería después.
+                    capacidad_nueva = (serializer_turno_dia.validated_data['minutos_totales']
+                                       * serializer_turno_dia.validated_data['numero_operarios'])
 
+                # Conjunto FUSIONADO: manda lo entrante, y lo que no viene conserva su valor.
                 planeacion_temp = RegistroPlaneacion(turno=turno_obj, fecha_planeacion=fecha_eval)
-                tiempo_total = sum(
-                    pp.cantidad_proyectada * pp.tiempo_unitario_efectivo
-                    for pp in registro.productos_planeacion.select_related('dom_producto__tipo_producto').all()
-                    if pp.cantidad_proyectada and pp.dom_producto
-                )
+                tiempo_total = 0
+                for dom_producto_id, pp in existentes.items():
+                    cantidad = entrantes.get(dom_producto_id, pp.cantidad_proyectada)
+                    if cantidad and pp.dom_producto:
+                        tiempo_total += cantidad * pp.tiempo_unitario_efectivo
+                for dom_producto_id, cantidad in entrantes.items():
+                    if dom_producto_id not in existentes and cantidad:
+                        # Línea nueva: el catálogo vigente es el valor que se fotografiará.
+                        tiempo_total += cantidad * ProductosDom.objects.get(
+                            id=dom_producto_id).tipo_producto.tiempo_produccion_unitario
+
                 disponible_actual, resultado = planeacion_temp.tiempo_disponible_turno(
-                    tiempo_total, excluir_registro_id=registro.id
+                    tiempo_total, excluir_registro_id=registro.id, capacidad=capacidad_nueva
                 )
                 if resultado is not None and resultado < 0:
                     return Response(
@@ -2321,20 +2386,14 @@ class RegistroPlaneacionDetalleView(APIView):
                         },
                         status=status.HTTP_400_BAD_REQUEST
                     )
+            elif cantidades:
+                return Response(
+                    {'error': 'Debe registrar el turno del día (número de operarios y '
+                              'duración) para esta fecha antes de asignar cantidades a la planeación.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        # Verificación de bloqueo de etapa
-        if registro.etapa2_bloqueada():
-            return Response(
-                {'error': 'Este registro de planeación ya ha sido bloqueado para edición, contacte al Administrador del sistema'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # No se puede cerrar la etapa sin el dato que esta etapa produce
-        error_cierre = validar_cierre(registro, request.data, 'etapa_2')
-        if error_cierre:
-            return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
-
-        serializer = RegistroPlaneacionSerializer(registro, data=request.data, partial=True)
+        serializer = RegistroPlaneacionSerializer(registro, data=datos_planeacion, partial=True)
 
         if not serializer.is_valid():
             return Response(
@@ -2344,21 +2403,54 @@ class RegistroPlaneacionDetalleView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        campos_antes = instantanea(registro, request.data)
 
-        registro = serializer.save()
+        campos_antes = instantanea(registro, datos_planeacion)
 
-        registrar_edicion_y_bloqueo(
-            dom=registro.dom,
-            usuario=request.user,
-            etapa='etapa_2',
-            campos=calcular_campos_modificados(campos_antes, registro),
-            campo_bloqueo='planeacion_completa',
-            bloqueada=registro.etapa2_bloqueada(),
-            request=request,
-        )
-        
+        # Todo o nada: si algo falla, no queda creado el turno-día, ni guardada la
+        # planeación, ni escrita ninguna cantidad.
+        try:
+            with transaction.atomic():
+                # El cerrojo serializa dos PUT sobre la misma planeación: sin recomprobar el
+                # candado, uno escribiría sobre la que el otro acaba de cerrar.
+                bloqueada = RegistroPlaneacion.objects.select_for_update().get(id=registro_id)
+                if bloqueada.etapa2_bloqueada():
+                    raise ErrorEnTransaccion({
+                        'error': 'Este registro de planeación ya ha sido bloqueado para edición, contacte al Administrador del sistema'
+                    })
+
+                if serializer_turno_dia is not None:
+                    serializer_turno_dia.save(
+                        turno=turno_obj, fecha=fecha_eval, registrado_por=request.user
+                    )
+
+                registro = serializer.save()
+
+                for dom_producto_id, cantidad in entrantes.items():
+                    ProductoPlaneacion.objects.update_or_create(
+                        registro_planeacion=registro,
+                        dom_producto_id=dom_producto_id,
+                        defaults={'cantidad_proyectada': cantidad},
+                    )
+
+                # Al final: sus dos comprobaciones miran la base —turno-día y cantidades— y
+                # las dos se acaban de escribir. Validar contra el estado real en vez de
+                # pronosticarlo solo es posible porque el rechazo lo revierte.
+                error_cierre = validar_cierre(registro, datos_planeacion, 'etapa_2')
+                if error_cierre:
+                    raise ErrorEnTransaccion({'error': error_cierre})
+
+                registrar_edicion_y_bloqueo(
+                    dom=registro.dom,
+                    usuario=request.user,
+                    etapa='etapa_2',
+                    campos=calcular_campos_modificados(campos_antes, registro),
+                    campo_bloqueo='planeacion_completa',
+                    bloqueada=registro.etapa2_bloqueada(),
+                    request=request,
+                )
+        except ErrorEnTransaccion as e:
+            return Response(e.cuerpo, status=status.HTTP_400_BAD_REQUEST)
+
         # Refresca el objeto con relaciones cargadas
         registro = RegistroPlaneacion.objects.select_related(
             'dom', 'turno'
