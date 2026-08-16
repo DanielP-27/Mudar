@@ -862,6 +862,7 @@ class ProductoProduccion(models.Model):
         db_table = 'productos_produccion'
         verbose_name = 'Producto de Producción'
         verbose_name_plural = 'Productos de Producción'
+        unique_together = ('registro_produccion', 'producto_planeacion')
         ordering = ['registro_produccion', 'fecha_registro']
         constraints = [suelo('productos_produccion', 'cantidad_elaborada', 0)]
 

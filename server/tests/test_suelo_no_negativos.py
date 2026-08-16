@@ -96,6 +96,13 @@ class BaseSuelo(TestCase):
             registro_planeacion=self.planeacion, numero_registro=1,
             numero_personas_asignadas=3,
         )
+        # Segunda jornada sobre la misma planeación. La usan las pruebas de
+        # cantidad_elaborada: el par (registro, producto) es único, así que sin ella
+        # chocarían contra esa restricción y no contra el suelo.
+        self.segunda_produccion = RegistroProduccion.objects.create(
+            registro_planeacion=self.planeacion, numero_registro=2,
+            numero_personas_asignadas=3,
+        )
         self.producto_produccion = ProductoProduccion.objects.create(
             registro_produccion=self.produccion,
             producto_planeacion=self.producto_planeacion,
@@ -206,7 +213,7 @@ class RechazoEnBaseSueloCeroTests(BaseSuelo):
     def test_cantidad_elaborada_negativa_es_rechazada(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
             ProductoProduccion.objects.create(
-                registro_produccion=self.produccion,
+                registro_produccion=self.segunda_produccion,
                 producto_planeacion=self.producto_planeacion,
                 cantidad_elaborada=-1,
             )
@@ -269,7 +276,7 @@ class ElCeroSigueSiendoValidoTests(BaseSuelo):
 
     def test_cantidad_elaborada_cero(self):
         pp = ProductoProduccion.objects.create(
-            registro_produccion=self.produccion,
+            registro_produccion=self.segunda_produccion,
             producto_planeacion=self.producto_planeacion,
             cantidad_elaborada=0,
         )

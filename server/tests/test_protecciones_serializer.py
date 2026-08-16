@@ -81,6 +81,11 @@ class ProteccionesSerializerTests(TestCase):
         self.otra_produccion = RegistroProduccion.objects.create(
             registro_planeacion=self.otra_planeacion, numero_registro=1,
         )
+        # Segunda jornada de la misma planeación: el par (registro, producto) es único,
+        # así que crear otro ProductoProduccion exige un registro distinto.
+        self.segunda_produccion = RegistroProduccion.objects.create(
+            registro_planeacion=self.planeacion, numero_registro=2,
+        )
         self.tratamiento = RegistroTratamiento.objects.create(
             registro_planeacion=self.planeacion, numero_registro=1,
         )
@@ -301,8 +306,8 @@ class ProteccionesSerializerTests(TestCase):
         s = ProductoProduccionSerializer(data={'cantidad_elaborada': 2})
         self.assertTrue(s.is_valid(), s.errors)
         creado = s.save(
-            registro_produccion=self.produccion,
+            registro_produccion=self.segunda_produccion,
             producto_planeacion=self.producto_planeacion,
         )
-        self.assertEqual(creado.registro_produccion_id, self.produccion.id)
+        self.assertEqual(creado.registro_produccion_id, self.segunda_produccion.id)
         self.assertEqual(creado.producto_planeacion_id, self.producto_planeacion.id)
