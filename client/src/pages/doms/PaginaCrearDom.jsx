@@ -9,6 +9,7 @@ import { toInt, formatearFecha } from '../../utils/formatters'
 import { extraerMensajeError } from '../../utils/errores'
 import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
+import AvisoSuelo from '../../components/common/AvisoSuelo'
 import SelectSiNo from '../../components/common/SelectSiNo'
 import ModalMensaje from '../../components/common/ModalMensaje'
 import ModalBase from '../../components/common/ModalBase'
@@ -540,6 +541,7 @@ function PaginaCrearDom() {
                         placeholder="Cantidad"
                         min="1"
                         className="campo-input" />
+                      <AvisoSuelo valor={cantidadProducto} minimo={1} />
                     </CampoFormulario>
                   </div>
 
@@ -618,7 +620,9 @@ function PaginaCrearDom() {
                     <input type="number" value={datosEtapa1.tiempo_salida_almacen}
                       onChange={e => actualizarEtapa1('tiempo_salida_almacen', e.target.value)}
                       placeholder="Tiempo en minutos"
+                      min="0"
                       className="campo-input" />
+                    <AvisoSuelo valor={datosEtapa1.tiempo_salida_almacen} minimo={0} />
                   </CampoFormulario>
                   <CampoFormulario label="¿DOM resultado de campaña de venta?">
                     <SelectSiNo name="crear_campana_venta"

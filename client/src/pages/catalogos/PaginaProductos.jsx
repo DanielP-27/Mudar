@@ -6,6 +6,7 @@ import { toInt } from '../../utils/formatters'
 import { useDebounce } from '../../hooks/useDebounce'
 import { useEsEscritorio } from '../../hooks/useEsEscritorio'
 import CampoFormulario from '../../components/common/CampoFormulario'
+import AvisoSuelo from '../../components/common/AvisoSuelo'
 import { extraerMensajeError } from '../../utils/errores'
 import Toast from '../../components/common/Toast'
 import ModalBase from '../../components/common/ModalBase'
@@ -207,6 +208,7 @@ function PaginaProductos() {
                 value={formulario.tiempo_produccion_unitario}
                 onChange={e => setFormulario(prev => ({ ...prev, tiempo_produccion_unitario: e.target.value }))}
                 className="campo-input" />
+              <AvisoSuelo valor={formulario.tiempo_produccion_unitario} minimo={1} />
             </CampoFormulario>
           </div>
           <div className="flex gap-2">

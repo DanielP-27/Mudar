@@ -27,6 +27,7 @@ import TypeaheadInput from '../../components/common/TypeaheadInput'
 import CampoFormulario from '../../components/common/CampoFormulario'
 import SelectSiNo from '../../components/common/SelectSiNo'
 import CronometroProduccion from '../../components/common/CronometroProduccion'
+import AvisoSuelo from '../../components/common/AvisoSuelo'
 import ModalMensaje from '../../components/common/ModalMensaje'
 import ModalBase from '../../components/common/ModalBase'
 import Toast from '../../components/common/Toast'
@@ -1425,7 +1426,9 @@ function PaginaEditarDom() {
                 <input type="number" value={datosDom.tiempo_salida_almacen ?? ''}
                   onChange={e => actualizarCampoDom('tiempo_salida_almacen', e.target.value)}
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion}
+                  min="0"
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                <AvisoSuelo valor={datosDom.tiempo_salida_almacen} minimo={0} />
               </CampoFormulario>
               <CampoFormulario label="¿DOM resultado de campaña de venta?">
                 <SelectSiNo name="dom_campana_venta" soloLectura={!esEditable('etapa_1')} variante="lectura" value={boolToStr(datosDom.campana_venta)}
@@ -1546,7 +1549,9 @@ function PaginaEditarDom() {
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, numero_operarios: e.target.value }))}
                     disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !planActual.turno}
                     placeholder="Ingrese número de operarios"
+                    min="1"
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                  <AvisoSuelo valor={datosTurnoDia.numero_operarios} minimo={1} />
                   {esEditable('etapa_2') && (!planActual.fecha_planeacion || !planActual.turno) && (
                     <p className="text-xs text-amber-600 mt-1">Disponible una vez seleccione la fecha de planeación y el turno.</p>
                   )}
@@ -1733,10 +1738,12 @@ function PaginaEditarDom() {
             {planActual && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <CampoFormulario label="Orden producción dentro de turno y fecha">
-                  <input type="text" value={planActual.orden_produccion ?? ''}
+                  <input type="number" value={planActual.orden_produccion ?? ''}
                     onChange={e => actualizarCampoPlaneacion('orden_produccion', e.target.value)}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    min="1"
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                  <AvisoSuelo valor={planActual.orden_produccion} minimo={1} />
                 </CampoFormulario>
                 <CampoFormulario label="Líder de producción">
                   <select value={planActual.lider_produccion ?? ''}
@@ -1772,10 +1779,12 @@ function PaginaEditarDom() {
                   </select>
                 </CampoFormulario>
                 <CampoFormulario label="Orden de tratamiento termico en turno y fecha">
-                  <input type="text" value={planActual.orden_tratamiento ?? ''}
+                  <input type="number" value={planActual.orden_tratamiento ?? ''}
                     onChange={e => actualizarCampoPlaneacion('orden_tratamiento', e.target.value)}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
+                    min="1"
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                  <AvisoSuelo valor={planActual.orden_tratamiento} minimo={1} />
                 </CampoFormulario>
                 <CampoFormulario label="¿Productos deben pesarse?">
                   <SelectSiNo name="planeacion_peso" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.peso)}
@@ -1869,7 +1878,9 @@ function PaginaEditarDom() {
                           onChange={e => setProyectadaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
                           disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
                           placeholder="Ingrese cantidad"
+                          min="0"
                           className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                        <AvisoSuelo valor={proyectadaLocal[localKey] ?? pp?.cantidad_proyectada} minimo={0} />
                         {pp && (
                           <p className="text-xs text-gray-400 mt-1">
                             Planeado actual: {pp.cantidad_proyectada ?? '—'}
@@ -2045,7 +2056,9 @@ function PaginaEditarDom() {
                         if (val && parseInt(val) > 0) setMostrarModalPersonas(true)
                       }}
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || personasConfirmadas}
+                      min="1"
                       className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                    <AvisoSuelo valor={produccionActual.numero_personas_asignadas} minimo={1} />
                     {personasConfirmadas && (
                       <p className="flex items-center gap-1 text-xs text-gray-500 mt-1">
                         <FiLock size={12} />
@@ -2100,7 +2113,9 @@ function PaginaEditarDom() {
                                     onChange={e => setElaboradaLocal(prev => ({ ...prev, [localKey]: e.target.value }))}
                                     disabled={!esEditable('etapa_4') || bloqueado || !cronometroFinalizado}
                                     placeholder="Ingrese cantidad"
+                                    min="0"
                                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                                  <AvisoSuelo valor={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada} minimo={0} />
                                   {!cronometroFinalizado && (
                                     <p className="text-xs text-amber-600 mt-1">
                                       Disponible una vez finalice el cronómetro de producción
@@ -2302,7 +2317,9 @@ function PaginaEditarDom() {
                 <input type="number" value={datosDom.cantidad_empaques ?? ''}
                   onChange={e => actualizarCampoDom('cantidad_empaques', e.target.value)}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre}
+                  min="1"
                   className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                <AvisoSuelo valor={datosDom.cantidad_empaques} minimo={1} />
               </CampoFormulario>
               <CampoFormulario label="Empaque servicio">
                 <select value={datosDom.empaque_servicio ?? ''}
