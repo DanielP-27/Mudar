@@ -1,8 +1,42 @@
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
 from django.db.models.options import Options
 from django.db.models import Sum
+
+
+# ── Suelo de los campos numéricos ─────────────────────────────────────────────
+#
+# Esta función centraliza la restricción del sistema de no admitir valores
+# negativos en los campos numéricos. Es el único sitio donde se decide cómo se
+# escribe esa regla: los dieciséis campos que la llevan la piden desde aquí, de
+# modo que cambiar la forma de la restricción es cambiar esta función y nada más.
+# La llaman diez modelos, desde el Meta de cada uno: Productos, RegistroTurnoDia,
+# Dom, ProductosDom, RegistroPlaneacion, ProductoPlaneacion, RegistroProduccion,
+# ProductoProduccion, RegistroTiempoProduccion y PausaTiempoProduccion.
+
+
+MENSAJE_MAYOR_QUE_CERO = 'Debe ser mayor a 0'
+MENSAJE_NO_NEGATIVO = 'No puede ser negativo'
+
+
+def suelo(tabla, campo, minimo, nulable=False):
+    # El nombre del campo llega como cadena, así que la condición se arma
+    # desempaquetando un diccionario: Q(campo__gte=1) no admite un nombre variable.
+    condicion = models.Q(**{f'{campo}__gte': minimo})
+    if nulable:
+        condicion |= models.Q(**{f'{campo}__isnull': True})
+
+    positivo = minimo == 1
+    # El nombre lleva la tabla delante porque en Django los nombres de
+    # restricción son únicos en TODA la base, no por tabla.
+    return models.CheckConstraint(
+        condition=condicion,
+        name=f"{tabla}_{campo}_{'mayor_que_cero' if positivo else 'no_negativo'}",
+        violation_error_message=MENSAJE_MAYOR_QUE_CERO if positivo else MENSAJE_NO_NEGATIVO,
+    )
+
 
 # Tabla listado de clientes
 class Cliente (models.Model):
@@ -59,7 +93,7 @@ class Productos(models.Model):
     producto_id = models.AutoField(primary_key=True, verbose_name='Código de producto')
     nombre_producto = models.CharField (max_length=200, verbose_name='Nombre del producto')
     familia_producto = models.ForeignKey(FamiliaProducto, on_delete=models.RESTRICT, related_name='productos', verbose_name='Familia de Producto', null=True, blank=True)
-    tiempo_produccion_unitario= models.IntegerField(verbose_name='Tiempo de producción de una unidad en minutos')
+    tiempo_produccion_unitario= models.IntegerField(verbose_name='Tiempo de producción de una unidad en minutos', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
     activo=models.BooleanField(default=True, db_index=True, verbose_name='Producto_activo')
 
     # Auditoria 
@@ -73,6 +107,7 @@ class Productos(models.Model):
         verbose_name = 'producto'
         verbose_name_plural = 'productos'
         ordering = ['nombre_producto']
+        constraints = [suelo('productos', 'tiempo_produccion_unitario', 1)]
 
     def __str__(self):
         return f'{self.nombre_producto} ({self.tiempo_produccion_unitario})'
@@ -123,7 +158,7 @@ class RegistroTurnoDia(models.Model):
 
     turno = models.ForeignKey(Turno, on_delete=models.RESTRICT, related_name='registros_diarios', verbose_name='Turno')
     fecha = models.DateField(verbose_name='Fecha del turno', help_text='Fecha en que se registran los operarios para este turno')
-    numero_operarios = models.IntegerField(verbose_name='Número de operarios', help_text='Total de operarios disponibles en este turno para esta fecha')
+    numero_operarios = models.IntegerField(verbose_name='Número de operarios', help_text='Total de operarios disponibles en este turno para esta fecha', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
     minutos_totales = models.IntegerField(choices=OPCIONES_MINUTOS + OPCIONES_MINUTOS_HISTORICAS, default=420, verbose_name='Duración del turno', help_text='Duración total del turno en minutos')
     registrado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='turnos_dia_registrados')
     fecha_creacion = models.DateTimeField(auto_now_add=True)
@@ -134,6 +169,7 @@ class RegistroTurnoDia(models.Model):
         verbose_name_plural = 'Registros de turno del día'
         unique_together = ('turno', 'fecha')
         ordering = ['-fecha', 'turno']
+        constraints = [suelo('registros_turno_dia', 'numero_operarios', 1)]
 
     def __str__(self):
         return f'{self.turno.nombre_turno} — {self.fecha} — {self.numero_operarios} operarios — {self.minutos_totales} min'
@@ -245,7 +281,7 @@ class Dom(models.Model):
     
     # Etapa 1 gestión comercial y diseño
     orden_compra=models.CharField(max_length=50, blank=True, null=True, verbose_name='Número orden de compra')
-    tiempo_salida_almacen=models.IntegerField(blank=True, null=True, verbose_name='Tiempo de salida de almacen (minutos)')
+    tiempo_salida_almacen=models.IntegerField(blank=True, null=True, verbose_name='Tiempo de salida de almacen (minutos)', validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)])
     rentabilidad=models.IntegerField(blank=True, null=True, verbose_name='Rentabilidad (%)', help_text='Porcentaje de rentabilidad')
     campana_venta = models.BooleanField(null=True, blank=True, default=None, verbose_name='DOM generado en campaña de venta')
     numero_cotizacion=models.CharField(max_length=50, blank=True, null=True, verbose_name='Numero de Cotización')
@@ -259,7 +295,7 @@ class Dom(models.Model):
     # 'fecha_entrega_planificada' representan el mismo dato.
     fecha_entrega_pactada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega pactada')
     fecha_entrega_planificada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega planificada')  # retirado de la UI — ver nota de deuda técnica arriba
-    cantidad_empaques = models.IntegerField(blank=True, null=True, verbose_name='cantidad de empaques que se despachan a las instalaciones del cliente')
+    cantidad_empaques = models.IntegerField(blank=True, null=True, verbose_name='cantidad de empaques que se despachan a las instalaciones del cliente', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
     empaque_servicio = models.CharField(max_length=70, blank=True, null=True, verbose_name='Empaque/Servicio', help_text='Elegir el tipo de servicio que se ofrece al cliente')
     tipo_negociacion = models.CharField(max_length=70, blank=True, null=True, verbose_name='Tipo de Negociacion', help_text='Elegir el tipo de negociación pactada con el cliente')
     fecha_entrega_proyectada = models.DateField(blank=True, null=True, verbose_name='Fecha de entrega proyectada')
@@ -283,6 +319,7 @@ class Dom(models.Model):
         verbose_name = 'DOM'
         verbose_name_plural = 'DOMS'
         ordering = ['-dom_id']
+        constraints = [suelo('doms', 'tiempo_salida_almacen', 0, nulable=True), suelo('doms', 'cantidad_empaques', 1, nulable=True)]
 
     def __str__(self):
         return f"DOM #{self.dom_id} - {self.nombre_cliente}"
@@ -329,13 +366,14 @@ class ProductosDom(models.Model):
 
     productoDom = models.ForeignKey(Dom, on_delete=models.CASCADE, related_name='productos', verbose_name='DOM')
     tipo_producto = models.ForeignKey(Productos, on_delete=models.RESTRICT, related_name='dom_productos', verbose_name='Tipo de Producto')
-    cantidad_pedido = models.IntegerField(verbose_name='Cantidad del pedido')
+    cantidad_pedido = models.IntegerField(verbose_name='Cantidad del pedido', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
     tiempo_unitario_aplicado = models.IntegerField(
         blank=True, null=True,
         verbose_name='Tiempo unitario aplicado',
         help_text='Minutos por unidad vigentes en el catálogo cuando se registró este '
                   'producto en el DOM. Se copia una sola vez y no se actualiza: congela '
-                  'el estándar para que el histórico no cambie si el catálogo cambia.'
+                  'el estándar para que el histórico no cambie si el catálogo cambia.',
+        validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)],
     )
 
     class Meta:
@@ -343,6 +381,7 @@ class ProductosDom(models.Model):
         verbose_name = 'Producto del DOM'
         verbose_name_plural = 'Productos del DOM'
         unique_together = ('productoDom', 'tipo_producto')
+        constraints = [suelo('dom_productos', 'cantidad_pedido', 1), suelo('dom_productos', 'tiempo_unitario_aplicado', 1, nulable=True)]
 
     def __str__(self):
         return f"DOM # {self.productoDom.dom_id} - {self.tipo_producto.nombre_producto} x {self.cantidad_pedido}"
@@ -381,14 +420,14 @@ class RegistroPlaneacion(models.Model):
 
     fecha_planeacion = models.DateField(blank=True, null=True, verbose_name='Fecha planeada para esta producción')
     materia_prima_disponible = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Matería Prima Disponible')
-    orden_produccion = models.IntegerField(blank=True, null=True, verbose_name='Orden de producción en fecha planeada')
+    orden_produccion = models.IntegerField(blank=True, null=True, verbose_name='Orden de producción en fecha planeada', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
     lider_produccion=models.CharField(max_length=50, blank=True, null=True, verbose_name='Lider de Producción')
     objetivo_planeacion = models.CharField(max_length=50, blank=True, null=True, verbose_name="objetivo de planeación inicial")
     tablilla_madera = models.CharField(max_length=50, blank=True, null=True, verbose_name='¿Producto con madera o tablilla larga?')
     encartonar = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Encartonar?')
     grafado_fundas = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Productos requieren grafado y/o elaboración fundas?')
     control_tiempo = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Producto lleva control de tiempo de corte y ensamble en armadora?')
-    orden_tratamiento=models.IntegerField(blank=True, null=True, verbose_name='Orden Tratamiento')
+    orden_tratamiento=models.IntegerField(blank=True, null=True, verbose_name='Orden Tratamiento', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
     lider_almacen = models.CharField(max_length=50, blank=True, null=True, verbose_name='Lider de almacén')
     cliente_recoge = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Cliente recoge productos?')
     mudar_entrega = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Mudar de Colombia entrega productos?')
@@ -417,6 +456,7 @@ class RegistroPlaneacion(models.Model):
         verbose_name_plural = 'Registros de Planeación'
         unique_together = ('dom', 'numero_registro')
         ordering = ['dom', 'numero_registro']
+        constraints = [suelo('registros_planeacion', 'orden_produccion', 1, nulable=True), suelo('registros_planeacion', 'orden_tratamiento', 1, nulable=True)]
 
     def __str__(self):
         return f"Planeación #{self.numero_registro} - DOM #{self.dom.dom_id}"
@@ -577,14 +617,16 @@ class ProductoPlaneacion(models.Model):
     )
     cantidad_proyectada = models.IntegerField(
         blank=True, null=True,
-        verbose_name='Cantidad proyectada a elaborar'
+        verbose_name='Cantidad proyectada a elaborar',
+        validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)],
     )
     tiempo_unitario_aplicado = models.IntegerField(
         blank=True, null=True,
         verbose_name='Tiempo unitario aplicado',
         help_text='Minutos por unidad vigentes en el catálogo cuando se proyectó esta '
                   'cantidad. Se copia una sola vez y no se actualiza: congela el estándar '
-                  'para que el histórico no cambie si el catálogo cambia.'
+                  'para que el histórico no cambie si el catálogo cambia.',
+        validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)],
     )
 
     class Meta:
@@ -592,6 +634,7 @@ class ProductoPlaneacion(models.Model):
         verbose_name = 'Producto de Planeación'
         verbose_name_plural = 'Productos de Planeación'
         unique_together = ('registro_planeacion', 'dom_producto')
+        constraints = [suelo('productos_planeacion', 'cantidad_proyectada', 0, nulable=True), suelo('productos_planeacion', 'tiempo_unitario_aplicado', 1, nulable=True)]
 
     def __str__(self):
         return f"Planeación #{self.registro_planeacion.numero_registro} - {self.dom_producto.tipo_producto.nombre_producto} x {self.cantidad_proyectada}"
@@ -690,8 +733,8 @@ class RegistroProduccion(models.Model):
     )
 
     numero_registro = models.IntegerField(verbose_name='Numero de Registro')
-    minutos_asignados = models.IntegerField(blank=True, null=True, verbose_name='Minutos asignados DOM', help_text='Este campo se comoleta automaticamente al momento de darle finalizar al cronometro')
-    numero_personas_asignadas = models.IntegerField(blank=True, null=True, verbose_name='Número de personas asignadas a la producción de este DOM')
+    minutos_asignados = models.IntegerField(blank=True, null=True, verbose_name='Minutos asignados DOM', help_text='Este campo se comoleta automaticamente al momento de darle finalizar al cronometro', validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)])
+    numero_personas_asignadas = models.IntegerField(blank=True, null=True, verbose_name='Número de personas asignadas a la producción de este DOM', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
     novedad_cumplimiento_produccion = models.TextField(blank=True, null=True, verbose_name='Novedad Cumplimiento Producción', help_text='Registre aquí cualquier novedad relevante respecto de las actividades desarrolladas en dentro de las labores de produccion para este DOM')
     segun_planeacion = models.BooleanField(null=True, blank=True, default=None, verbose_name='¿Actividades de producción realizadas según planeación de este DOM?')
     produccion_no_completada = models.TextField(blank = True, null = True, verbose_name='Razones por la cuales la producción no ha podido ser realizada según planeación', help_text='Incluya en este toda la información relevante respecto del por que la producción no ha podido ser finalizada según planeación realizada, si la producción ha sido realizada según planeación, ignore este campo' )
@@ -717,6 +760,7 @@ class RegistroProduccion(models.Model):
         verbose_name_plural = 'Registros de Producción'
         unique_together = ('registro_planeacion', 'numero_registro')
         ordering = ['registro_planeacion', 'numero_registro']
+        constraints = [suelo('registros_produccion', 'minutos_asignados', 0, nulable=True), suelo('registros_produccion', 'numero_personas_asignadas', 1, nulable=True)]
 
     def __str__(self):
         return f"Producción #{self.numero_registro} - Planeación #{self.registro_planeacion.numero_registro}"
@@ -746,7 +790,8 @@ class RegistroProduccion(models.Model):
     @property
     # Calcula tiempo de producción proyectado o esperado según número de unidades a propudcir y cantidad de trabajadores disponible
     def minutos_hombre_produccion_dom(self):
-        if self.minutos_asignados and self.numero_personas_asignadas:
+        # is not None: con cero minutos el resultado es 0 minutos-hombre, no ausencia de dato.
+        if self.minutos_asignados is not None and self.numero_personas_asignadas is not None:
             return self.minutos_asignados * self.numero_personas_asignadas
         return None
     
@@ -802,7 +847,8 @@ class ProductoProduccion(models.Model):
         verbose_name='Producto de Planeación'
     )
     cantidad_elaborada = models.IntegerField(
-        verbose_name='Cantidad elaborada'
+        verbose_name='Cantidad elaborada',
+        validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)],
     )
     registrado_por = models.ForeignKey(
         User,
@@ -817,6 +863,7 @@ class ProductoProduccion(models.Model):
         verbose_name = 'Producto de Producción'
         verbose_name_plural = 'Productos de Producción'
         ordering = ['registro_produccion', 'fecha_registro']
+        constraints = [suelo('productos_produccion', 'cantidad_elaborada', 0)]
 
     def __str__(self):
         return f"Producción #{self.registro_produccion.numero_registro} - {self.producto_planeacion.dom_producto.tipo_producto.nombre_producto} x {self.cantidad_elaborada}"
@@ -851,8 +898,8 @@ class RegistroTiempoProduccion(models.Model):
 
     # Calculo de minutos en pausa del cronometro y de los minutos totales una vez se selecciona la opción FINALIZADO
 
-    total_segundos_pausados = models.IntegerField(default=0, verbose_name='Total segundos pausados')
-    minutos_totales = models.IntegerField(blank=True, null=True, verbose_name='Minutos totales', help_text='calculo se obtiene al darle finalizado a la producción')
+    total_segundos_pausados = models.IntegerField(default=0, verbose_name='Total segundos pausados', validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)])
+    minutos_totales = models.IntegerField(blank=True, null=True, verbose_name='Minutos totales', help_text='calculo se obtiene al darle finalizado a la producción', validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)])
 
     # auditoria 
 
@@ -868,6 +915,7 @@ class RegistroTiempoProduccion(models.Model):
         verbose_name = 'Registro Tiempo Producción'
         verbose_name_plural = 'Registros Tiempo Producción'
         ordering = ['-inicio']
+        constraints = [suelo('registros_tiempo_produccion', 'total_segundos_pausados', 0), suelo('registros_tiempo_produccion', 'minutos_totales', 0, nulable=True)]
 
     def __str__(self):
         return f"Tiempo {self.estado} - {self.minutos_totales or 0} min"
@@ -885,7 +933,9 @@ class RegistroTiempoProduccion(models.Model):
        
         # Cuando se seleccione la opción FINALIZADO, actualiza el atributo minutos_asignados_dom
 
-        if self.estado == 'FINALIZADO' and self.minutos_totales:
+        # is not None y no verdad: una corrida de menos de un minuto da 0, y ese cero es
+        # un dato —se midió— distinto de no haber cronometrado nunca.
+        if self.estado == 'FINALIZADO' and self.minutos_totales is not None:
             self.registro_produccion.minutos_asignados = self.minutos_totales
             self.registro_produccion.save()
         
@@ -901,13 +951,14 @@ class PausaTiempoProduccion(models.Model):
 
     fin_pausa = models.DateTimeField(blank=True, null=True, verbose_name='Fin pausa', help_text='resultado se obtiene al momento de finalizar la pausa')
 
-    segundos_pausados = models.IntegerField(blank=True, null=True, verbose_name='Segundos de Pausa')
+    segundos_pausados = models.IntegerField(blank=True, null=True, verbose_name='Segundos de Pausa', validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)])
 
     class Meta:
         db_table = 'pausas_tiempo_produccion'
         verbose_name = 'Pausa Tiempo Producción'
         verbose_name_plural = 'Pausas Tiempo Producción'
         ordering = ['inicio_pausa']
+        constraints = [suelo('pausas_tiempo_produccion', 'segundos_pausados', 0, nulable=True)]
 
     def __str__(self):
         return f"Pausa: {self.segundos_pausados or '?'} seg"
