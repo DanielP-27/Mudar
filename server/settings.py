@@ -209,11 +209,27 @@ if not DEBUG:
                 'backupCount': 3,
                 'formatter': 'detallado',
             },
+            # Archivo propio: fail2ban vigila una ruta concreta y le conviene que todo
+            # lo que hay en ella sea de su incumbencia.
+            'seguridad': {
+                'class': 'logging.handlers.RotatingFileHandler',
+                'filename': BASE_DIR / 'logs' / 'seguridad.log',
+                'maxBytes': 5 * 1024 * 1024,
+                'backupCount': 3,
+                'formatter': 'detallado',
+            },
         },
         'loggers': {
             'django': {
                 'handlers': ['archivo'],
                 'level': 'WARNING',
+            },
+            # Sin esta entrada el mensaje sube al logger raíz, que no tiene manejadores,
+            # y acaba en la salida de error en lugar de en un archivo.
+            'server.seguridad': {
+                'handlers': ['seguridad'],
+                'level': 'WARNING',
+                'propagate': False,
             },
         },
     }

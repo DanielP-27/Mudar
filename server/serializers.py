@@ -111,7 +111,9 @@ class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
     class Meta:
         model = RegistroTurnoDia
         fields = ['id', 'turno', 'turno_nombre', 'fecha', 'numero_operarios', 'minutos_totales', 'registrado_por', 'fecha_creacion']
-        read_only_fields = ['registrado_por', 'fecha_creacion']
+        # turno y fecha identifican una jornada: mover registros afecta las jornadas de
+        # trabajo. Operarios y duración son editables según necesidades de la planeación.
+        read_only_fields = ['registrado_por', 'fecha_creacion', 'turno', 'fecha']
         # minutos_totales lo valida DRF de forma nativa contra el choices del modelo, que suma las jornadas vigentes y las históricas — fuente única de verdad. Ambas viven en la clase RegistroTurnoDia de models.py: las vigentes en OPCIONES_MINUTOS y las de legislaciones anteriores en OPCIONES_MINUTOS_HISTORICAS. El campo es una fotografía: debe poder conservar lo que fue legal cuando se registró. Aquí sólo personalizamos el mensaje.
         extra_kwargs = {
             'minutos_totales': {
@@ -312,7 +314,9 @@ class RegistroAlmacenSerializer(serializers.ModelSerializer):
             'etapa_3_bloqueada',
         ]
         # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
-        read_only_fields = ['numero_registro']
+        # registro_planeacion es de solo lectura: lo asigna la vista al crear. Si fuera
+        # escribible, un PUT podría mover el registro a otra planeación y a otro DOM.
+        read_only_fields = ['numero_registro', 'registro_planeacion']
         extra_kwargs = {
             'novedad_cumplimiento_almacen': {
                 'allow_null': True,
@@ -382,7 +386,10 @@ class ProductoProduccionSerializer(serializers.ModelSerializer):
             'cantidad_proyectada',
             'fecha_registro',
         ]
-        read_only_fields = ['fecha_registro', 'registrado_por']
+        # Las dos FK las asigna la vista al crear. Escribibles, un PUT reasignaría la fila
+        # y alteraría lo producido de dos planeaciones a la vez.
+        read_only_fields = ['fecha_registro', 'registrado_por',
+                            'registro_produccion', 'producto_planeacion']
 
 
 # Serializer: RegistroProduccionSerializer
@@ -428,7 +435,9 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
             'registro_tiempo',
         ]
 
-        read_only_fields = ['numero_registro']
+        # registro_planeacion es de solo lectura: lo asigna la vista al crear. Si fuera
+        # escribible, un PUT podría mover el registro a otra planeación y a otro DOM.
+        read_only_fields = ['numero_registro', 'registro_planeacion']
         extra_kwargs = {
             'novedad_cumplimiento_produccion': {
                 'allow_null': True,
@@ -442,6 +451,18 @@ class RegistroProduccionSerializer(serializers.ModelSerializer):
             },
             'segun_planeacion': {'allow_null': True, 'required': False},
         }
+
+    def validate_numero_personas_asignadas(self, value):
+        """Inmutable si ya existe cronómetro: el valor es factor de
+        minutos_hombre_produccion_dom, y cambiarlo reescribiría un cálculo ya hecho.
+        Comparar contra lo guardado cubre vaciarlo, ponerlo en cero y cambiarlo."""
+        inst = self.instance
+        if inst and inst.registros_tiempo.exists() and value != inst.numero_personas_asignadas:
+            raise serializers.ValidationError(
+                'No se puede modificar el número de personas asignadas: este registro '
+                'ya tiene un cronómetro.'
+            )
+        return value
 
 # Serializer: RegistroTratamiento
 # Uso: manejo datos etapa 5 - tratamiento fitosanitario
@@ -468,7 +489,9 @@ class RegistroTratamientoSerializer(serializers.ModelSerializer):
             'etapa_5_bloqueada',
         ]
         # Se agrega funcionalidad "extra_kwargs de Django" para propagar comportamiento "allow_null al serializer. Si bien el modelo ya lo maneja el comportamiento no siempre se propaga por defecto"
-        read_only_fields = ['numero_registro']
+        # registro_planeacion es de solo lectura: lo asigna la vista al crear. Si fuera
+        # escribible, un PUT podría mover el registro a otra planeación y a otro DOM.
+        read_only_fields = ['numero_registro', 'registro_planeacion']
         extra_kwargs = {
             'novedad_cumplimiento_tratamiento': {
                 'allow_null': True,
@@ -507,6 +530,17 @@ class ProductoPlaneacionSerializer(serializers.ModelSerializer):
             'tiempo_unitario_efectivo',
         ]
         read_only_fields = ['registro_planeacion']
+
+    def validate_dom_producto(self, value):
+        """Inmutable tras crear, no de solo lectura: al crear la línea el usuario elige el
+        producto. tiempo_unitario_aplicado se fotografía sólo al insertar y no se recalcula,
+        así que un cambio dejaría la fila calculando con los minutos del producto anterior."""
+        if self.instance and value != self.instance.dom_producto:
+            raise serializers.ValidationError(
+                'No se puede cambiar el producto de una línea de planeación. '
+                'Elimine la línea y cree una nueva.'
+            )
+        return value
 
 
 # Serializer: RegistroPlaneacion

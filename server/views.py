@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -93,6 +95,10 @@ DIAS_HORIZONTE_PRODUCCION = 15   # horizonte del cuadro de productos pendientes
 # sistema; lo consumen el dashboard y ListaDoms para clasificar/ordenar por urgencia.
 def fecha_entrega_efectiva():
     return Coalesce('fecha_entrega_proyectada', 'fecha_solicitada_cliente')
+
+# Rastro de seguridad, separado del log de la aplicación: lo vigila fail2ban.
+# Debe estar declarado en LOGGING de settings.py o sus mensajes no llegan al archivo.
+logger_seguridad = logging.getLogger('server.seguridad')
 
 #  retorna el PerfilUsuario autenticado / referencia PerfilUsuario
 def get_perfil(request):
@@ -354,6 +360,15 @@ class LoginView(APIView):
         user = authenticate(username=username, password=password)
 
         if not user:
+            # Lo lee fail2ban con una expresión regular, así que el formato es un
+            # contrato: la IP va siempre al final y con la misma etiqueta. El usuario lo
+            # escribe quien intenta entrar; se recorta y se le quitan los saltos de línea
+            # para que no pueda fabricar entradas falsas en el archivo.
+            logger_seguridad.warning(
+                'Login fallido usuario=%s ip=%s',
+                username[:150].replace('\n', ' ').replace('\r', ' '),
+                obtener_ip(request),
+            )
             return Response(
                 {'error' : 'Usuario o contraseña incorrecto'},
                 status = status.HTTP_401_UNAUTHORIZED
@@ -2688,7 +2703,11 @@ class ProductoProduccionListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        producto = serializer.save(registrado_por=request.user)
+        producto = serializer.save(
+            registrado_por=request.user,
+            registro_produccion=registro,
+            producto_planeacion=pp
+        )
 
         registrar_auditoria(
             dom=registro.registro_planeacion.dom,
@@ -2891,7 +2910,8 @@ class RegistroAlmacenListView(APIView):
         # Guarda en back datos no enviados desde front, generación automatica 
         registro = serializer.save(
             creado_por = request.user,
-            numero_registro=numero_registro
+            numero_registro=numero_registro,
+            registro_planeacion=planeacion
         )
 
         registrar_auditoria(
@@ -3065,7 +3085,8 @@ class RegistroProduccionListView(APIView):
         
         registro = serializer.save(
             creado_por=request.user,
-            numero_registro=numero_registro
+            numero_registro=numero_registro,
+            registro_planeacion=planeacion
         )
 
         registrar_auditoria(
@@ -3241,7 +3262,8 @@ class RegistroTratamientoListView(APIView):
 
         registro = serializer.save(
             creado_por=request.user,
-            numero_registro=numero_registro
+            numero_registro=numero_registro,
+            registro_planeacion=planeacion
         )
 
         registrar_auditoria(
@@ -3556,17 +3578,19 @@ class CronometroIniciarView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Verifica que no exista cronómetro EN_CURSO para este registro
-        cronometro_activo = RegistroTiempoProduccion.objects.filter(
-            registro_produccion=registro_produccion,
-            estado='EN_CURSO'
+        # Un registro de producción admite un solo cronómetro: al finalizar, models.py
+        # asigna los minutos y no los acumula, así que un segundo borraría los del primero.
+        cronometro = RegistroTiempoProduccion.objects.filter(
+            registro_produccion=registro_produccion
         ).first()
 
-        if cronometro_activo:
-            return Response(
-                {'error': 'Ya existe un cronómetro en curso para este registro de producción'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        if cronometro:
+            if cronometro.estado == 'FINALIZADO':
+                mensaje = ('Esta producción ya fue cronometrada. Si necesita corregir el '
+                           'tiempo, contacte al administrador del sistema.')
+            else:
+                mensaje = 'Ya existe un cronómetro abierto para este registro de producción.'
+            return Response({'error': mensaje}, status=status.HTTP_400_BAD_REQUEST)
         
         # Creación del cronometro
         cronometro = RegistroTiempoProduccion.objects.create(
