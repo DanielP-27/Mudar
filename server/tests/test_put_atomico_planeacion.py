@@ -22,9 +22,11 @@ from server.models import (
     Dom,
     PerfilUsuario,
     ProductoPlaneacion,
+    ProductoProduccion,
     Productos,
     ProductosDom,
     RegistroPlaneacion,
+    RegistroProduccion,
     RegistroTurnoDia,
     Turno,
 )
@@ -198,4 +200,66 @@ class SinCantidadesTests(BaseAtomico):
         self.assertEqual(respuesta.status_code, status.HTTP_200_OK, respuesta.data)
         self.planeacion.refresh_from_db()
         self.assertEqual(self.planeacion.lider_produccion, 'Ana')
+        self.assertEqual(ProductoPlaneacion.objects.count(), 0)
+
+
+class VariosRechazosEnUnaSolaRespuestaTests(BaseAtomico):
+    """El envío es un lote, así que la respuesta también tiene que serlo.
+
+    El bucle cortaba en la primera línea inválida: con tres productos mal, el planeador
+    corregía uno, guardaba, y descubría el siguiente — una vuelta de guardado por cada
+    error que ya estaba ahí desde el primer intento.
+
+    El frontend ya sabía pintar varias líneas: extraerMensajeError une lo que encuentre en
+    `detalle` y ModalBase lo lista una por una. Lo que faltaba era que el backend las
+    mandara, y de ahí que la lista viaje en `detalle` y no solo en `error`.
+    """
+
+    def test_dos_lineas_invalidas_vuelven_en_la_misma_respuesta(self):
+        """Y por reglas distintas: una se pasa de lo pedido, la otra proyecta menos de lo
+        ya elaborado. Que acumule entre reglas diferentes es lo que se fija aquí."""
+        self.guardar(productos_planeacion=[
+            {'dom_producto': self.producto_a.id, 'cantidad_proyectada': 10},
+            {'dom_producto': self.producto_b.id, 'cantidad_proyectada': 10},
+        ])
+        pp_b = ProductoPlaneacion.objects.get(dom_producto=self.producto_b)
+        jornada = RegistroProduccion.objects.create(
+            registro_planeacion=self.planeacion, numero_registro=1,
+            numero_personas_asignadas=3,
+        )
+        ProductoProduccion.objects.create(
+            registro_produccion=jornada, producto_planeacion=pp_b,
+            cantidad_elaborada=8, registrado_por=self.admin,
+        )
+
+        respuesta = self.guardar(productos_planeacion=[
+            {'dom_producto': self.producto_a.id, 'cantidad_proyectada': 25},
+            {'dom_producto': self.producto_b.id, 'cantidad_proyectada': 5},
+        ])
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST, respuesta.data)
+        lineas = respuesta.data['detalle']['non_field_errors']
+        self.assertEqual(len(lineas), 2, respuesta.data)
+        self.assertIn('supera la cantidad pedida', lineas[0])
+        self.assertIn('Tanque A', lineas[0])
+        self.assertIn('menos de lo ya elaborado', lineas[1])
+        self.assertIn('Tanque B', lineas[1])
+
+        pp_a = ProductoPlaneacion.objects.get(dom_producto=self.producto_a)
+        pp_b.refresh_from_db()
+        self.assertEqual(pp_a.cantidad_proyectada, 10, 'El rechazo escribió la primera línea.')
+        self.assertEqual(pp_b.cantidad_proyectada, 10, 'El rechazo escribió la segunda línea.')
+
+    def test_una_sola_linea_invalida_tambien_usa_la_forma_nueva(self):
+        """Cambio de contrato deliberado: con un solo rechazo el cuerpo ya no trae las
+        cifras de esa línea —cantidad_pedida, disponible—. Ningún cliente las lee, y con
+        varias líneas no habría un solo valor que reportar."""
+        respuesta = self.guardar(productos_planeacion=[
+            {'dom_producto': self.producto_a.id, 'cantidad_proyectada': 25},
+        ])
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST, respuesta.data)
+        self.assertEqual(len(respuesta.data['detalle']['non_field_errors']), 1)
+        self.assertIn('supera la cantidad pedida', respuesta.data['error'])
+        self.assertNotIn('cantidad_pedida', respuesta.data)
         self.assertEqual(ProductoPlaneacion.objects.count(), 0)

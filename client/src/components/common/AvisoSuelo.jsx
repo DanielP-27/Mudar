@@ -24,7 +24,7 @@ function AvisoSuelo({ valor, minimo }) {
   if (Number.isNaN(numero) || numero >= minimo) return null
 
   return (
-    <p className="text-xs text-amber-600 mt-1">
+    <p className="text-sm font-semibold text-amber-600 mt-1">
       {minimo === 1 ? 'Debe ser mayor a 0' : 'No puede ser negativo'}
     </p>
   )

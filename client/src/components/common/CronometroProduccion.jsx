@@ -122,7 +122,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
           <div>
             <p className="text-sm text-gray-500">Sin registro de tiempo iniciado.</p>
             {puedeOperar && !personasAsignadas && (
-              <p className="text-xs text-amber-600 mt-1">
+              <p className="text-sm font-semibold text-amber-600 mt-1">
                 Ingrese el número de personas asignadas antes de iniciar el cronómetro.
               </p>
             )}

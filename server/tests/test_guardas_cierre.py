@@ -25,6 +25,7 @@ from server.models import (
     Dom,
     PerfilUsuario,
     ProductoPlaneacion,
+    ProductoProduccion,
     Productos,
     ProductosDom,
     RegistroAlmacen,
@@ -66,7 +67,7 @@ class BaseCierre(APITestCase):
         self.planeacion = RegistroPlaneacion.objects.create(
             dom=self.dom, numero_registro=1, turno=self.turno, fecha_planeacion=FECHA,
         )
-        ProductoPlaneacion.objects.create(
+        self.producto_planeacion = ProductoPlaneacion.objects.create(
             registro_planeacion=self.planeacion,
             dom_producto=self.producto_dom,
             cantidad_proyectada=10,
@@ -93,6 +94,14 @@ class BaseCierre(APITestCase):
             estado='FINALIZADO', minutos_totales=23,
         )
 
+    def cantidad_elaborada(self, cantidad=10):
+        return ProductoProduccion.objects.create(
+            registro_produccion=self.produccion,
+            producto_planeacion=self.producto_planeacion,
+            cantidad_elaborada=cantidad,
+            registrado_por=self.usuario,
+        )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NIVEL 1 — la regla
@@ -115,7 +124,10 @@ class ReglaCierreTests(BaseCierre):
         self.assertIsNotNone(error)
 
     def test_etapa_4_sin_veredicto_no_cierra(self):
+        # Los otros dos requisitos se cumplen a propósito: así lo único que puede
+        # rechazar es el veredicto, que es lo que esta prueba vigila.
         self.cronometro_finalizado()
+        self.cantidad_elaborada()
         self.produccion.numero_personas_asignadas = 3
         error = validar_cierre(self.produccion, {'cierre_produccion': True}, 'etapa_4')
         self.assertIsNotNone(error)
@@ -143,6 +155,7 @@ class ReglaCierreTests(BaseCierre):
 
     def test_etapa_4_con_veredicto_falso_si_cierra(self):
         self.cronometro_finalizado()
+        self.cantidad_elaborada()
         error = validar_cierre(
             self.produccion,
             {'cierre_produccion': True, 'segun_planeacion': False,
@@ -168,17 +181,7 @@ class ReglaCierreTests(BaseCierre):
         )
         self.assertIsNone(error, error)
 
-    # ── Cero es un dato; la cadena vacía es una ausencia ────────────────────
-
-    def test_cero_personas_es_un_dato_valido(self):
-        self.cronometro_finalizado()
-        error = validar_cierre(
-            self.produccion,
-            {'cierre_produccion': True, 'segun_planeacion': True,
-             'numero_personas_asignadas': 0},
-            'etapa_4',
-        )
-        self.assertIsNone(error, error)
+    # ── La cadena vacía es una ausencia ─────────────────────────────────────
 
     def test_la_fecha_borrada_en_el_navegador_es_ausencia(self):
         """Un campo de fecha que el usuario vacía envía cadena vacía, no nulo."""
@@ -307,6 +310,7 @@ class ReglaCierreTests(BaseCierre):
         RegistroTiempoProduccion.objects.create(
             registro_produccion=self.produccion, inicio=timezone.now(), estado='EN_CURSO',
         )
+        self.cantidad_elaborada()
         error = validar_cierre(
             self.produccion,
             {'cierre_produccion': True, 'segun_planeacion': True,
@@ -314,6 +318,54 @@ class ReglaCierreTests(BaseCierre):
             'etapa_4',
         )
         self.assertIsNotNone(error)
+
+    # ── Una producción cerrada tiene que haber producido algo ───────────────
+
+    def test_etapa_4_sin_ninguna_cantidad_no_cierra(self):
+        """Cerrado y sin una sola línea, el registro no dice qué salió. Y solo un ADMIN
+        puede reabrirlo, así que el descuido no lo arregla quien lo comete."""
+        self.cronometro_finalizado()
+
+        error = validar_cierre(
+            self.produccion,
+            {'cierre_produccion': True, 'segun_planeacion': True,
+             'numero_personas_asignadas': 3},
+            'etapa_4',
+        )
+
+        self.assertIsNotNone(error)
+        self.assertIn('cantidad', error)
+
+    def test_etapa_4_con_todas_las_cantidades_en_cero_no_cierra(self):
+        """El umbral es mayor que cero y no «hay fila»: un cero explícito en todos los
+        productos es una jornada que no produjo nada."""
+        self.cronometro_finalizado()
+        self.cantidad_elaborada(cantidad=0)
+
+        error = validar_cierre(
+            self.produccion,
+            {'cierre_produccion': True, 'segun_planeacion': True,
+             'numero_personas_asignadas': 3},
+            'etapa_4',
+        )
+
+        self.assertIsNotNone(error)
+        self.assertIn('cantidad', error)
+
+    def test_etapa_4_basta_una_cantidad_positiva_para_cerrar(self):
+        """Es «al menos uno», no «todos»: un registro de producción puede cubrir parte de
+        lo planeado, y lo que falte se registra en otra jornada."""
+        self.cronometro_finalizado()
+        self.cantidad_elaborada(cantidad=4)
+
+        error = validar_cierre(
+            self.produccion,
+            {'cierre_produccion': True, 'segun_planeacion': True,
+             'numero_personas_asignadas': 3},
+            'etapa_4',
+        )
+
+        self.assertIsNone(error, error)
 
     def test_el_mensaje_enumera_todo_lo_que_falta(self):
         """Con varios faltantes el usuario debe verlos de una vez, no de uno en uno."""
@@ -351,6 +403,7 @@ class CableadoCierreTests(BaseCierre):
 
     def test_produccion_rechaza_el_cierre_sin_veredicto(self):
         self.cronometro_finalizado()
+        self.cantidad_elaborada()
         self.produccion.numero_personas_asignadas = 3
         self.produccion.save()
         respuesta = self.client.put(

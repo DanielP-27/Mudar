@@ -268,3 +268,101 @@ class ElaboradaNoSuperaLaProyectadaTests(BaseTopes):
 
         self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED, respuesta.data)
         self.assertEqual(self.pp.cantidad_elaborada, 20)
+
+
+class LineaDeProduccionPerteneceASuPlaneacionTests(BaseTopes):
+    """El eslabón que ninguna clave foránea garantiza: que el producto planeado que se
+    produce cuelgue de la MISMA planeación que el registro de producción.
+
+    ProductoProduccion apunta a dos ramas distintas —registro_produccion y
+    producto_planeacion— y cada FK asegura que su destino existe; ninguna asegura que las
+    dos lleguen al mismo sitio. Sin esta comprobación, una llamada por API podía sumar
+    producción a la planeación ajena y subirle el suelo con unidades que no se hicieron ahí.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Las 20 pedidas repartidas entre las dos planeaciones del DOM.
+        self.pp = ProductoPlaneacion.objects.create(
+            registro_planeacion=self.planeacion,
+            dom_producto=self.producto_dom,
+            cantidad_proyectada=12,
+        )
+        self.pp_ajeno = ProductoPlaneacion.objects.create(
+            registro_planeacion=self.otra_planeacion,
+            dom_producto=self.producto_dom,
+            cantidad_proyectada=8,
+        )
+        self.jornada = RegistroProduccion.objects.create(
+            registro_planeacion=self.planeacion, numero_registro=1,
+            numero_personas_asignadas=3,
+        )
+
+    def elaborar(self, producto_planeacion_id, cantidad):
+        return self.client.post(URL_PRODUCCION, {
+            'registro_produccion': self.jornada.id,
+            'producto_planeacion': producto_planeacion_id,
+            'cantidad_elaborada': cantidad,
+        }, format='json')
+
+    def test_producto_planeado_de_otra_planeacion_se_rechaza(self):
+        """El hueco. Las 5 unidades caben de sobra en las 8 proyectadas del pp ajeno, así
+        que sin la comprobación de pertenencia esta llamada se aceptaría."""
+        respuesta = self.elaborar(self.pp_ajeno.id, 5)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST, respuesta.data)
+        self.assertIn('no pertenece a la planeación', respuesta.data['error'])
+        self.assertEqual(ProductoProduccion.objects.count(), 0)
+
+    def test_producto_planeado_inexistente_se_rechaza(self):
+        """No existir y no pertenecer son el mismo error para quien llama: el producto
+        que mandó no vale para este registro."""
+        respuesta = self.elaborar(999999, 5)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST, respuesta.data)
+        self.assertIn('no pertenece a la planeación', respuesta.data['error'])
+        self.assertEqual(ProductoProduccion.objects.count(), 0)
+
+    def test_el_rechazo_nombra_el_producto(self):
+        """Con varios productos en juego, un mensaje sin nombre no dice cuál corregir."""
+        respuesta = self.elaborar(self.pp.id, 13)
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST, respuesta.data)
+        self.assertIn('supera la cantidad proyectada', respuesta.data['error'])
+        self.assertIn('Tanque A', respuesta.data['error'])
+
+    def test_editar_una_fila_no_la_cuenta_contra_si_misma(self):
+        """9 de 12 elaboradas; subirla a 12 debe aceptarse. Si el acumulado incluyera su
+        propio valor viejo daría 9 + 12 = 21 y rechazaría una edición legítima."""
+        fila = ProductoProduccion.objects.create(
+            registro_produccion=self.jornada,
+            producto_planeacion=self.pp,
+            cantidad_elaborada=9,
+            registrado_por=self.admin,
+        )
+
+        respuesta = self.client.put(
+            f'{URL_PRODUCCION}{fila.id}/', {'cantidad_elaborada': 12}, format='json',
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_200_OK, respuesta.data)
+        fila.refresh_from_db()
+        self.assertEqual(fila.cantidad_elaborada, 12)
+
+    def test_editar_por_encima_de_lo_proyectado_se_rechaza(self):
+        """El borde por el otro lado: 13 sobre 12 proyectadas no cabe ni siendo edición."""
+        fila = ProductoProduccion.objects.create(
+            registro_produccion=self.jornada,
+            producto_planeacion=self.pp,
+            cantidad_elaborada=9,
+            registrado_por=self.admin,
+        )
+
+        respuesta = self.client.put(
+            f'{URL_PRODUCCION}{fila.id}/', {'cantidad_elaborada': 13}, format='json',
+        )
+
+        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST, respuesta.data)
+        self.assertIn('supera la cantidad proyectada', respuesta.data['error'])
+        fila.refresh_from_db()
+        self.assertEqual(fila.cantidad_elaborada, 9)

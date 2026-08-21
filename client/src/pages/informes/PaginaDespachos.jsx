@@ -1,7 +1,7 @@
 // Se genera placeholder para que la app compile
 // TODO: generar componente especifico
 
-function PaginaDespachos(params) {
+function PaginaDespachos() {
     return <div>PaginaDespachos</div>
 }
 

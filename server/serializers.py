@@ -86,13 +86,6 @@ class ProductosSerializer(serializers.ModelSerializer):
         model = Productos
         fields = ['producto_id', 'nombre_producto', 'familia_producto', 'familia_detalle', 'tiempo_produccion_unitario', 'activo']
 
-    def validate_tiempo_produccion_unitario(self, value):
-        if value <= 0:
-            raise serializers.ValidationError(
-                'El tiempo de producción unitario debe ser mayor a 0'
-            )
-        return value
-
 # Serializer Turno
 # Uso: dropdown de turnos de la etapa 2. El catálogo solo aporta identidad; la
 # duración de la jornada vive en RegistroTurnoDia, que es de donde sale la capacidad.
@@ -114,7 +107,7 @@ class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
         # turno y fecha identifican una jornada: mover registros afecta las jornadas de
         # trabajo. Operarios y duración son editables según necesidades de la planeación.
         read_only_fields = ['registrado_por', 'fecha_creacion', 'turno', 'fecha']
-        # minutos_totales lo valida DRF de forma nativa contra el choices del modelo, que suma las jornadas vigentes y las históricas — fuente única de verdad. Ambas viven en la clase RegistroTurnoDia de models.py: las vigentes en OPCIONES_MINUTOS y las de legislaciones anteriores en OPCIONES_MINUTOS_HISTORICAS. El campo es una fotografía: debe poder conservar lo que fue legal cuando se registró. Aquí sólo personalizamos el mensaje.
+        # minutos_totales lo valida DRF de forma nativa contra el choices del modelo, jornadas vigentes OPCIONES_MINUTOS y las históricas — fuente única de verdad. Ambas viven en la clase RegistroTurnoDia de models.py: las vigentes en OPCIONES_MINUTOS y las de legislaciones anteriores en OPCIONES_MINUTOS_HISTORICAS. Todo dentro de models
         extra_kwargs = {
             'minutos_totales': {
                 'error_messages': {
@@ -122,13 +115,6 @@ class RegistroTurnoDiaSerializer(serializers.ModelSerializer):
                 }
             }
         }
-
-    def validate_numero_operarios(self, value):
-        if value <= 0:
-            raise serializers.ValidationError(
-                'El número de operarios debe ser mayor a 0'
-            )
-        return value
 
 # Serializer Listas Predefinidas
 # Uso: dropdowns de las listas predefinidas, solo se manejan campos necesarios para poblar las vistas de Front

@@ -16,8 +16,6 @@ import {
   actualizarAlmacen, crearAlmacen,
   actualizarProduccion, crearProduccion,
   actualizarTratamiento, crearTratamiento,
-  crearProductoPlaneacion, actualizarProductoPlaneacion,
-  crearProductoProduccion, actualizarProductoProduccion, eliminarProductoProduccion,
   consultarPreviewTurnoDia, actualizarTurnoDia,
   desbloquearEtapa,
 } from '../../api/doms'
@@ -449,183 +447,6 @@ function PaginaEditarDom() {
     tratamiento: { campo: 'tratamiento_completado', nombre: 'Tratamiento completado',    tipoRegistro: 'Tratamiento' },
   }
 
-  // Crea un ProductoProduccion (cantidad elaborada por producto)
-  const crearProductoElaborada = async (ppId, localKey) => {
-    const valor = elaboradaLocal[localKey]
-    if (!produccionActual || !valor) return
-    setGuardando(true)
-    setError(null)
-    try {
-      await crearProductoProduccion({
-        registro_produccion: produccionActual.id,
-        producto_planeacion: ppId,
-        cantidad_elaborada: toInt(valor),
-      })
-      const res = await obtenerPlaneacion({ dom_id: domId })
-      setPlaneaciones(res.data.registros ?? [])
-      setElaboradaLocal(prev => { const n = { ...prev }; delete n[localKey]; return n })
-      mostrarExito('Cantidad elaborada registrada.')
-    } catch (err) {
-      setError(err.response?.data?.error ?? 'Error al registrar la cantidad elaborada.')
-    } finally {
-      setGuardando(false)
-    }
-  }
-
-  // Actualiza ProductoProduccion existente
-  const actualizarProductoElaborada = async (productoProduccionId, localKey) => {
-    const valor = elaboradaLocal[localKey]
-    if (!productoProduccionId || valor === undefined) return
-    setGuardando(true)
-    setError(null)
-    try {
-      await actualizarProductoProduccion(productoProduccionId, {
-        cantidad_elaborada: toInt(valor),
-      })
-      const res = await obtenerPlaneacion({ dom_id: domId })
-      setPlaneaciones(res.data.registros ?? [])
-      setElaboradaLocal(prev => { const n = { ...prev }; delete n[localKey]; return n })
-      mostrarExito('Cantidad elaborada actualizada.')
-    } catch (err) {
-      setError(extraerMensajeError(err, 'Error al actualizar la cantidad elaborada.'))
-    } finally {
-      setGuardando(false)
-    }
-  }
-
-  // Valida LOCALMENTE que asignar `cantidadNueva` al producto `domProductoId` no haga que
-  // el tiempo proyectado de la planeación supere la capacidad del turno. Feedback inmediato,
-  // sin round-trip. Devuelve un mensaje de error si excede, o null si está OK.
-  const validarCapacidadLocal = (domProductoId, cantidadNueva) => {
-    // 1er registro: no hay otras planeaciones → capacidad total.
-    // 2º+ registro (turno-día existente): lo disponible para ESTA planeación es
-    // el restante = capacidad total − lo asignado por las otras planeaciones.
-    const capacidad = turnoDiaExistente
-      ? (turnoDiaExistente.numero_operarios * turnoDiaExistente.minutos_totales) - asignadoOtras
-      : capacidadCalculo
-    if (!capacidad) return null   // sin capacidad conocida aquí → la valida el backend
-
-    // Catálogo VIGENTE. Solo aplica a filas que todavía no existen: al crearlas, el
-    // backend fotografiará este mismo número. No sustituir por el efectivo del DOM.
-    const unitarioDe = (id) =>
-      datosDom.productos?.find(p => p.id === id)?.tipo_producto_detalle?.tiempo_produccion_unitario ?? 0
-
-    // Estándar con el que debe calcularse ese producto: el de su fila de planeación si
-    // ya existe (fotografía), el del catálogo si se está creando ahora. Reproduce lo que
-    // hace el backend, para que esta validación no rechace guardados que él aceptaría.
-    const unitarioAplicableDe = (id) => {
-      const pp = (planActual?.productos_planeacion ?? []).find(x => x.dom_producto === id)
-      return pp?.tiempo_unitario_efectivo ?? unitarioDe(id)
-    }
-
-    // Tiempo de los OTROS productos ya proyectados en esta planeación (excluye el que se edita)
-    const tiempoOtros = (planActual?.productos_planeacion ?? [])
-      .filter(pp => pp.dom_producto !== domProductoId)
-      .reduce((acc, pp) => acc + (pp.cantidad_proyectada ?? 0) * unitarioAplicableDe(pp.dom_producto), 0)
-
-    const requerido = tiempoOtros + cantidadNueva * unitarioAplicableDe(domProductoId)
-
-    if (requerido > capacidad) {
-      return `No hay capacidad suficiente en el turno. Disponible: ${capacidad} min, Requerido: ${requerido} min.`
-    }
-    return null
-  }
-
-  // Crea un nuevo ProductoPlaneacion (POST) para un producto del DOM
-  const agregarProductoPlaneacion = async (productoDomId, localKey) => {
-    const cantidad = proyectadaLocal[localKey]
-    if (!planActual) return
-    if (cantidad === undefined || cantidad === '') {
-      setError('Debe ingresar una cantidad planeada antes de continuar.')
-      return
-    }
-    const errorCapacidad = validarCapacidadLocal(productoDomId, toInt(cantidad))
-    if (errorCapacidad) { setError(errorCapacidad); return }
-    setGuardando(true)
-    setError(null)
-    try {
-      await crearProductoPlaneacion({
-        registro_planeacion: planActual.id,
-        dom_producto: productoDomId,
-        cantidad_proyectada: toInt(cantidad),
-      })
-      const res = await obtenerPlaneacion({ dom_id: domId })
-      const nuevosRegistros = res.data.registros ?? []
-      setPlaneaciones(prev => prev.map((p, i) =>
-        i === idxPlaneacion
-          ? {
-              ...p,
-              productos_planeacion: nuevosRegistros[idxPlaneacion]?.productos_planeacion ?? p.productos_planeacion,
-              tiempo_proyectado:    nuevosRegistros[idxPlaneacion]?.tiempo_proyectado    ?? p.tiempo_proyectado,
-              tiempo_restante_dia:  nuevosRegistros[idxPlaneacion]?.tiempo_restante_dia  ?? p.tiempo_restante_dia,
-              sumatoria_tiempo_asignado_turnos: nuevosRegistros[idxPlaneacion]?.sumatoria_tiempo_asignado_turnos ?? p.sumatoria_tiempo_asignado_turnos,
-            }
-          : p
-      ))
-      setProyectadaLocal(prev => { const n = { ...prev }; delete n[localKey]; return n })
-      mostrarExito('Producto agregado a la planeación.')
-    } catch (err) {
-      setError(extraerMensajeError(err, 'Error al agregar el producto.'))
-    } finally {
-      setGuardando(false)
-    }
-  }
-
-  // Guarda cantidad_proyectada de un ProductoPlaneacion
-  const guardarCantidadProyectada = async (productoPlaneacion) => {
-    const valor = proyectadaLocal[productoPlaneacion.id]
-    if (valor === undefined || valor === '') {
-      setError('Debe ingresar una cantidad planeada antes de continuar.')
-      return
-    }
-    const errorCapacidad = validarCapacidadLocal(productoPlaneacion.dom_producto, toInt(valor))
-    if (errorCapacidad) { setError(errorCapacidad); return }
-    setGuardando(true)
-    setError(null)
-    try {
-      await actualizarProductoPlaneacion(productoPlaneacion.id, { cantidad_proyectada: toInt(valor) })
-      const res = await obtenerPlaneacion({ dom_id: domId })
-      const nuevosRegistros = res.data.registros ?? []
-      setPlaneaciones(prev => prev.map((p, i) =>
-        i === idxPlaneacion
-          ? {
-              ...p,
-              productos_planeacion: nuevosRegistros[idxPlaneacion]?.productos_planeacion ?? p.productos_planeacion,
-              tiempo_proyectado:    nuevosRegistros[idxPlaneacion]?.tiempo_proyectado    ?? p.tiempo_proyectado,
-              tiempo_restante_dia:  nuevosRegistros[idxPlaneacion]?.tiempo_restante_dia  ?? p.tiempo_restante_dia,
-              sumatoria_tiempo_asignado_turnos: nuevosRegistros[idxPlaneacion]?.sumatoria_tiempo_asignado_turnos ?? p.sumatoria_tiempo_asignado_turnos,
-            }
-          : p
-      ))
-      setProyectadaLocal(prev => { const n = { ...prev }; delete n[productoPlaneacion.id]; return n })
-      mostrarExito('Cantidad planeada actualizada.')
-    } catch (err) {
-      setError(extraerMensajeError(err, 'Error al guardar la cantidad planeada.'))
-    } finally {
-      setGuardando(false)
-    }
-  }
-
-  // Guarda cantidad_elaborada del último registro de producción activo de un producto
-  const guardarCantidadElaborada = async (productoDomId) => {
-    const registro = ultimoRegistroActivo(productoDomId)
-    const valor = elaboradaLocal[productoDomId]
-    if (!registro || valor === undefined) return
-    setGuardando(true)
-    setError(null)
-    try {
-      await actualizarProduccion(registro.id, { ...registro, cantidad_elaborada: toInt(valor) })
-      const res = await obtenerPlaneacion({ dom_id: domId })
-      setPlaneaciones(res.data.registros ?? [])
-      setElaboradaLocal(prev => { const n = { ...prev }; delete n[productoDomId]; return n })
-      mostrarExito('Cantidad elaborada actualizada.')
-    } catch {
-      setError('Error al guardar la cantidad elaborada.')
-    } finally {
-      setGuardando(false)
-    }
-  }
-
   // Guarda etapas 0, 1 y 7 — todas usan PUT /api/doms/<id>/
   const guardarDom = async (mensaje, etapa) => {
     // Confirmación de bloqueo — solo si esta acción es la que activa el bloqueo
@@ -737,13 +558,28 @@ function PaginaEditarDom() {
       if (!await confirmarBloqueo(mensajeConfirmacionBloqueo('Planeación completa', 'Planeación'))) return
     }
 
+    // Cantidades a enviar: solo las que el usuario tocó. Casilla vacía es «no enviar»
+    // —la fila conserva su valor—, así que no viaja y el backend no la toca.
+    // Se manda dom_producto y no el id de la fila: el upsert del backend se lleva por
+    // producto, así que crear y actualizar dejan de ser dos casos.
+    const cantidades = (datosDom.productos ?? []).reduce((acc, prod) => {
+      const pp  = plan.productos_planeacion?.find(p => p.dom_producto === prod.id)
+      const buf = proyectadaLocal[pp ? pp.id : `new_${prod.id}`]
+      if (buf === undefined || buf === '') return acc
+      acc.push({ dom_producto: prod.id, cantidad_proyectada: toInt(buf) })
+      return acc
+    }, [])
+
     setGuardando(true)
     setError(null)
     try {
-      // 1) PUT del RegistroPlaneacion — crea/liga el turno-día. Va PRIMERO para que el
-      //    turno-día exista antes de mandar las cantidades (resuelve la dependencia de orden).
+      // Una sola petición y una sola transacción: turno-día, planeación, cantidades y
+      // candado. O se escribe todo, o no se escribe nada.
       await actualizarPlaneacion(plan.id, {
         ...plan,
+        // Después del esparcido a propósito: plan trae del GET la lista persistida, que
+        // el backend leería como cantidades entrantes. Aquí manda lo que el usuario tocó.
+        productos_planeacion: cantidades,
         orden_produccion:  toInt(plan.orden_produccion),
         orden_tratamiento: toInt(plan.orden_tratamiento),
         peso: plan.peso ?? false,
@@ -753,26 +589,7 @@ function PaginaEditarDom() {
         }),
       })
 
-      // 2) Flush del buffer de cantidades proyectadas: por cada producto con cantidad en
-      //    el buffer, PUT si ya existe su ProductoPlaneacion, o POST si es nuevo. Secuencial
-      //    (se detiene en el primer error). Vacío / sin cambio → no se toca.
-      for (const prod of (datosDom.productos ?? [])) {
-        const pp  = plan.productos_planeacion?.find(p => p.dom_producto === prod.id)
-        const key = pp ? pp.id : `new_${prod.id}`
-        const buf = proyectadaLocal[key]
-        if (buf === undefined || buf === '') continue
-        if (pp) {
-          await actualizarProductoPlaneacion(pp.id, { cantidad_proyectada: toInt(buf) })
-        } else {
-          await crearProductoPlaneacion({
-            registro_planeacion: plan.id,
-            dom_producto: prod.id,
-            cantidad_proyectada: toInt(buf),
-          })
-        }
-      }
-
-      // 3) Un solo refresh desde el servidor + limpiar buffer + refrescar disponibilidad de turno.
+      // Un solo refresh desde el servidor + limpiar buffer + refrescar disponibilidad de turno.
       const res = await obtenerPlaneacion({ dom_id: domId })
       const nuevosRegistros = res.data.registros ?? []
       setPlaneaciones(nuevosRegistros)
@@ -782,15 +599,9 @@ function PaginaEditarDom() {
 
       mostrarExito('Planeación y cantidades guardadas correctamente.')
     } catch (err) {
-      // Fallo parcial: refrescar para reflejar el estado REAL de la BD (algunas cantidades
-      // pudieron guardarse antes del error) y mostrar el modal de error.
-      try {
-        const res = await obtenerPlaneacion({ dom_id: domId })
-        const nuevosRegistros = res.data.registros ?? []
-        setPlaneaciones(nuevosRegistros)
-        setPlaneacionesOriginal(nuevosRegistros)
-      } catch { /* si el refresh también falla, se conserva el estado actual */ }
-      setError(extraerMensajeError(err, 'Error al guardar. Revise qué cantidades quedaron registradas.'))
+      // Nada que reconciliar: la transacción revierte entera, así que el formulario ya
+      // refleja la verdad y conserva lo tecleado para corregir y reintentar.
+      setError(extraerMensajeError(err, 'No se guardó ningún cambio. Corrija lo indicado e intente de nuevo.'))
     } finally {
       setGuardando(false)
     }
@@ -894,10 +705,7 @@ function PaginaEditarDom() {
     }
   }
 
-  // Guarda etapa 5 — producción: registro + cantidades elaboradas en un solo botón.
-  // Orquesta (no atómico en BD): PUT del RegistroProduccion → flush del buffer de cantidades
-  // elaboradas (POST/PUT ProductoProduccion) → un refresh. La restricción del cronómetro se
-  // respeta sola: si no finalizó, los inputs están deshabilitados y el buffer queda vacío.
+  // Guarda etapa 5 — producción: registro, cantidades y candado en un solo PUT atómico.
   // Dedicada (no toca guardarHijo, que comparten almacén/tratamiento).
   const guardarProduccionCompleta = async () => {
     const registro = produccionesActuales[idxProduccion]
@@ -909,35 +717,32 @@ function PaginaEditarDom() {
       if (!await confirmarBloqueo(mensajeConfirmacionBloqueo('Cierre producción', 'Producción'))) return
     }
 
+    // Solo las cantidades que el usuario tocó: casilla vacía es «no enviar».
+    // Sin fila de planeación no hay a qué colgar lo elaborado, así que se salta.
+    const cantidades = (datosDom.productos ?? []).reduce((acc, prod) => {
+      const pp = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
+      if (!pp) return acc
+      const buf = elaboradaLocal[pp.id]
+      if (buf === undefined || buf === '') return acc
+      acc.push({ producto_planeacion: pp.id, cantidad_elaborada: toInt(buf) })
+      return acc
+    }, [])
+
+    // Su único escritor es el modal. Se desestructura y no se borra la línea:
+    // el esparcido lo seguiría arrastrando.
+    const { numero_personas_asignadas: _personas, ...registroSinPersonas } = registro
+
     setGuardando(true)
     setError(null)
     try {
-      // 1) PUT del RegistroProduccion (novedad, personas, según planeación, cierre…)
+      // Una sola petición y una sola transacción: registro, cantidades y candado.
       await actualizarProduccion(registro.id, {
-        ...registro,
-        numero_personas_asignadas: toInt(registro.numero_personas_asignadas),
+        ...registroSinPersonas,
+        // Después del esparcido: registro trae del GET la lista persistida, que lo pisaría.
+        productos_produccion: cantidades,
       })
 
-      // 2) Flush del buffer de cantidades elaboradas. Solo productos con proyección (pp):
-      //    PUT si ya existe su ProductoProduccion, o POST si es nuevo. Vacío / sin cambio → no se toca.
-      for (const prod of (datosDom.productos ?? [])) {
-        const pp = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
-        if (!pp) continue
-        const buf = elaboradaLocal[pp.id]
-        if (buf === undefined || buf === '') continue
-        const existente = productoProduccionActivo(pp.id)
-        if (existente) {
-          await actualizarProductoProduccion(existente.id, { cantidad_elaborada: toInt(buf) })
-        } else {
-          await crearProductoProduccion({
-            registro_produccion: registro.id,
-            producto_planeacion: pp.id,
-            cantidad_elaborada: toInt(buf),
-          })
-        }
-      }
-
-      // 3) Un solo refresh desde el servidor + limpiar buffer + toast
+      // Un solo refresh desde el servidor + limpiar buffer + toast
       const res = await obtenerPlaneacion({ dom_id: domId })
       const nuevosRegistros = res.data.registros ?? []
       setPlaneaciones(nuevosRegistros)
@@ -945,14 +750,8 @@ function PaginaEditarDom() {
       setElaboradaLocal({})
       mostrarExito('Producción y cantidades guardadas correctamente.')
     } catch (err) {
-      // Fallo parcial: refrescar para reflejar el estado REAL de la BD y mostrar el modal.
-      try {
-        const res = await obtenerPlaneacion({ dom_id: domId })
-        const nuevosRegistros = res.data.registros ?? []
-        setPlaneaciones(nuevosRegistros)
-        setPlaneacionesOriginal(nuevosRegistros)
-      } catch { /* si el refresh también falla, se conserva el estado actual */ }
-      setError(extraerMensajeError(err, 'Error al guardar. Revise qué cantidades quedaron registradas.'))
+      // La transacción revierte entera: el formulario ya es la verdad y conserva lo tecleado.
+      setError(extraerMensajeError(err, 'No se guardó ningún cambio. Corrija lo indicado e intente de nuevo.'))
     } finally {
       setGuardando(false)
     }
@@ -965,7 +764,7 @@ function PaginaEditarDom() {
     setGuardando(true)
     setError(null)
     try {
-      const res = await crearFn({ registro_planeacion: plan.id })
+      await crearFn({ registro_planeacion: plan.id })
       // Recargar planeaciones para reflejar el nuevo registro
       const resPlaneacion = await obtenerPlaneacion({ dom_id: domId })
       const nuevasPlaneaciones = resPlaneacion.data.registros ?? []
@@ -1007,6 +806,17 @@ function PaginaEditarDom() {
     ? capacidadTurnoActual - asignadoOtras - (planActual?.tiempo_proyectado ?? 0)
     : tiempoRestantePreview
 
+  // ¿Alguna línea queda con cantidad mayor que cero? Es el único requisito de cierre de
+  // la etapa 2 que no se lee de un campo. Fusiona buffer y persistido igual que el
+  // pre-chequeo de capacidad, y se calcula aquí —y no en el JSX— para que la condición
+  // que decide si el aviso se ve sea la misma regla que aplica el backend al cerrar.
+  const hayCantidadPlaneada = (datosDom?.productos ?? []).some(prod => {
+    const pp  = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
+    const buf = proyectadaLocal[pp ? pp.id : `new_${prod.id}`]
+    const cant = (buf !== undefined && buf !== '') ? toInt(buf) : (pp?.cantidad_proyectada ?? 0)
+    return cant > 0
+  })
+
   // Snapshot de los mismos datos, confirmado por el servidor — usado para el bloqueo de etapa
   const planActualOriginal           = planeacionesOriginal[idxPlaneacion]
   const almacenesActualesOriginal    = planActualOriginal?.registros_almacen    ?? []
@@ -1022,6 +832,20 @@ function PaginaEditarDom() {
   const ultimoTratamientoCerrado = tratamientosActualesOriginal.at(-1)?.tratamiento_completado === true
 
   const cronometroFinalizado = (produccionActual?.registro_tiempo ?? []).some(r => r.estado === 'FINALIZADO')
+
+  // El límite del backend: serializers.py rechaza el cambio en cuanto EXISTE cronómetro,
+  // en cualquier estado. No confundir con cronometroFinalizado.
+  const hayCronometro = (produccionActual?.registro_tiempo ?? []).length > 0
+
+  // Espejo de hayCantidadPlaneada: fusiona buffer y persistido, igual que el backend,
+  // que valida contra lo escrito dentro de la misma transacción.
+  const hayCantidadElaborada = (datosDom?.productos ?? []).some(prod => {
+    const pp = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
+    if (!pp) return false
+    const buf = elaboradaLocal[pp.id]
+    const cant = (buf !== undefined && buf !== '') ? toInt(buf) : (productoProduccionActivo(pp.id)?.cantidad_elaborada ?? 0)
+    return cant > 0
+  })
 
   // ── Pestañas ───────────────────────────────────────────────────────────────
   const pestanas = esDomAdministrativo ? [
@@ -1249,7 +1073,7 @@ function PaginaEditarDom() {
                 className="campo-input bg-gray-100 text-gray-700 cursor-not-allowed">
                 <option value={datosDom.tipo_estado_dom}>{datosDom.tipo_estado_dom}</option>
               </select>
-              <p className="text-xs text-amber-600 mt-1">
+              <p className="text-sm font-semibold text-amber-600 mt-1">
                 El tipo administrativo no puede cambiarse a productivo.
               </p>
             </CampoFormulario>
@@ -1445,7 +1269,7 @@ function PaginaEditarDom() {
                 <SelectSiNo name="dom_relacionado_produccion" soloLectura={!esEditable('etapa_1')} value={boolToStr(datosDom.dom_relacionado_produccion)}
                   onChange={v => actualizarCampoDom('dom_relacionado_produccion', strToBool(v))}
                   disabled={!esEditable('etapa_1') || datosDomOriginal?.dom_relacionado_produccion} />
-                <p className="text-xs text-amber-600 mt-1">
+                <p className="text-sm font-semibold text-amber-600 mt-1">
                   Importante: una vez marque Sí y guarde, esta etapa quedará bloqueada
                   y no podrá realizar modificaciones posteriores.
                 </p>
@@ -1497,7 +1321,7 @@ function PaginaEditarDom() {
                 <FiPlus size={14} /> Nueva planeación
               </button>
               {pedidoTotalmenteProyectado() && (
-                <p className="text-xs text-amber-600 mt-1">
+                <p className="text-sm font-semibold text-amber-600 mt-1">
                   La cantidad planeada ya cubre el total pedido; no es necesario crear más planeaciones.
                 </p>
               )}
@@ -1523,6 +1347,9 @@ function PaginaEditarDom() {
                     }}
                     disabled={!esEditable('etapa_2')}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
+                  {esEditable('etapa_2') && !planActual.fecha_planeacion && (
+                    <AvisoRequeridoCierre texto="Debe diligenciarse para dar por cerrada esta etapa." />
+                  )}
                 </CampoFormulario>
                 <CampoFormulario label="Turno">
                   <select value={planActual.turno ?? ''}
@@ -1538,7 +1365,10 @@ function PaginaEditarDom() {
                     ))}
                   </select>
                   {esEditable('etapa_2') && !planActual.fecha_planeacion && (
-                    <p className="text-xs text-amber-600 mt-1">Seleccione primero la fecha de planeación.</p>
+                    <p className="text-sm font-semibold text-amber-600 mt-1">Seleccione primero la fecha de planeación.</p>
+                  )}
+                  {esEditable('etapa_2') && !planActual.turno && (
+                    <AvisoRequeridoCierre texto="Debe diligenciarse para dar por cerrada esta etapa." />
                   )}
                 </CampoFormulario>
 
@@ -1553,7 +1383,10 @@ function PaginaEditarDom() {
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                   <AvisoSuelo valor={datosTurnoDia.numero_operarios} minimo={1} />
                   {esEditable('etapa_2') && (!planActual.fecha_planeacion || !planActual.turno) && (
-                    <p className="text-xs text-amber-600 mt-1">Disponible una vez seleccione la fecha de planeación y el turno.</p>
+                    <p className="text-sm font-semibold text-amber-600 mt-1">Disponible una vez seleccione la fecha de planeación y el turno.</p>
+                  )}
+                  {esEditable('etapa_2') && !turnoDiaExistente && !datosTurnoDia.numero_operarios && (
+                    <AvisoRequeridoCierre texto="Debe diligenciarse para dar por cerrada esta etapa." />
                   )}
                 </CampoFormulario>
                 <CampoFormulario label="Duración del turno">
@@ -1567,7 +1400,10 @@ function PaginaEditarDom() {
                     ))}
                   </select>
                   {esEditable('etapa_2') && (!planActual.fecha_planeacion || !planActual.turno) && (
-                    <p className="text-xs text-amber-600 mt-1">Disponible una vez seleccione la fecha de planeación y el turno.</p>
+                    <p className="text-sm font-semibold text-amber-600 mt-1">Disponible una vez seleccione la fecha de planeación y el turno.</p>
+                  )}
+                  {esEditable('etapa_2') && !turnoDiaExistente && !datosTurnoDia.minutos_totales && (
+                    <AvisoRequeridoCierre texto="Debe diligenciarse para dar por cerrada esta etapa." />
                   )}
                 </CampoFormulario>
                 <CampoLectura
@@ -1852,9 +1688,14 @@ function PaginaEditarDom() {
             {/* Secciones por producto — cantidad proyectada */}
             {planActual && datosDom.productos?.length > 0 && (
               <div className="mt-4 space-y-3">
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                  Cantidad planeada por producto
-                </p>
+                <div>
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                    Cantidad planeada por producto
+                  </p>
+                  {esEditable('etapa_2') && !hayCantidadPlaneada && (
+                    <AvisoRequeridoCierre texto="Al menos uno de los productos debe quedar con cantidad mayor que cero para dar por cerrada esta etapa." />
+                  )}
+                </div>
                 {datosDom.productos.map(prod => {
                   const pp = planActual.productos_planeacion?.find(p => p.dom_producto === prod.id)
                   const localKey = pp ? pp.id : `new_${prod.id}`
@@ -1881,11 +1722,6 @@ function PaginaEditarDom() {
                           min="0"
                           className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                         <AvisoSuelo valor={proyectadaLocal[localKey] ?? pp?.cantidad_proyectada} minimo={0} />
-                        {pp && (
-                          <p className="text-xs text-gray-400 mt-1">
-                            Planeado actual: {pp.cantidad_proyectada ?? '—'}
-                          </p>
-                        )}
                       </CampoFormulario>
                     </div>
                   )
@@ -1905,7 +1741,7 @@ function PaginaEditarDom() {
                   <SelectSiNo name="planeacion_completa" soloLectura={!esEditable('etapa_2')} value={boolToStr(planActual.planeacion_completa)}
                     onChange={v => actualizarCampoPlaneacion('planeacion_completa', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
-                  <p className="text-xs text-amber-600 mt-1">
+                  <p className="text-sm font-semibold text-amber-600 mt-1">
                     Importante: una vez marque Sí y guarde, no podrá realizar
                     modificaciones posteriores a esta etapa.
                   </p>
@@ -1978,7 +1814,7 @@ function PaginaEditarDom() {
                     <SelectSiNo name="almacen_materias_liberadas" soloLectura={!esEditable('etapa_3')} value={boolToStr(almacenActual.materias_liberadas)}
                       onChange={v => actualizarCampoHijo('almacen', 'materias_liberadas', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
-                    <p className="text-xs text-amber-600 mt-1">
+                    <p className="text-sm font-semibold text-amber-600 mt-1">
                       Importante: una vez marque Sí y guarde, no podrá realizar
                       modificaciones posteriores a este registro.
                     </p>
@@ -2009,7 +1845,7 @@ function PaginaEditarDom() {
               guardando={guardando}
             />
             {esEditable('etapa_4') && pedidoTotalmenteProducido() && (
-              <p className="text-xs text-amber-600">
+              <p className="text-sm font-semibold text-amber-600">
                 Las unidades elaboradas ya cubren el total pedido; no es necesario crear más registros de producción.
               </p>
             )}
@@ -2055,14 +1891,16 @@ function PaginaEditarDom() {
                         const val = produccionActual.numero_personas_asignadas
                         if (val && parseInt(val) > 0) setMostrarModalPersonas(true)
                       }}
-                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || personasConfirmadas}
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || hayCronometro}
                       min="1"
                       className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                     <AvisoSuelo valor={produccionActual.numero_personas_asignadas} minimo={1} />
-                    {personasConfirmadas && (
-                      <p className="flex items-center gap-1 text-xs text-gray-500 mt-1">
-                        <FiLock size={12} />
-                        Confirmado — no editable
+                    {esEditable('etapa_4') && !produccionActual.numero_personas_asignadas && (
+                      <AvisoRequeridoCierre texto="Debe diligenciarse para dar por iniciado el cronómetro y cerrar esta etapa." />
+                    )}
+                    {personasConfirmadas && !hayCronometro && (
+                      <p className="text-sm font-semibold text-amber-600 mt-1">
+                        Este dato puede modificarse mientras no se haya iniciado el cronómetro.
                       </p>
                     )}
                   </CampoFormulario>
@@ -2080,9 +1918,21 @@ function PaginaEditarDom() {
                       hace el botón principal (guardarProduccionCompleta); sin botón por-producto. */}
                   {datosDom.productos?.length > 0 && (
                     <div className="space-y-3">
-                      <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                        Cantidad elaborada por producto
-                      </p>
+                      <div>
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                          Cantidad elaborada por producto
+                        </p>
+                        {/* Uno solo para la sección: mientras el cronómetro no finalice,
+                            es lo único accionable. */}
+                        {esEditable('etapa_4') && !cronometroFinalizado && (
+                          <p className="text-sm font-semibold text-amber-600 mt-1">
+                            Disponible una vez finalice el cronómetro de producción
+                          </p>
+                        )}
+                        {esEditable('etapa_4') && cronometroFinalizado && !hayCantidadElaborada && (
+                          <AvisoRequeridoCierre texto="Al menos uno de los productos debe quedar con cantidad mayor que cero para dar por cerrada esta etapa." />
+                        )}
+                      </div>
                       {datosDom.productos.map(prod => {
                         const pp                 = planActual?.productos_planeacion?.find(p => p.dom_producto === prod.id)
                         const productoProduccion = pp ? productoProduccionActivo(pp.id) : null
@@ -2102,7 +1952,7 @@ function PaginaEditarDom() {
                             </div>
                             <CampoFormulario label="Cantidad elaborada">
                               {!pp ? (
-                                <p className="text-xs text-amber-600 mt-1">
+                                <p className="text-sm text-gray-500 mt-1">
                                   Sin proyección — asigne en etapa de planeación
                                 </p>
                               ) : (
@@ -2116,11 +1966,6 @@ function PaginaEditarDom() {
                                     min="0"
                                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                                   <AvisoSuelo valor={elaboradaLocal[localKey] ?? productoProduccion?.cantidad_elaborada} minimo={0} />
-                                  {!cronometroFinalizado && (
-                                    <p className="text-xs text-amber-600 mt-1">
-                                      Disponible una vez finalice el cronómetro de producción
-                                    </p>
-                                  )}
                                 </>
                               )}
                             </CampoFormulario>
@@ -2168,7 +2013,12 @@ function PaginaEditarDom() {
                   <CampoFormulario label="¿Actividades de producción realizadas según registro de planeación?">
                     <SelectSiNo name="produccion_segun_planeacion" soloLectura={!esEditable('etapa_4')} variante="lectura" value={boolToStr(produccionActual.segun_planeacion)}
                       onChange={v => actualizarCampoHijo('produccion', 'segun_planeacion', strToBool(v), idxProduccion)}
-                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion} />
+                      disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || !cronometroFinalizado} />
+                    {!cronometroFinalizado && !produccionActualOriginal?.cierre_produccion && (
+                      <p className="text-sm font-semibold text-amber-600 mt-1">
+                        Disponible una vez finalice el cronómetro de producción.
+                      </p>
+                    )}
                   </CampoFormulario>
                 </CampoRequeridoCierre>
                 <BloqueoEtapa
@@ -2181,12 +2031,12 @@ function PaginaEditarDom() {
                       onChange={v => actualizarCampoHijo('produccion', 'cierre_produccion', strToBool(v), idxProduccion)}
                       disabled={!esEditable('etapa_4') || produccionActualOriginal?.cierre_produccion || !cronometroFinalizado} />
                     {!cronometroFinalizado && !produccionActualOriginal?.cierre_produccion && (
-                      <p className="text-xs text-amber-600 mt-1">
+                      <p className="text-sm font-semibold text-amber-600 mt-1">
                         Disponible una vez finalice el cronómetro de producción.
                       </p>
                     )}
                     {!produccionActualOriginal?.cierre_produccion && cronometroFinalizado && (
-                      <p className="text-xs text-amber-600 mt-1">
+                      <p className="text-sm font-semibold text-amber-600 mt-1">
                         Importante: una vez marque Sí y guarde, no podrá realizar
                         modificaciones posteriores a este registro.
                       </p>
@@ -2268,7 +2118,7 @@ function PaginaEditarDom() {
                     <SelectSiNo name="tratamiento_completado" soloLectura={!esEditable('etapa_5')} value={boolToStr(tratamientoActual.tratamiento_completado)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_completado', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
-                    <p className="text-xs text-amber-600 mt-1">
+                    <p className="text-sm font-semibold text-amber-600 mt-1">
                       Importante: una vez marque Sí y guarde, no podrá realizar
                       modificaciones posteriores a este registro.
                     </p>
@@ -2391,7 +2241,7 @@ function PaginaEditarDom() {
                 <SelectSiNo name="dom_liberado_cierre" soloLectura={!esEditable('etapa_6')} value={boolToStr(datosDom.dom_liberado_cierre)}
                   onChange={v => actualizarCampoDom('dom_liberado_cierre', strToBool(v))}
                   disabled={!esEditable('etapa_6') || datosDomOriginal?.dom_liberado_cierre} />
-                <p className="text-xs text-amber-600 mt-1">
+                <p className="text-sm font-semibold text-amber-600 mt-1">
                   Importante: una vez marque Sí y guarde, el DOM quedará
                   cerrado definitivamente.
                 </p>
@@ -2423,7 +2273,8 @@ function PaginaEditarDom() {
         Este dato es necesario para calcular los <strong>minutos hombre de producción</strong> y
         los <strong>minutos restantes</strong> al finalizar el cronómetro.
         <span className="block mt-3 font-bold text-gray-800">
-          Tenga en cuenta que este dato, una vez confirmado, no se puede cambiar.
+          Este dato puede ser modificado mientras no haya iniciado el cronómetro. Una vez
+          iniciado, el número de personas asignadas a este registro no podrá modificarse.
         </span>
         <span className="block mt-3 text-gray-800 font-medium">
           ¿Confirmar{' '}
@@ -2604,6 +2455,14 @@ function CampoRequeridoCierre({ children, plural = false }) {
       </p>
     </div>
   )
+}
+
+// Variante en línea del aviso de requisito de cierre: para campos dentro de una rejilla,
+// donde la caja rompería el ritmo, y para un requisito que no tiene un control único al
+// que envolver. Mismo azul que la caja — azul es requisito de cierre; el ámbar de esta
+// página significa otra cosa (dependencia no cumplida, o advertencia del candado).
+function AvisoRequeridoCierre({ texto }) {
+  return <p className="text-sm font-semibold text-blue-700 mt-1">{texto}</p>
 }
 
 function BloqueoEtapa({ children, puedeDesbloquear, onDesbloquear, guardando }) {

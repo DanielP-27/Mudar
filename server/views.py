@@ -194,12 +194,15 @@ def existe_turno_dia(inst, datos):
 
 
 def hay_cantidad_planeada(inst, datos):
-    """Al menos un producto con cantidad mayor que cero. «Al menos uno» y no «todos»
-    porque los productos de un DOM se reparten entre varias planeaciones.
-
-    Mira lo persistido: corre después de escribir las cantidades y en la misma
-    transacción, así que su rechazo las deshace."""
+    """Al menos un producto con cantidad mayor que cero. «Al menos uno» y no «todos» porque los productos de un DOM se reparten entre varias planeaciones.
+    Mira lo persistido: corre después de escribir las cantidades y en la misma transacción, así que su rechazo las deshace."""
     return inst.productos_planeacion.filter(cantidad_proyectada__gt=0).exists()
+
+
+def hay_cantidad_elaborada(inst, datos):
+    """Al menos un producto con cantidad mayor que cero. «Al menos uno» y no «todos» porque un registro de producción puede cubrir parte de lo planeado; lo que falte va a otra jornada.
+    Mira lo persistido: corre después de escribir las cantidades y en la misma transacción, así que su rechazo las deshace."""
+    return inst.productos_produccion.filter(cantidad_elaborada__gt=0).exists()
 
 
 # etapa → (campo_candado, [(campo, etiqueta)], [(comprobación, etiqueta)])
@@ -221,7 +224,8 @@ REQUISITOS_CIERRE = {
          ('numero_personas_asignadas',
           'el número de personas asignadas a la producción')],
         [(lambda inst, datos: inst.registros_tiempo.filter(estado='FINALIZADO').exists(),
-          'que el cronómetro de producción esté finalizado')]),
+          'que el cronómetro de producción esté finalizado'),
+         (hay_cantidad_elaborada, 'al menos un producto con cantidad elaborada')]),
     'etapa_5': ('tratamiento_completado',
         [('tratamiento_segun_planeacion',
           'la respuesta sobre si el tratamiento térmico se realizó según planeación')],
@@ -335,6 +339,15 @@ def registrar_edicion_y_bloqueo(dom, usuario, etapa, campos, campo_bloqueo, bloq
         registrar_auditoria(dom, usuario, 'BLOQUEO_ETAPA', request, etapa,
                             {campo_bloqueo: candado})
 
+
+class ErrorEnTransaccion(Exception):
+    """Sale de la transacción con el cuerpo del 400 ya formado.
+
+    Por excepción y no por return: un return dentro de atomic() confirma, no revierte."""
+
+    def __init__(self, cuerpo):
+        self.cuerpo = cuerpo
+
 # FIN HELPERS
 
 # INICIO MODULO 1 - VISTAS DE AUTENTICACIÓN
@@ -382,12 +395,6 @@ class LoginView(APIView):
             return Response(
                 {'error' : 'Usuario o contraseña incorrecto'},
                 status = status.HTTP_401_UNAUTHORIZED
-            )
-        
-        if not user.is_active:
-            return Response(
-                {'error' : 'Usuario inactivo, contacte al administrador'},
-                status = status.HTTP_403_FORBIDDEN
             )
         
         # Verifica que el usuario tenga PerfilUsuario asignado
@@ -2229,19 +2236,6 @@ class RegistroPlaneacionListView(APIView):
 # Clase para obtener datos de los registros de planeación relacionados con un DOM todos los roles habilitados para consultar la información
 # Permite edición etapa 2 unicamente a ADMIN, ANALISTA_1, ANALISTA_2
 
-class ErrorEnTransaccion(Exception):
-    """Sale de la transacción con el cuerpo del 400 ya formado.
-
-    Solo dos comprobaciones viven dentro del bloque, y por el mismo motivo: dependen de
-    lo que se escribe ahí. El candado, del cerrojo recién tomado; el cierre de etapa, del
-    turno-día y las cantidades recién guardados.
-
-    Por excepción y no por return: un return dentro de atomic() confirma, no revierte."""
-
-    def __init__(self, cuerpo):
-        self.cuerpo = cuerpo
-
-
 class RegistroPlaneacionDetalleView(APIView):
 
     permission_classes = [IsAuthenticated]
@@ -2300,17 +2294,37 @@ class RegistroPlaneacionDetalleView(APIView):
             for pp in registro.productos_planeacion.select_related('dom_producto__tipo_producto')
         }
 
-        # Cada línea entrante contra las tres reglas de una línea de planeación
+        # Cada línea entrante contra las tres reglas de una línea de planeación.
+        # Se acumulan en vez de cortar en la primera: el envío es un lote, así que
+        # cortar obligaba al planeador a una vuelta de guardado por cada producto malo.
         entrantes = {}
+        errores = []
         for item in cantidades:
             dom_producto = ProductosDom.objects.filter(id=item.get('dom_producto')).first()
-            error = validar_linea_planeacion(
+            cuerpo_error = validar_linea_planeacion(
                 registro, dom_producto, item.get('cantidad_proyectada'),
                 excluir_pp=existentes.get(item.get('dom_producto')),
             )
-            if error:
-                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+            if cuerpo_error:
+                errores.append(cuerpo_error['error'])
+                # Sin el continue, la línea de abajo leería .id de un None cuando el
+                # producto no existe.
+                continue
             entrantes[dom_producto.id] = item.get('cantidad_proyectada')
+
+        if errores:
+            # Dos llaves con destinos distintos: 'detalle' es la que lee el frontend
+            # primero y la que saca una línea por producto en el modal; 'error' queda
+            # para la convención del proyecto y para clientes que no sean esta pantalla.
+            # non_field_errors es la llave de DRF para validaciones que no pertenecen a
+            # un campo, que es exactamente lo que son estas: reglas sobre acumulados.
+            return Response(
+                {
+                    'error': ' · '.join(errores),
+                    'detalle': {'non_field_errors': errores},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Valida capacidad si cambia turno, fecha_planeacion o alguna cantidad: las
         # cantidades alteran la carga del turno sin tocar ninguno de los otros dos.
@@ -2410,8 +2424,8 @@ class RegistroPlaneacionDetalleView(APIView):
         # planeación, ni escrita ninguna cantidad.
         try:
             with transaction.atomic():
-                # El cerrojo serializa dos PUT sobre la misma planeación: sin recomprobar el
-                # candado, uno escribiría sobre la que el otro acaba de cerrar.
+                # El cerrojo serializa dos PUT sobre la misma planeación: sin recomprobar el candado, uno escribiría sobre la que el otro acaba de cerrar.
+                # Dentro del bloque y no antes porque depende del cerrojo recién tomado.
                 bloqueada = RegistroPlaneacion.objects.select_for_update().get(id=registro_id)
                 if bloqueada.etapa2_bloqueada():
                     raise ErrorEnTransaccion({
@@ -2502,7 +2516,8 @@ def validar_linea_planeacion(registro, dom_producto, cantidad, excluir_pp=None):
 
     if ya_proyectado + cantidad > dom_producto.cantidad_pedido:
         return {
-            'error': 'La cantidad proyectada supera la cantidad pedida del producto',
+            'error': f'La cantidad proyectada supera la cantidad pedida del producto '
+                     f'{dom_producto.tipo_producto.nombre_producto}',
             'cantidad_pedida': dom_producto.cantidad_pedido,
             'cantidad_ya_proyectada': ya_proyectado,
             'cantidad_solicitada': cantidad,
@@ -2511,7 +2526,8 @@ def validar_linea_planeacion(registro, dom_producto, cantidad, excluir_pp=None):
 
     if excluir_pp is not None and cantidad < excluir_pp.cantidad_elaborada:
         return {
-            'error': 'No puede proyectar menos de lo ya elaborado',
+            'error': f'No puede proyectar menos de lo ya elaborado del producto '
+                     f'{dom_producto.tipo_producto.nombre_producto}',
             'cantidad_elaborada': excluir_pp.cantidad_elaborada,
             'cantidad_solicitada': cantidad,
         }
@@ -2562,9 +2578,9 @@ class ProductoPlaneacionListView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            error = validar_linea_planeacion(planeacion, dom_producto, cantidad_proyectada_nueva)
-            if error:
-                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+            cuerpo_error = validar_linea_planeacion(planeacion, dom_producto, cantidad_proyectada_nueva)
+            if cuerpo_error:
+                return Response(cuerpo_error, status=status.HTTP_400_BAD_REQUEST)
 
             # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
             tiempo_nuevo_producto = cantidad_proyectada_nueva * dom_producto.tipo_producto.tiempo_produccion_unitario
@@ -2647,12 +2663,12 @@ class ProductoPlaneacionDetalleView(APIView):
 
         cantidad_proyectada_nueva = request.data.get('cantidad_proyectada')
         if cantidad_proyectada_nueva is not None:
-            error = validar_linea_planeacion(
+            cuerpo_error = validar_linea_planeacion(
                 producto.registro_planeacion, producto.dom_producto,
                 cantidad_proyectada_nueva, excluir_pp=producto,
             )
-            if error:
-                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+            if cuerpo_error:
+                return Response(cuerpo_error, status=status.HTTP_400_BAD_REQUEST)
 
             # Valida capacidad del turno: la nueva cantidad no puede dejar tiempo_restante_dia negativo
             registro_planeacion = producto.registro_planeacion
@@ -2753,6 +2769,50 @@ class ProductoPlaneacionDetalleView(APIView):
 
 # ── Endpoint ProductoProduccion ───────────────────────────────────────────────
 
+def validar_linea_produccion(registro_produccion, producto_planeacion, cantidad, excluir_produccion=None):
+    """Esta función valida dos cosas respecto de producciones y planeaciones:
+
+      1. El producto planeado pertenece a la planeación de este registro de producción.
+      2. La cantidad elaborada, sumando lo ya elaborado en los demás registros de esa
+         misma planeación, no supera lo proyectado para ese producto.
+
+    Devuelve None si la línea es válida, o el CUERPO del error 400 —un diccionario y
+    no un texto—, para conservar las claves que los clientes ya reciben.
+
+    `excluir_produccion` es la fila que se está reemplazando, para que el acumulado no
+    se cuente a sí misma. En un alta va en None: la fila todavía no existe.
+    """
+    if (producto_planeacion is None
+            or producto_planeacion.registro_planeacion_id
+            != registro_produccion.registro_planeacion_id):
+        return {'error': 'El producto planeado no pertenece a la planeación de este registro de producción'}
+
+    if cantidad is None:
+        return None
+
+    # Lo elaborado por las DEMÁS filas: la que se reemplaza ya está dentro de la suma de
+    # la propiedad y su valor viejo va a desaparecer. Solo alimenta el mensaje de error.
+    ya_elaborada = producto_planeacion.cantidad_elaborada - (
+        excluir_produccion.cantidad_elaborada if excluir_produccion else 0
+    )
+    disponible = registro_produccion.registro_planeacion.cantidad_disponible_produccion(
+        producto_planeacion,
+        int(cantidad),
+        excluir_producto_produccion_id=excluir_produccion.id if excluir_produccion else None,
+    )
+    if disponible < 0:
+        return {
+            'error': f'La cantidad elaborada supera la cantidad proyectada del producto '
+                     f'{producto_planeacion.dom_producto.tipo_producto.nombre_producto}',
+            'cantidad_proyectada': producto_planeacion.cantidad_proyectada,
+            'cantidad_ya_elaborada': ya_elaborada,
+            'cantidad_solicitada': int(cantidad),
+            'disponible': max(0, producto_planeacion.cantidad_proyectada - ya_elaborada),
+        }
+
+    return None
+
+
 class ProductoProduccionListView(APIView):
     permission_classes     = [IsAuthenticated]
 
@@ -2786,31 +2846,16 @@ class ProductoProduccionListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        try:
-            pp = ProductoPlaneacion.objects.get(id=producto_planeacion_id)
-        except ProductoPlaneacion.DoesNotExist:
-            return Response(
-                {'error': 'Producto de planeación no encontrado'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        # filter().first() y no get(): get() lanza cuando no hay fila y obliga a resolver
+        # aquí mismo; first() devuelve None, y ese None puede viajar hasta la función,
+        # que trata «no existe» y «no pertenece a esta planeación» como el mismo error.
+        pp = ProductoPlaneacion.objects.filter(id=producto_planeacion_id).first()
 
-        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada')
-        if cantidad_elaborada_nueva is not None:
-            disponible = registro.registro_planeacion.cantidad_disponible_produccion(
-                pp,
-                int(cantidad_elaborada_nueva)
-            )
-            if disponible < 0:
-                return Response(
-                    {
-                        'error': 'La cantidad elaborada supera la cantidad proyectada del producto',
-                        'cantidad_proyectada': pp.cantidad_proyectada,
-                        'cantidad_ya_elaborada': pp.cantidad_elaborada,
-                        'cantidad_solicitada': int(cantidad_elaborada_nueva),
-                        'disponible': max(0, pp.cantidad_proyectada - pp.cantidad_elaborada)
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        cuerpo_error = validar_linea_produccion(
+            registro, pp, request.data.get('cantidad_elaborada'),
+        )
+        if cuerpo_error:
+            return Response(cuerpo_error, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = ProductoProduccionSerializer(data=request.data)
         if not serializer.is_valid():
@@ -2870,24 +2915,16 @@ class ProductoProduccionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        cantidad_elaborada_nueva = request.data.get('cantidad_elaborada')
-        if cantidad_elaborada_nueva is not None:
-            disponible = producto.registro_produccion.registro_planeacion.cantidad_disponible_produccion(
-                producto.producto_planeacion,
-                int(cantidad_elaborada_nueva),
-                excluir_producto_produccion_id=producto_id
-            )
-            if disponible < 0:
-                return Response(
-                    {
-                        'error': 'La cantidad elaborada supera la cantidad proyectada del producto',
-                        'cantidad_proyectada': producto.producto_planeacion.cantidad_proyectada,
-                        'cantidad_ya_elaborada': producto.producto_planeacion.cantidad_elaborada - producto.cantidad_elaborada,
-                        'cantidad_solicitada': int(cantidad_elaborada_nueva),
-                        'disponible': max(0, producto.producto_planeacion.cantidad_proyectada - (producto.producto_planeacion.cantidad_elaborada - producto.cantidad_elaborada))
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # excluir_produccion es esta misma fila: su valor viejo va a desaparecer, así que
+        # no puede contarse dentro de lo ya elaborado o el techo rechazaría ediciones válidas.
+        cuerpo_error = validar_linea_produccion(
+            producto.registro_produccion,
+            producto.producto_planeacion,
+            request.data.get('cantidad_elaborada'),
+            excluir_produccion=producto,
+        )
+        if cuerpo_error:
+            return Response(cuerpo_error, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = ProductoProduccionSerializer(producto, data=request.data, partial=True)
         if not serializer.is_valid():
@@ -2898,7 +2935,9 @@ class ProductoProduccionDetalleView(APIView):
 
         campos_antes = instantanea(producto, request.data)
 
-        producto = serializer.save()
+        # El campo guarda quién escribió la fila por última vez, no quién la creó, así que
+        # una corrección por este camino también lo actualiza — igual que el PUT del lote.
+        producto = serializer.save(registrado_por=request.user)
 
         registrar_auditoria(
             dom=producto.registro_produccion.registro_planeacion.dom,
@@ -3269,12 +3308,49 @@ class RegistroProduccionDetalleView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # No se puede cerrar la etapa sin el dato que esta etapa produce
-        error_cierre = validar_cierre(registro, request.data, 'etapa_4')
-        if error_cierre:
-            return Response({'error': error_cierre}, status=status.HTTP_400_BAD_REQUEST)
+        # Se separan porque productos_produccion no es escribible en el serializer: el
+        # conjunto lo maneja la vista, para hacer upsert sin borrar lo no enviado.
+        cantidades = request.data.get('productos_produccion', [])
+        datos_produccion = {k: v for k, v in request.data.items() if k != 'productos_produccion'}
 
-        serializer = RegistroProduccionSerializer(registro, data=request.data, partial=True)
+        # Las filas ya guardadas de ESTE registro, indexadas por producto planeado. De aquí
+        # sale la fila que cada línea entrante reemplaza, en una sola consulta.
+        existentes = {
+            fila.producto_planeacion_id: fila
+            for fila in registro.productos_produccion.all()
+        }
+
+        # Cada línea entrante contra las dos reglas de una línea de producción. Se acumulan
+        # en vez de cortar en la primera: el envío es un lote, así que cortar obligaría al
+        # líder a una vuelta de guardado por cada producto mal.
+        entrantes = {}
+        errores = []
+        for item in cantidades:
+            producto_planeacion = ProductoPlaneacion.objects.filter(
+                id=item.get('producto_planeacion')
+            ).first()
+            cuerpo_error = validar_linea_produccion(
+                registro, producto_planeacion, item.get('cantidad_elaborada'),
+                excluir_produccion=existentes.get(item.get('producto_planeacion')),
+            )
+            if cuerpo_error:
+                errores.append(cuerpo_error['error'])
+                # Sin el continue, la línea de abajo leería .id de un None.
+                continue
+            entrantes[producto_planeacion.id] = item.get('cantidad_elaborada')
+
+        if errores:
+            # 'detalle' es la llave que el frontend lee primero y la que saca una línea por
+            # producto en el modal; 'error' queda para la convención del proyecto.
+            return Response(
+                {
+                    'error': ' · '.join(errores),
+                    'detalle': {'non_field_errors': errores},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = RegistroProduccionSerializer(registro, data=datos_produccion, partial=True)
 
         if not serializer.is_valid():
             return Response(
@@ -3284,20 +3360,64 @@ class RegistroProduccionDetalleView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        campos_antes = instantanea(registro, request.data)
 
-        registro = serializer.save()
+        campos_antes = instantanea(registro, datos_produccion)
 
-        registrar_edicion_y_bloqueo(
-            dom=registro.registro_planeacion.dom,
-            usuario=request.user,
-            etapa='etapa_4',
-            campos=calcular_campos_modificados(campos_antes, registro),
-            campo_bloqueo='cierre_produccion',
-            bloqueada=registro.etapa_4_bloqueada(),
-            request=request,
-        )
+        # Todo o nada: si algo falla, no quedan escritas ni las cantidades ni el registro.
+        try:
+            with transaction.atomic():
+                # El cerrojo serializa dos PUT sobre el mismo registro: sin recomprobar el
+                # candado, uno escribiría sobre el que el otro acaba de cerrar. Aquí es real:
+                # son tres líderes de planta sobre la misma jornada.
+                # Dentro del bloque y no antes porque depende del cerrojo recién tomado.
+                bloqueado = RegistroProduccion.objects.select_for_update().get(id=registro_id)
+                if bloqueado.etapa_4_bloqueada():
+                    raise ErrorEnTransaccion({
+                        'error': 'Este registro se encuentra actualmente bloqueado y no puede ser modificado. Por favor contacte al Administrador del sistema'
+                    })
+
+                registro = serializer.save()
+
+                # registrado_por en defaults y no solo al crear: el campo guarda quién
+                # escribió la fila por última vez, no quién la creó.
+                for producto_planeacion_id, cantidad in entrantes.items():
+                    ProductoProduccion.objects.update_or_create(
+                        registro_produccion=registro,
+                        producto_planeacion_id=producto_planeacion_id,
+                        defaults={
+                            'cantidad_elaborada': cantidad,
+                            'registrado_por': request.user,
+                        },
+                    )
+
+                # Al final: uno de sus requisitos —al menos una cantidad elaborada— mira la
+                # base, y esas filas se acaban de escribir aquí dentro. Validar contra el
+                # estado real en vez de pronosticarlo solo es posible porque el rechazo lo revierte.
+                error_cierre = validar_cierre(registro, datos_produccion, 'etapa_4')
+                if error_cierre:
+                    raise ErrorEnTransaccion({'error': error_cierre})
+
+                registrar_edicion_y_bloqueo(
+                    dom=registro.registro_planeacion.dom,
+                    usuario=request.user,
+                    etapa='etapa_4',
+                    campos=calcular_campos_modificados(campos_antes, registro),
+                    campo_bloqueo='cierre_produccion',
+                    bloqueada=registro.etapa_4_bloqueada(),
+                    request=request,
+                )
+        except ErrorEnTransaccion as e:
+            return Response(e.cuerpo, status=status.HTTP_400_BAD_REQUEST)
+
+        # Refresca el objeto con relaciones cargadas: el serializer anidado resuelve el
+        # nombre de cada producto a tres relaciones de distancia y las propiedades
+        # calculadas consultan por su cuenta, así que sin esto cada línea dispara las suyas.
+        registro = RegistroProduccion.objects.select_related(
+            'registro_planeacion'
+        ).prefetch_related(
+            'productos_produccion__producto_planeacion__dom_producto__tipo_producto',
+            'registros_tiempo',
+        ).get(id=registro.id)
 
         return Response(
             {
