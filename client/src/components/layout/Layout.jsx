@@ -50,8 +50,8 @@ function Layout({ modoLogin = false }) {
   }
 
   // Cierra sesión y redirige al login
-  const manejarCerrarSesion = () => {
-    cerrarSesion()
+  const manejarCerrarSesion = async () => {
+    await cerrarSesion()
     navegar('/login', { replace: true })
   }
 

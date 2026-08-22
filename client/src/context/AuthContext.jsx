@@ -1,6 +1,6 @@
 // src/context/AuthContext.jsx
 import { createContext, useContext, useState, useEffect } from 'react'
-import api from '../api/axios'
+import { iniciarSesionApi, cerrarSesionApi, obtenerPerfil } from '../api/auth'
 
 // Canal de comunicación del estado de autenticación hacia toda la app
 const ContextoAutenticacion = createContext(null)
@@ -11,59 +11,60 @@ export function ProveedorAutenticacion({ children }) {
   // true mientras se verifica si hay sesión guardada
   const [cargando, setCargando]     = useState(true)
 
-  // Al arrancar, restaurar sesión desde localStorage si el token sigue vigente
+  // Al arrancar, la validez de la sesión la decide el servidor: se le pregunta
+  // por el perfil con el token guardado.
   useEffect(() => {
-    const sesionGuardada  = localStorage.getItem('mudar_usuario')
-    const tiempoGuardado  = localStorage.getItem('mudar_token_tiempo')
+    const revalidarSesion = async () => {
+      const sesionGuardada = localStorage.getItem('mudar_usuario')
 
-    if (sesionGuardada && tiempoGuardado) {
-      // La ventana la define el backend y llega en la respuesta del login.
-      // Si la clave no existe, Number(null) da 0 y la sesión se descarta.
-      const minutosTranscurridos = (Date.now() - Number(tiempoGuardado)) / 60000
-      const tiempoExpiracion     = Number(localStorage.getItem('mudar_token_ventana'))
-
-      if (minutosTranscurridos < tiempoExpiracion) {
-        // Token vigente — restaurar sesión
-        setUsuario(JSON.parse(sesionGuardada))
-      } else {
-        // Token expirado — limpiar localStorage
-        localStorage.removeItem('mudar_usuario')
-        localStorage.removeItem('mudar_token_tiempo')
-        localStorage.removeItem('mudar_token_ventana')
+      if (!sesionGuardada) {
+        setCargando(false)
+        return
       }
+
+      try {
+        const { data }  = await obtenerPerfil()
+        // PerfilView no devuelve el token: se conserva el guardado.
+        const { token } = JSON.parse(sesionGuardada)
+        setUsuario({ ...data.perfil, token })
+      } catch (error) {
+        // Un fallo de red no es un veredicto: la sesión se conserva y decidirá
+        // la primera petición real. Del 401 se encarga el interceptor.
+        if (!error.response) setUsuario(JSON.parse(sesionGuardada))
+      }
+
+      setCargando(false)
     }
 
-    // Verificación completada, desactivar estado de carga
-    setCargando(false)
+    revalidarSesion()
   }, [])
 
 // Llamada al backend — fusiona perfil y token en un objeto plano
 const iniciarSesion = async (nombreUsuario, contrasena) => {
-  const { data } = await api.post(
-    '/api/auth/login/',
-    { username: nombreUsuario, password: contrasena }
-  )
+  const { data } = await iniciarSesionApi(nombreUsuario, contrasena)
   // { id, username, nombre_completo, rol, token }
   const datosUsuario = { ...data.perfil, token: data.token }
 
   // Actualizar estado en memoria
   setUsuario(datosUsuario)
 
-  // Persistir sesión, timestamp y ventana de caducidad para validar al recargar
-  localStorage.setItem('mudar_usuario',       JSON.stringify(datosUsuario))
-  localStorage.setItem('mudar_token_tiempo',  Date.now().toString())
-  localStorage.setItem('mudar_token_ventana', String(data.expira_en_minutos))
+  // Persistir la sesión; al recargar, su validez la decide el servidor
+  localStorage.setItem('mudar_usuario', JSON.stringify(datosUsuario))
 
   // Retorna datosUsuario para que PaginaLogin pueda redirigir inmediatamente
   return datosUsuario
 }
 
-  // Limpiar estado en memoria y sesión persistida
-  const cerrarSesion = () => {
+  const cerrarSesion = async () => {
+    try {
+      await cerrarSesionApi()
+    } catch {
+      // Sin respuesta del servidor el usuario sale igual: la salida local no
+      // puede depender de la red.
+    }
+
     setUsuario(null)
     localStorage.removeItem('mudar_usuario')
-    localStorage.removeItem('mudar_token_tiempo')
-    localStorage.removeItem('mudar_token_ventana')
   }
 
   // Expone usuario, iniciarSesion, cerrarSesion y cargando a todos los componentes hijos
