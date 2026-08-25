@@ -345,6 +345,8 @@ class RegistroTiempoProduccionSerializer(serializers.ModelSerializer):
             'minutos_totales',      #Propiedad calculada al seleccional finalizar cronometro
             'pausas',               #Entidad generada para calculo de tiempo en tiempo real
             'usuario',
+            'cerrado_por_sistema',
+            'motivo_cierre',
         ]
         read_only_fields = ['minutos_totales', 'total_segundos_pausados']
 

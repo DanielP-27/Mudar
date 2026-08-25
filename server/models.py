@@ -140,17 +140,18 @@ class Turno(models.Model):
 # cálculo de capacidad_turno_dia.
 
 class RegistroTurnoDia(models.Model):
-    # Jornadas vigentes — las únicas que el formulario ofrece. Si cambia la
-    # legislación laboral, esta es la lista que se actualiza.
-    OPCIONES_MINUTOS = [(420, '7 horas (420 min)'), (540, '9 horas (540 min)')]
+    # Jornadas vigentes — las únicas que el formulario ofrece.
+    # Confirmadas con el cliente el 2026-08-25.
+    OPCIONES_MINUTOS = [
+        (420, '7 horas (420 min)'),
+        (480, '8 horas (480 min)'),
+        (510, '8 horas 30 min (510 min)'),
+        (540, '9 horas (540 min)'),
+    ]
 
-    # Jornadas de legislaciones anteriores. minutos_totales es la fotografía de
-    # un hecho: guarda la duración que tuvo ese turno ese día, no la que rige
-    # hoy. Por eso choices debe admitir todo lo que alguna vez fue legal, o el
-    # registro deja de poder guardarse en cuanto cambia la ley. El formulario
-    # no las ofrece, así que no se pueden introducir de nuevo.
+    # Se incluyen las jornadas históricas para evitar la pérdida de información
+    # de los registros antiguos en BD.
     OPCIONES_MINUTOS_HISTORICAS = [
-        (480, '8 horas (480 min) — jornada anterior'),
         (600, '10 horas (600 min) — jornada anterior'),
     ]
 
@@ -902,7 +903,20 @@ class RegistroTiempoProduccion(models.Model):
     total_segundos_pausados = models.IntegerField(default=0, verbose_name='Total segundos pausados', validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)])
     minutos_totales = models.IntegerField(blank=True, null=True, verbose_name='Minutos totales', help_text='calculo se obtiene al darle finalizado a la producción', validators=[MinValueValidator(0, message=MENSAJE_NO_NEGATIVO)])
 
-    # auditoria 
+    # Cierre automático — ambos nulos cuando el cronómetro lo cerró una persona.
+
+    MOTIVO_TECHO = 'TECHO_JORNADA'
+    MOTIVO_PAUSA = 'PAUSA_ABANDONADA'
+
+    MOTIVOS_CIERRE = [
+        (MOTIVO_TECHO, 'Superó el tope de la jornada'),
+        (MOTIVO_PAUSA, 'Pausa abandonada'),
+    ]
+
+    cerrado_por_sistema = models.DateTimeField(blank=True, null=True, verbose_name='Cerrado por el sistema', help_text='Instante en que el barrido cerró el cronómetro. Distinto de fin, que es cuando dejó de ser creíble.')
+    motivo_cierre = models.CharField(max_length=20, choices=MOTIVOS_CIERRE, blank=True, null=True, verbose_name='Motivo del cierre automático')
+
+    # auditoria
 
     usuario = models.ForeignKey(
         User,
@@ -1075,6 +1089,7 @@ class AuditoriaDom(models.Model):
         ('BLOQUEO_ETAPA', 'Bloqueo de Etapa'),
         ('DESBLOQUEO_ETAPA','Desbloqueo de Etapa'),
         ('ELIMINACION', 'Eliminación'),
+        ('CIERRE_AUTOMATICO', 'Cierre automático'),
     ]
     
     dom = models.ForeignKey(

@@ -38,6 +38,8 @@ const TIPOS_ADMINISTRATIVOS = ['ADP', 'Documentos']
 const OPCIONES_MINUTOS = [
   { value: '', label: 'Seleccione duración' },
   { value: 420, label: '7 horas (420 min)' },
+  { value: 480, label: '8 horas (480 min)' },
+  { value: 510, label: '8 horas 30 min (510 min)' },
   { value: 540, label: '9 horas (540 min)' },
 ]
 

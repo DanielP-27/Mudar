@@ -281,14 +281,27 @@ def registrar_auditoria(dom, usuario, accion, request, etapa=None, campos_modifi
     if accion not in dict(AuditoriaDom.ACTION_CHOICES):
         raise ValueError('Acción de auditoría no declarada: %r' % accion)
 
+    # El cierre automático es la única acción sin autor: atarlo a la ausencia de
+    # petición impide atribuírselo al usuario que navegaba cuando corrió el barrido.
+    if request is None and accion != 'CIERRE_AUTOMATICO':
+        raise ValueError('Solo el cierre automático se audita sin petición: %r' % accion)
+    if request is not None and accion == 'CIERRE_AUTOMATICO':
+        raise ValueError('El cierre automático no se atribuye a una petición')
+
+    if request is not None:
+        ip = obtener_ip(request)
+        agente = (request.META.get('HTTP_USER_AGENT') or '')[:255] or None
+    else:
+        ip = agente = None
+
     AuditoriaDom.objects.create(
         dom = dom,
         usuario = usuario,
         accion = accion,
         etapa = etapa,
         campos_modificados = campos_modificados,
-        ip = obtener_ip(request),
-        agente = (request.META.get('HTTP_USER_AGENT') or '')[:255] or None,
+        ip = ip,
+        agente = agente,
     )
 
 def instantanea(objeto, request_data):
