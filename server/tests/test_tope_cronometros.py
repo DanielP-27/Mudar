@@ -197,20 +197,20 @@ class MarcasDeLaFranjaTests(SimpleTestCase):
         ahora = self.SALIDA - timedelta(minutes=tope.AVISO_FIN_JORNADA_MINUTOS)
         self.assertTrue(tope.por_terminar(self.SALIDA, ahora))
 
-    def test_sin_salida_no_se_marca_vencido(self):
-        self.assertFalse(tope.vencido(None, self.SALIDA))
+    def test_sin_salida_no_se_marca_turno_terminado(self):
+        self.assertFalse(tope.turno_terminado(None, self.SALIDA))
 
-    def test_antes_de_la_salida_no_esta_vencido(self):
-        self.assertFalse(tope.vencido(self.SALIDA, self.SALIDA - timedelta(minutes=1)))
+    def test_antes_de_la_salida_el_turno_no_ha_terminado(self):
+        self.assertFalse(tope.turno_terminado(self.SALIDA, self.SALIDA - timedelta(minutes=1)))
 
-    def test_pasada_la_salida_esta_vencido(self):
-        self.assertTrue(tope.vencido(self.SALIDA, self.SALIDA + timedelta(minutes=1)))
+    def test_pasada_la_salida_el_turno_ha_terminado(self):
+        self.assertTrue(tope.turno_terminado(self.SALIDA, self.SALIDA + timedelta(minutes=1)))
 
-    def test_por_terminar_y_vencido_se_excluyen(self):
+    def test_por_terminar_y_turno_terminado_se_excluyen(self):
         for desplazamiento in (-60, -45, -1, 0, 1, 60):
             ahora = self.SALIDA + timedelta(minutes=desplazamiento)
             self.assertFalse(
-                tope.por_terminar(self.SALIDA, ahora) and tope.vencido(self.SALIDA, ahora),
+                tope.por_terminar(self.SALIDA, ahora) and tope.turno_terminado(self.SALIDA, ahora),
                 f'ambas marcas a {desplazamiento} min de la salida',
             )
 
@@ -249,7 +249,7 @@ class HoraSalidaTests(SimpleTestCase):
     def test_la_salida_es_comparable_con_el_reloj_del_sistema(self):
         salida = tope.hora_salida(self.turno_dia(1, 540))
         self.assertIsNotNone(salida.tzinfo)
-        self.assertFalse(tope.vencido(salida, salida - timedelta(minutes=1)))
+        self.assertFalse(tope.turno_terminado(salida, salida - timedelta(minutes=1)))
 
 
 class DecidirCierreTests(SimpleTestCase):

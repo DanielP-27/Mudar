@@ -107,7 +107,10 @@ def por_terminar(salida, ahora=None):
     return 0 < faltan <= AVISO_FIN_JORNADA_MINUTOS
 
 
-def vencido(salida, ahora=None):
+# No se llama «vencido»: en este proyecto un DOM vencido es otro hecho —se le pasó la
+# fecha de entrega— y el techo del cierre automático es un tercero, sobre tiempo neto.
+# Esto sólo dice que el turno de esa planeación ya salió, por reloj de pared.
+def turno_terminado(salida, ahora=None):
     if salida is None:
         return False
 

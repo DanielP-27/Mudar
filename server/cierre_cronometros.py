@@ -9,6 +9,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
+from .auditoria import registrar_auditoria
 from .models import RegistroTiempoProduccion
 from .tope_cronometros import PAUSA_ABANDONADA_MINUTOS, decidir_cierre
 
@@ -20,9 +21,6 @@ def cerrar(cronometro, turno_dia, pausa_abierta, ahora=None):
     motivo, fin = decidir_cierre(cronometro, turno_dia, pausa_abierta, ahora)
     if motivo is None:
         return None
-
-    # Diferido: registrar_auditoria vive en views.py, que importará este módulo.
-    from .views import registrar_auditoria
 
     with transaction.atomic():
         bloqueado = RegistroTiempoProduccion.objects.select_for_update().get(id=cronometro.id)

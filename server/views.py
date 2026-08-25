@@ -10,9 +10,19 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.utils import timezone
 from datetime import timedelta
+from django.db.models import Prefetch
 from django.db.models.functions import Coalesce
 
 from .authentication import TOKEN_EXPIRY_MINUTES
+from .auditoria import obtener_ip, registrar_auditoria
+from .cierre_cronometros import barrer
+from .tope_cronometros import (
+    hora_salida,
+    minutos_en_pausa,
+    pausa_larga,
+    por_terminar,
+    turno_terminado,
+)
 from .models import (
     Cliente,
     FamiliaProducto,
@@ -265,44 +275,6 @@ def validar_cierre(instancia, datos, etapa):
     detalle = (faltantes[0] if len(faltantes) == 1
                else ', '.join(faltantes[:-1]) + ' y ' + faltantes[-1])
     return 'No es posible cerrar esta etapa sin %s.' % detalle
-
-# Detrás de un proxy REMOTE_ADDR es el proxy: la IP real viaja en X-Forwarded-For
-def obtener_ip(request):
-    reenviada = request.META.get('HTTP_X_FORWARDED_FOR')
-    if reenviada:
-        return reenviada.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
-
-
-# Centraliza que  la creación de registros de AuditoriaDom ante accciones relevantes (creacion, edicion, bloqueo o desbloqueo etapa, eliminación)
-def registrar_auditoria(dom, usuario, accion, request, etapa=None, campos_modificados=None):
-
-    # objects.create() no valida choices: sin esta guarda entra cualquier cadena
-    if accion not in dict(AuditoriaDom.ACTION_CHOICES):
-        raise ValueError('Acción de auditoría no declarada: %r' % accion)
-
-    # El cierre automático es la única acción sin autor: atarlo a la ausencia de
-    # petición impide atribuírselo al usuario que navegaba cuando corrió el barrido.
-    if request is None and accion != 'CIERRE_AUTOMATICO':
-        raise ValueError('Solo el cierre automático se audita sin petición: %r' % accion)
-    if request is not None and accion == 'CIERRE_AUTOMATICO':
-        raise ValueError('El cierre automático no se atribuye a una petición')
-
-    if request is not None:
-        ip = obtener_ip(request)
-        agente = (request.META.get('HTTP_USER_AGENT') or '')[:255] or None
-    else:
-        ip = agente = None
-
-    AuditoriaDom.objects.create(
-        dom = dom,
-        usuario = usuario,
-        accion = accion,
-        etapa = etapa,
-        campos_modificados = campos_modificados,
-        ip = ip,
-        agente = agente,
-    )
 
 def instantanea(objeto, request_data):
     """Valores actuales de lo que vale la pena auditar: los campos que Django guarda
@@ -3995,6 +3967,235 @@ class CronometroReanudarView(APIView):
         )
 
 # Clase para finalizar cronometro 
+# Ventana de los cerrados por el sistema, medida desde la intervención y no desde el
+# fin calculado: así el cierre del viernes procesado el lunes aparece el lunes.
+HORAS_CERRADOS_RECIENTES = 48
+
+
+def _cronometros_abiertos():
+    return (RegistroTiempoProduccion.objects
+            .exclude(estado='FINALIZADO')
+            .select_related('usuario', 'registro_produccion__registro_planeacion__dom')
+            .prefetch_related(Prefetch(
+                'pausas',
+                queryset=PausaTiempoProduccion.objects.filter(fin_pausa__isnull=True),
+                to_attr='pausas_abiertas')))
+
+
+def _turnos_dia_de(cronometros):
+    """{(turno_id, fecha): fila} en una sola consulta.
+
+    RegistroTurnoDia y RegistroPlaneacion son hermanas: ninguna apunta a la otra, así
+    que esta relación no la puede resolver el ORM."""
+    claves = set()
+    for cronometro in cronometros:
+        planeacion = cronometro.registro_produccion.registro_planeacion
+        if planeacion.turno_id and planeacion.fecha_planeacion:
+            claves.add((planeacion.turno_id, planeacion.fecha_planeacion))
+
+    if not claves:
+        return {}
+
+    # turno_id__in × fecha__in trae un superconjunto de pares; el par exacto lo
+    # selecciona el diccionario al buscar, no la base.
+    filas = RegistroTurnoDia.objects.filter(
+        turno_id__in={turno for turno, _ in claves},
+        fecha__in={fecha for _, fecha in claves},
+    )
+    return {(fila.turno_id, fila.fecha): fila for fila in filas}
+
+
+def _candidatos(cronometros, turnos_dia):
+    """(cronometro, turno_dia, pausa_abierta) — lo que consumen barrer y el listado.
+
+    No consulta nada: todo lo que necesita vino en las consultas anteriores."""
+    triples = []
+    for cronometro in cronometros:
+        planeacion = cronometro.registro_produccion.registro_planeacion
+        turno_dia = turnos_dia.get((planeacion.turno_id, planeacion.fecha_planeacion))
+        pausa = cronometro.pausas_abiertas[0] if cronometro.pausas_abiertas else None
+        triples.append((cronometro, turno_dia, pausa))
+    return triples
+
+
+def _cerrados_recientes(ahora):
+    desde = ahora - timedelta(hours=HORAS_CERRADOS_RECIENTES)
+    return (RegistroTiempoProduccion.objects
+            .filter(cerrado_por_sistema__gte=desde)
+            .select_related('usuario', 'registro_produccion__registro_planeacion')
+            .order_by('-cerrado_por_sistema'))
+
+
+# --- El renglón: qué viaja de cada cronómetro ---
+# El servidor manda estado y valores; el frontend elige las palabras. Por eso las marcas
+# son booleanos y el motivo un código, y no la frase que verá el usuario.
+
+def _fecha(fecha):
+    # dd/mm/aaaa, el formato único de display del sistema (formatters.js:6).
+    return fecha.strftime('%d/%m/%Y') if fecha else None
+
+
+def _hora(momento):
+    # En hora local: la zona del negocio la sabe el servidor, no el navegador de quien mira.
+    return timezone.localtime(momento).strftime('%H:%M') if momento else None
+
+
+def _fecha_hora(momento):
+    return timezone.localtime(momento).strftime('%d/%m/%Y %H:%M') if momento else None
+
+
+def _nombre(usuario):
+    if usuario is None:
+        return None
+
+    # get_full_name devuelve cadena vacía si no hay nombre ni apellido.
+    return usuario.get_full_name() or usuario.username
+
+
+def _renglon_base(cronometro, salida, ahora):
+    """Lo que comparten las dos secciones: quién es, quién lo inició y cuándo salía su turno.
+
+    es_hoy acompaña a la fecha porque «hoy» depende del día en Bogotá, que el navegador no
+    sabe. Sin él, un renglón sin fecha visible sería ambiguo entre ser de hoy, no tener
+    fecha, o estar mal pintado."""
+    planeacion = cronometro.registro_produccion.registro_planeacion
+
+    return {
+        'id': cronometro.id,
+        'estado': cronometro.estado,
+        # dom_id sale de la clave foránea de la planeación: no navega hasta la fila del DOM.
+        'dom_id': planeacion.dom_id,
+        'planeacion': planeacion.numero_registro,
+        'produccion': cronometro.registro_produccion.numero_registro,
+        'inicio_por': _nombre(cronometro.usuario),
+        'fecha_planeacion': _fecha(planeacion.fecha_planeacion),
+        'es_hoy': planeacion.fecha_planeacion == timezone.localdate(),
+        'hora_salida': _hora(salida),
+        'turno_terminado': turno_terminado(salida, ahora),
+        'por_terminar': por_terminar(salida, ahora),
+    }
+
+
+def _renglon_en_curso(cronometro, turno_dia, ahora):
+    return _renglon_base(cronometro, hora_salida(turno_dia), ahora)
+
+
+def _renglon_pausado(cronometro, turno_dia, pausa, ahora):
+    salida = hora_salida(turno_dia)
+    renglon = _renglon_base(cronometro, salida, ahora)
+
+    # estado y la fila de pausa son dos hechos separados: un PAUSADO sin pausa abierta es
+    # una inconsistencia de datos, y vale más un nulo que tumbar la franja entera.
+    renglon['en_pausa_desde'] = _hora(pausa.inicio_pausa) if pausa else None
+    renglon['pausa_larga'] = pausa_larga(minutos_en_pausa(pausa, ahora))
+    return renglon
+
+
+def _renglon_cerrado(cronometro):
+    """Sin marcas ni hora de salida: ya no hay nada que avisar. Y sin estado, que sería
+    constante. Los minutos son la contrapartida de que un cronómetro impuesto siga
+    entrando en los cálculos."""
+    planeacion = cronometro.registro_produccion.registro_planeacion
+
+    return {
+        'id': cronometro.id,
+        'dom_id': planeacion.dom_id,
+        'planeacion': planeacion.numero_registro,
+        'produccion': cronometro.registro_produccion.numero_registro,
+        'inicio_por': _nombre(cronometro.usuario),
+        'motivo_cierre': cronometro.motivo_cierre,
+        'minutos_totales': cronometro.minutos_totales,
+        'fin': _fecha_hora(cronometro.fin),
+        'cerrado_por_sistema': _fecha_hora(cronometro.cerrado_por_sistema),
+    }
+
+
+# Lo grave arriba, dentro de cada sección. En pausados manda la pausa larga y no el turno
+# terminado: la pausa es un aviso con plazo —30 minutos hasta el cierre automático— y el
+# turno terminado es un hecho consumado.
+
+def _orden_en_curso(renglon):
+    return 0 if renglon['turno_terminado'] else 1 if renglon['por_terminar'] else 2
+
+
+def _orden_pausados(renglon):
+    return 0 if renglon['pausa_larga'] else 1 if renglon['turno_terminado'] else 2
+
+
+class CronometroAvisosView(APIView):
+
+# Lo que la franja necesita saber: qué cronómetros siguen abiertos y cuáles cerró el
+# sistema hace poco. Sólo lee, y por eso GERENCIA entra aquí y no en las otras cuatro.
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not verificar_rol(request, ['ADMIN', 'LIDER_PLANTA', 'GERENCIA']):
+            return Response(
+                {'error': 'No tienes los permisos necesarios para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        ahora = timezone.now()
+
+        # list() consulta una sola vez: sin él, cada recorrido volvería a la base.
+        abiertos = list(_cronometros_abiertos())
+        candidatos = _candidatos(abiertos, _turnos_dia_de(abiertos))
+
+        # El barrido va antes del listado para que lo cerrado en esta misma petición ya
+        # salga en su sección. Su fallo va aislado dentro de barrer: si el cierre
+        # revienta, la franja responde igual y el cronómetro sigue en sin_finalizar.
+        # Se filtra por id y no por estado: cerrar() escribe sobre una instancia propia
+        # que trae con select_for_update, así que el objeto de esta lista no se entera.
+        cerrados_ahora = {cronometro.id for cronometro, _ in barrer(candidatos, ahora)}
+        siguen_abiertos = [trio for trio in candidatos if trio[0].id not in cerrados_ahora]
+
+        # Lista plana con estado, ya ordenada: el frontend agrupa en secciones pero no
+        # decide nada. Cada sección se ordena por su propio criterio, y ninguno de los dos
+        # se puede resolver en SQL porque las marcas no son columnas.
+        en_curso = sorted(
+            (_renglon_en_curso(cronometro, turno_dia, ahora)
+             for cronometro, turno_dia, _ in siguen_abiertos
+             if cronometro.estado != 'PAUSADO'),
+            key=_orden_en_curso)
+        pausados = sorted(
+            (_renglon_pausado(cronometro, turno_dia, pausa, ahora)
+             for cronometro, turno_dia, pausa in siguen_abiertos
+             if cronometro.estado == 'PAUSADO'),
+            key=_orden_pausados)
+
+        return Response(
+            {
+                'sin_finalizar': en_curso + pausados,
+                'cerrados_recientes': [_renglon_cerrado(c) for c in _cerrados_recientes(ahora)],
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+def _rechazo_al_finalizar(cronometro):
+    """El mensaje que impide finalizar, o None si se puede.
+
+    El cierre del sistema se comprueba primero: esos cronómetros también están
+    FINALIZADO, y la segunda guarda los atraparía con el mensaje genérico."""
+    if cronometro.cerrado_por_sistema:
+        return ('El sistema cerró este cronómetro el %s. Motivo: %s. Los minutos '
+                'registrados son los del tope, no los medidos: contacte al '
+                'administrador si debe corregirlos.'
+                % (_fecha_hora(cronometro.cerrado_por_sistema),
+                   cronometro.get_motivo_cierre_display()))
+
+    if cronometro.estado == 'FINALIZADO':
+        return 'Este cronómetro ya fue finalizado el %s.' % _fecha_hora(cronometro.fin)
+
+    # Un pausado hay que reanudarlo antes: es regla de negocio del cliente, y el mensaje
+    # dice qué hacer en vez de limitarse a nombrar el estado.
+    if cronometro.estado == 'PAUSADO':
+        return 'Reanude el cronómetro antes de finalizarlo.'
+
+    return None
+
+
 class CronometroFinalizarView(APIView):
 
     permission_classes = [IsAuthenticated]
@@ -4021,14 +4222,11 @@ class CronometroFinalizarView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Valida estado - solo se puede finalizar si está EN_CURSO
-        # No se puede finalizar si esta PAUSADO - usuario debe verificar primero
-
-        if cronometro.estado != 'EN_CURSO':
-            return Response(
-                {'error': f'No se puede finalizar un cronometro en estado {cronometro.estado}.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Solo se puede finalizar si está EN_CURSO. Los tres motivos por los que no se
+        # puede son distintos entre sí, y cada uno pide una acción distinta.
+        rechazo = _rechazo_al_finalizar(cronometro)
+        if rechazo:
+            return Response({'error': rechazo}, status=status.HTTP_400_BAD_REQUEST)
         
         # Registra fin y calcula minutos_totales
         cronometro.fin = timezone.now()
