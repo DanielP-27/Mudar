@@ -73,6 +73,11 @@ function PaginaEditarDom() {
     }, { replace: true })
   }, [setSearchParams])
 
+  // Enlace profundo desde la franja de cronómetros. La terna DOM + nº de planeación +
+  // nº de producción.
+  const planeacionPedida = Number(searchParams.get('planeacion')) || null
+  const produccionPedida = Number(searchParams.get('produccion')) || null
+
   // Auto-centra la pestaña activa en la tira deslizable (móvil). En escritorio,
   // como la cuadrícula 4×2 cabe, scrollIntoView no produce desplazamiento.
   const tabActivaRef = useRef(null)
@@ -222,6 +227,28 @@ function PaginaEditarDom() {
     }
     cargarTodo()
   }, [domId])
+
+  // Enlace profundo desde la franja: los números se traducen a índice cuando hay
+  // registros. Reacciona también a los parámetros y no sólo a la carga, porque ir a otra
+  // planeación del MISMO DOM no cambia domId y no volvería a cargar nada.
+  useEffect(() => {
+    if (!planeacionPedida || !planeaciones.length) return
+
+    const idxPlan = Math.max(0, planeaciones.findIndex(p => p.numero_registro === planeacionPedida))
+    setIdxPlaneacion(idxPlan)
+
+    if (produccionPedida) {
+      const producciones = planeaciones[idxPlan]?.registros_produccion ?? []
+      setIdxProduccion(Math.max(0, producciones.findIndex(p => p.numero_registro === produccionPedida)))
+    }
+
+    setSearchParams(prev => {
+      const siguiente = new URLSearchParams(prev)
+      siguiente.delete('planeacion')
+      siguiente.delete('produccion')
+      return siguiente
+    }, { replace: true })
+  }, [planeaciones, planeacionPedida, produccionPedida, setSearchParams])
 
   // Consulta RegistroTurnoDia cuando cambia la planeación activa
   useEffect(() => {

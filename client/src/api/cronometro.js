@@ -16,3 +16,9 @@ export const reanudarCronometro = (cronometroId) =>
 // Finaliza el cronómetro indicado y registra los minutos totales
 export const finalizarCronometro = (cronometroId) =>
   api.post('/api/cronometro/finalizar/', { cronometro_id: cronometroId })
+
+// Lo que la franja necesita: los cronómetros sin finalizar y los que cerró el sistema
+// en las últimas 48 horas. Ojo — este GET escribe: el barrido corre antes de listar.
+export const consultarAvisos = () =>
+  api.get('/api/cronometros/avisos/')
+

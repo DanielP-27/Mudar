@@ -8,6 +8,7 @@ import {
   finalizarCronometro,
 } from '../../api/cronometro'
 import { extraerMensajeError } from '../../utils/errores'
+import { useAvisos } from '../../context/AvisosContext'
 
 const formatearTiempo = (segundos) => {
   const h = Math.floor(segundos / 3600)
@@ -17,6 +18,10 @@ const formatearTiempo = (segundos) => {
 }
 
 function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAccion, puedeOperar = false, personasAsignadas }) {
+  // Se refresca en el finally y no sólo al acertar: si finalizar falla porque el sistema
+  // ya lo cerró, la franja debe reflejar ese cambio igual. Sin esto, quien cierra un
+  // cronómetro y se queda en la pantalla seguiría viendo su propio aviso.
+  const { refrescar } = useAvisos()
 
   const cronometroActivo =
     registrosTiempo.find(r => r.estado === 'EN_CURSO' || r.estado === 'PAUSADO') ??
@@ -62,6 +67,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       setError(extraerMensajeError(err, 'No se pudo iniciar el cronómetro.'))
     } finally {
       setEjecutando(false)
+      refrescar()
     }
   }
 
@@ -75,6 +81,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       setError(extraerMensajeError(err, 'No se pudo pausar el cronómetro.'))
     } finally {
       setEjecutando(false)
+      refrescar()
     }
   }
 
@@ -88,6 +95,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       setError(extraerMensajeError(err, 'No se pudo reanudar el cronómetro.'))
     } finally {
       setEjecutando(false)
+      refrescar()
     }
   }
 
@@ -101,6 +109,7 @@ function CronometroProduccion({ registrosTiempo = [], registroProduccionId, onAc
       setError(extraerMensajeError(err, 'No se pudo finalizar el cronómetro.'))
     } finally {
       setEjecutando(false)
+      refrescar()
     }
   }
 

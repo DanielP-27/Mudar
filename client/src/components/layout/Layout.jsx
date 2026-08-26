@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAutenticacion } from '../../context/AuthContext'
 import { ROLES } from '../../routes/RoleRoute'
+import FranjaCronometros from './FranjaCronometros'
+import { ProveedorAvisos } from '../../context/AvisosContext'
 import Spinner from '../ui/Spinner'
 import { useEsEscritorio } from '../../hooks/useEsEscritorio'
 
@@ -22,6 +24,12 @@ const ROLES_CREAR_DOM = [ROLES.ADMIN, ROLES.ANALISTA_1, ROLES.ANALISTA_2]
 
 // Roles con permiso de desactivar DOM
 const ROLES_DESACTIVAR_DOM = [ROLES.ADMIN]
+
+// Roles con permiso para visualizar el componente de franja. Repite la lista de
+// CronometroAvisosView a propósito: la del backend es seguridad y no se toca; ésta
+// evita pedir lo que ya sabemos que van a negar, y de paso que un planeador quede en
+// «no se pudo consultar» de forma permanente. Si cambia una, cambia la otra.
+const ROLES_FRANJA = [ROLES.ADMIN, ROLES.LIDER_PLANTA, ROLES.GERENCIA]
 
 // Módulo de informes CONGELADO hasta después de la V1.0 (2026-08-05).
 // Las 3 pantallas son placeholders: el menú prometía algo que no existe.
@@ -320,10 +328,21 @@ function Layout({ modoLogin = false }) {
           <div className="hidden md:block flex-1" id="topbar-titulo" />
         </header>
 
-        {/* Contenido de la página activa */}
-        <main className="flex-1 overflow-y-auto p-3 md:p-5">
-          <Outlet />
-        </main>
+        {/* El proveedor envuelve a la franja y al <Outlet/> para que el cronómetro, que
+            vive dentro, pueda pedir un refresco tras cada acción. */}
+        <ProveedorAvisos habilitado={ROLES_FRANJA.includes(usuario?.rol)}>
+
+          {/* Franja de cronómetros — hermana del <Outlet/>, no hija: aquí no se desmonta
+              al navegar, así que sobrevive con su estado. Y queda fija sin necesidad de
+              position, porque en esta columna solo desplaza el <main>. */}
+          {ROLES_FRANJA.includes(usuario?.rol) && <FranjaCronometros />}
+
+          {/* Contenido de la página activa */}
+          <main className="flex-1 overflow-y-auto p-3 md:p-5">
+            <Outlet />
+          </main>
+
+        </ProveedorAvisos>
 
       </div>
     </div>
