@@ -9,8 +9,16 @@
 
 import { useState } from 'react'
 import { FiChevronDown, FiChevronUp, FiClock } from 'react-icons/fi'
+import { useAutenticacion } from '../../context/AuthContext'
 import { useAvisos } from '../../context/AvisosContext'
+import { ROLES } from '../../routes/RoleRoute'
 import RenglonCronometro from './RenglonCronometro'
+
+// Roles que pueden marcar un cierre automático como revisado. Es MÁS ESTRECHA que la de
+// ROLES_FRANJA en Layout.jsx: GERENCIA ve la franja pero no escribe en ella. Repite la
+// lista de CronometroRevisarView a propósito — la del backend es seguridad y no se toca;
+// ésta evita pintar un botón que el servidor rechazaría. Si cambia una, cambia la otra.
+const ROLES_REVISAR = [ROLES.ADMIN, ROLES.LIDER_PLANTA]
 
 // La banda es SIEMPRE la misma: un instrumento, no una notificación. Si cambiara de
 // color entera con cada estado, parecería un elemento distinto cada vez y el ojo no
@@ -108,8 +116,11 @@ function Seccion({ titulo, cuantos, children }) {
 }
 
 function FranjaCronometros() {
-  const { datos, fallo, pulso } = useAvisos()
+  const { datos, fallo, pulso, refrescar } = useAvisos()
+  const { usuario } = useAutenticacion()
   const [desplegada, setDesplegada] = useState(false)
+
+  const puedeRevisar = ROLES_REVISAR.includes(usuario?.rol)
 
   const resumen = datos === null ? null : resumir(datos)
   const estado = estadoDe(resumen, fallo)
@@ -185,15 +196,27 @@ function FranjaCronometros() {
           {enCurso.length > 0 && (
             <Seccion titulo="En curso" cuantos={enCurso.length}>
               {enCurso.map((r) => (
-                <RenglonCronometro key={r.id} renglon={r} alNavegar={() => setDesplegada(false)} />
+                <RenglonCronometro
+                  key={r.id}
+                  renglon={r}
+                  alNavegar={() => setDesplegada(false)}
+                  puedeRevisar={puedeRevisar}
+                />
               ))}
             </Seccion>
           )}
 
           {pausados.length > 0 && (
             <Seccion titulo="Pausados" cuantos={pausados.length}>
+              {/* Sin alRevisar: aquí el botón sólo lleva al registro, no marca nada. La
+                  fila sale de esta sección cuando alguien reanuda el cronómetro. */}
               {pausados.map((r) => (
-                <RenglonCronometro key={r.id} renglon={r} alNavegar={() => setDesplegada(false)} />
+                <RenglonCronometro
+                  key={r.id}
+                  renglon={r}
+                  alNavegar={() => setDesplegada(false)}
+                  puedeRevisar={puedeRevisar}
+                />
               ))}
             </Seccion>
           )}
@@ -201,10 +224,17 @@ function FranjaCronometros() {
           {cerradosRecientes.length > 0 && (
             <Seccion titulo="Cerrados por el sistema" cuantos={cerradosRecientes.length}>
               {cerradosRecientes.map((r) => (
-                <RenglonCronometro key={r.id} renglon={r} cerrado alNavegar={() => setDesplegada(false)} />
+                <RenglonCronometro
+                  key={r.id}
+                  renglon={r}
+                  cerrado
+                  alNavegar={() => setDesplegada(false)}
+                  puedeRevisar={puedeRevisar}
+                  alRevisar={refrescar}
+                />
               ))}
               <p className="px-3 py-2 text-center text-xs text-gray-400 md:px-5">
-                Cerrados en las últimas 48 horas
+                Cerrados en las últimas 48 horas, o hasta que alguien los marque revisados
               </p>
             </Seccion>
           )}

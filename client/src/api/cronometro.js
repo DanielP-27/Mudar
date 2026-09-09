@@ -17,6 +17,12 @@ export const reanudarCronometro = (cronometroId) =>
 export const finalizarCronometro = (cronometroId) =>
   api.post('/api/cronometro/finalizar/', { cronometro_id: cronometroId })
 
+// Marca un cierre automático como atendido. Lo saca de la franja PARA TODOS, no sólo
+// para quien pulsa: la fila es un hecho sobre el cronómetro, no un pendiente de cada
+// usuario. No corrige los minutos impuestos.
+export const revisarCronometro = (cronometroId) =>
+  api.post('/api/cronometro/revisar/', { cronometro_id: cronometroId })
+
 // Lo que la franja necesita: los cronómetros sin finalizar y los que cerró el sistema
 // en las últimas 48 horas. Ojo — este GET escribe: el barrido corre antes de listar.
 export const consultarAvisos = () =>

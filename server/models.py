@@ -916,11 +916,25 @@ class RegistroTiempoProduccion(models.Model):
     cerrado_por_sistema = models.DateTimeField(blank=True, null=True, verbose_name='Cerrado por el sistema', help_text='Instante en que el barrido cerró el cronómetro. Distinto de fin, que es cuando dejó de ser creíble.')
     motivo_cierre = models.CharField(max_length=20, choices=MOTIVOS_CIERRE, blank=True, null=True, verbose_name='Motivo del cierre automático')
 
+    # La respuesta humana al cierre automático — nulos mientras nadie haya intervenido,
+    # igual que los dos campos de arriba. Que revisado_en tenga valor es lo único que saca
+    # la fila de la franja antes de que expire su ventana de 48 horas.
+    # revisado_por lleva related_name propio porque usuario, más abajo, ya ocupa el
+    # accesor inverso por omisión: dos claves foráneas al mismo modelo no pueden
+    # compartirlo y Django lo rechaza antes de generar la migración.
+
+    revisado_en = models.DateTimeField(blank=True, null=True, verbose_name='Revisado el', help_text='Instante en que alguien declaró haber atendido este cierre automático.')
+    revisado_por = models.ForeignKey(User, on_delete=models.RESTRICT, blank=True, null=True, related_name='cronometros_revisados', verbose_name='Revisado por', help_text='Quién lo atendió. Con revisado_en lleno nunca es nulo: una revisión sin autor no dice nada.')
+
     # auditoria
 
+    # RESTRICT y no SET_NULL: quién corrió un cronómetro es autoría histórica, lo mismo
+    # que en AuditoriaDom. Borrar al usuario dejaría la fila sin autor y nadie se
+    # enteraría; para sacar a alguien del sistema se desactiva, que es lo que ya hace la
+    # aplicación.
     usuario = models.ForeignKey(
         User,
-        on_delete=models.SET_NULL,
+        on_delete=models.RESTRICT,
         null=True,
         verbose_name='Usuario'
     )

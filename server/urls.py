@@ -66,6 +66,7 @@ from server.views import(
     CronometroPausaView,
     CronometroReanudarView,
     CronometroFinalizarView,
+    CronometroRevisarView,
     CronometroAvisosView,
 
     # Módulo 6 - Reportes y Dashboard
@@ -130,6 +131,7 @@ urlpatterns = [
     path('api/cronometro/pausar/', CronometroPausaView.as_view(), name='cronometro-pausar'),
     path('api/cronometro/reanudar/', CronometroReanudarView.as_view(), name='cronometro-reanudar'),
     path('api/cronometro/finalizar/', CronometroFinalizarView.as_view(), name='cronometro-finalizar'),
+    path('api/cronometro/revisar/', CronometroRevisarView.as_view(), name='cronometro-revisar'),
     path('api/cronometros/avisos/', CronometroAvisosView.as_view(), name='cronometro-avisos'),
 
     # Módulo 6 - Reportes y dashboard

@@ -347,8 +347,10 @@ class RegistroTiempoProduccionSerializer(serializers.ModelSerializer):
             'usuario',
             'cerrado_por_sistema',
             'motivo_cierre',
+            'revisado_en',          #Los escribe CronometroRevisarView, nunca este serializer
+            'revisado_por',
         ]
-        read_only_fields = ['minutos_totales', 'total_segundos_pausados']
+        read_only_fields = ['minutos_totales', 'total_segundos_pausados', 'revisado_en', 'revisado_por']
 
 # Serializer: ProductoProduccion
 # Uso: registro de cantidades parciales elaboradas por producto dentro de un RegistroProduccion

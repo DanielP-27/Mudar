@@ -4019,9 +4019,12 @@ def _candidatos(cronometros, turnos_dia):
 
 
 def _cerrados_recientes(ahora):
+    # Dos salidas de esta sección, no una: la ventana de 48 h para lo que nadie miró, y
+    # la marca de revisado para lo que alguien ya atendió. Sin la segunda, el listado
+    # sólo lo vacía el reloj y no distingue lo visto de lo pendiente.
     desde = ahora - timedelta(hours=HORAS_CERRADOS_RECIENTES)
     return (RegistroTiempoProduccion.objects
-            .filter(cerrado_por_sistema__gte=desde)
+            .filter(cerrado_por_sistema__gte=desde, revisado_en__isnull=True)
             .select_related('usuario', 'registro_produccion__registro_planeacion')
             .order_by('-cerrado_por_sistema'))
 
@@ -4256,7 +4259,82 @@ class CronometroFinalizarView(APIView):
             },
             status = status.HTTP_200_OK
         )
-        
+
+
+class CronometroRevisarView(APIView):
+    """Marca un cierre automático como atendido para que salga de la franja.
+
+    Sin esto, un cronómetro que el sistema cerró sólo desaparece cuando expira su
+    ventana de 48 horas: nada distingue el que alguien ya miró del que nadie ha visto.
+
+    No corrige los minutos impuestos —eso es la segunda mitad de la resolución humana y
+    va con el panel del dashboard—, sólo declara que una persona se hizo cargo.
+
+    GERENCIA ve la franja pero no entra aquí: es un rol de sólo lectura."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not verificar_rol(request, ['ADMIN', 'LIDER_PLANTA']):
+            return Response(
+                {'error': 'No tienes los permisos necesarios para realizar esta acción'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        cronometro_id = request.data.get('cronometro_id', None)
+        if cronometro_id is None:
+            return Response(
+                {'error': 'Debe indicar el cronómetro a revisar'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # select_related porque la auditoría navega los tres tramos hasta el DOM.
+        # ValueError/TypeError: cronometro_id no convertible a entero.
+        try:
+            cronometro = (RegistroTiempoProduccion.objects
+                          .select_related('registro_produccion__registro_planeacion__dom')
+                          .get(id=cronometro_id))
+        except (RegistroTiempoProduccion.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {'error': 'Cronómetro no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # is None y no falsedad: la familia de defectos del valor falsy leído como
+        # ausencia ya costó dos correcciones en este mismo modelo.
+        if cronometro.cerrado_por_sistema is None:
+            return Response(
+                {'error': 'Este cronómetro lo cerró una persona: no hay nada que revisar.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        ahora = timezone.now()
+
+        with transaction.atomic():
+            actualizadas = (RegistroTiempoProduccion.objects
+                            .filter(pk=cronometro.pk, revisado_en__isnull=True)
+                            .update(revisado_en=ahora, revisado_por=request.user))
+
+            if actualizadas == 0:
+                return Response(
+                    {'mensaje': 'Este cronómetro ya había sido revisado.'},
+                    status=status.HTTP_200_OK
+                )
+
+            registrar_auditoria(
+                dom=cronometro.registro_produccion.registro_planeacion.dom,
+                usuario=request.user,
+                accion='EDICION',
+                etapa='etapa_4',
+                campos_modificados={'revisado_en': {'antes': 'None', 'despues': str(ahora)}},
+                request=request,
+            )
+
+        return Response(
+            {'mensaje': 'Cronómetro marcado como revisado.'},
+            status=status.HTTP_200_OK
+        )
+
 # FIN MODULO 5 - CRONÓMETRO
 
 # INICIO MODULO 6 - REPORTES Y DASHBOARD 

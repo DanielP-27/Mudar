@@ -1,12 +1,8 @@
 // src/components/layout/RenglonCronometro.jsx
-//
-// Un cronómetro dentro de la franja. Es un enlace a la etapa de producción del DOM que
-// lo contiene y NO lleva botón de finalizar: la colisión entre dos líderes se corrige
-// sola porque navegar es lo que dispara el recálculo.
-//
-// El backend manda estado y valores; las palabras se eligen aquí.
 
-import { Link } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { revisarCronometro } from '../../api/cronometro'
 
 // La etapa de producción es 'etapa4' en la URL aunque la pantalla la rotule «Etapa 5»:
 // los identificadores de pestaña arrancan en etapa0.
@@ -49,8 +45,10 @@ const MOTIVOS = {
   PAUSA_ABANDONADA: 'Pausa abandonada',
 }
 
-function RenglonCronometro({ renglon, cerrado = false, alNavegar }) {
+function RenglonCronometro({ renglon, cerrado = false, alNavegar, puedeRevisar = false, alRevisar }) {
   const marca = cerrado ? null : frase(renglon)
+  const [enviando, setEnviando] = useState(false)
+  const navegar = useNavigate()
 
   const filete = marca?.grave
     ? 'border-l-red-400 bg-red-50/60'
@@ -58,11 +56,38 @@ function RenglonCronometro({ renglon, cerrado = false, alNavegar }) {
       ? 'border-l-amber-400 bg-amber-50/60'
       : 'border-l-transparent'
 
+  const pideAccion = cerrado || renglon.estado === 'PAUSADO'
+  const rotulo = pideAccion && puedeRevisar ? 'Revisar' : 'Ver'
+
+  function abrir() {
+    alNavegar?.()
+    navegar(destino(renglon))
+  }
+
+  // Sólo los cerrados se marcan: un pausado sale de la franja cuando alguien lo reanuda,
+  // no cuando alguien lo mira, y si se consulta sin reanudar el aviso debe seguir ahí.
+  //
+  // Marcar antes de navegar: la navegación desmonta este componente y dejaría la petición
+  // a medio vuelo. Y si falla NO se navega, o el registro se vería como ya atendido.
+  async function revisarYAbrir() {
+    if (!(cerrado && puedeRevisar)) return abrir()
+
+    setEnviando(true)
+    try {
+      await revisarCronometro(renglon.id)
+      await alRevisar?.()
+      abrir()
+    } catch {
+      setEnviando(false)
+    }
+  }
+
   return (
-    <Link
-      to={destino(renglon)}
-      onClick={alNavegar}
-      className={`block border-b border-l-4 border-b-gray-100 px-3 py-2.5 hover:bg-gray-50 active:bg-gray-100 md:px-5 ${filete}`}
+    <div className={`flex items-center border-b border-l-4 border-b-gray-100 ${filete}`}>
+    <div
+      // min-w-0 no es adorno: sin él un texto largo empujaría el botón fuera de la fila
+      // en vez de recortarse. Sin hover, porque esta zona ya no responde al clic.
+      className="min-w-0 flex-1 px-3 py-2.5 md:px-5"
     >
       <p className="font-mono text-sm font-semibold text-gray-800">
         DOM {renglon.dom_id} · Planeación #{renglon.planeacion} · Producción #{renglon.produccion}
@@ -93,7 +118,20 @@ function RenglonCronometro({ renglon, cerrado = false, alNavegar }) {
           {' · '}{renglon.minutos_totales} min registrados
         </p>
       )}
-    </Link>
+    </div>
+
+      {/* aria-label con el DOM dentro: tres botones seguidos rotulados «Ver» son
+          indistinguibles para un lector de pantalla. */}
+      <button
+        type="button"
+        onClick={revisarYAbrir}
+        disabled={enviando}
+        aria-label={`${rotulo} DOM ${renglon.dom_id}`}
+        className="mr-3 flex-none rounded border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 active:bg-gray-200 disabled:opacity-50 md:mr-5"
+      >
+        {enviando ? 'Guardando…' : rotulo}
+      </button>
+    </div>
   )
 }
 
