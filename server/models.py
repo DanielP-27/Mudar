@@ -1059,8 +1059,12 @@ class RegistroTratamiento(models.Model):
 # clase relacionada a los perfiles de usuarios para el manejo de permisos
 
 class PerfilUsuario(models.Model):
-    # definición de roles de permisos según usuario, en views.py se utilizarán estas declaraciones 
+    # definición de roles de permisos según usuario, en views.py se utilizarán estas declaraciones
 
+    # Los seis nombres de rol se declaran también como llaves del diccionario 'permisos',
+    # dentro de puede_editar_etapas. Si un nombre deja de coincidir entre las dos, ese rol
+    # cae al valor por defecto del .get() y pierde TODAS sus etapas: la aplicación responde
+    # 403 como si fuera una denegación legítima, sin error ni registro que lo delate.
     ROLES_CHOICES = [
         ('GERENCIA', 'Gerencia'),
         ('ADMIN', 'Administrador'),
@@ -1083,6 +1087,11 @@ class PerfilUsuario(models.Model):
         return f"{self.user.get_full_name()} - {self.get_rol_display()}"
     
     # Método en el cual se establece permisos para editar etapas especificas
+
+    # Las llaves de 'permisos' deben coincidir exactamente con los nombres de ROLES_CHOICES,
+    # arriba en esta misma clase. Un nombre mal escrito aquí no falla: el .get(self.rol, [])
+    # devuelve lista vacía y ese rol se queda sin etapas.
+    # Lo vigila server/tests/test_permisos_por_etapa.py.
     def puede_editar_etapas(self, etapa):
         permisos = {
             'GERENCIA': [ ],
