@@ -9,6 +9,12 @@ venv/
 .env.*
 !.env.example
 
+# Semilla de configuracion: se versiona el mecanismo, no los datos.
+# semilla.json lleva usuarios, clientes y productos reales de Mudar; viaja
+# fuera de git, junto a la copia cifrada de los dos .env.
+server/semilla/*.json
+!server/semilla/ejemplo.json
+
 # Bytecode Python
 __pycache__/
 *.pyc
@@ -24,6 +30,26 @@ staticfiles/
 # Logs
 *.log
 logs/
+
+# Volcados de base de datos: el .dump lleva los datos y el de globales lleva los
+# hashes de las contrasenas de los roles. Se cuidan como el .env.
+*.dump
+*.sql
+*.backup
+
+# Claves y certificados
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Restos de editores y de parches
+*~
+*.swp
+*.swo
+*.orig
+*.rej
 
 # Configuracion de editores
 .vscode/

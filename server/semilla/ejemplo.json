@@ -1,0 +1,49 @@
+[
+{"model": "auth.user", "pk": 1, "fields": {"password": "!", "last_login": null, "is_superuser": true, "username": "admin_ejemplo", "first_name": "Admin", "last_name": "De Ejemplo", "email": "", "is_staff": true, "is_active": true, "date_joined": "2026-01-01T12:00:00Z", "groups": [], "user_permissions": []}},
+{"model": "auth.user", "pk": 2, "fields": {"password": "!", "last_login": null, "is_superuser": false, "username": "analista1_ejemplo", "first_name": "Analista Uno", "last_name": "De Ejemplo", "email": "", "is_staff": false, "is_active": true, "date_joined": "2026-01-01T12:00:00Z", "groups": [], "user_permissions": []}},
+{"model": "auth.user", "pk": 3, "fields": {"password": "!", "last_login": null, "is_superuser": false, "username": "analista2_ejemplo", "first_name": "Analista Dos", "last_name": "De Ejemplo", "email": "", "is_staff": false, "is_active": true, "date_joined": "2026-01-01T12:00:00Z", "groups": [], "user_permissions": []}},
+{"model": "auth.user", "pk": 4, "fields": {"password": "!", "last_login": null, "is_superuser": false, "username": "planeador_ejemplo", "first_name": "Planeador", "last_name": "De Ejemplo", "email": "", "is_staff": false, "is_active": true, "date_joined": "2026-01-01T12:00:00Z", "groups": [], "user_permissions": []}},
+{"model": "auth.user", "pk": 5, "fields": {"password": "!", "last_login": null, "is_superuser": false, "username": "lider_ejemplo", "first_name": "Lider De Planta", "last_name": "De Ejemplo", "email": "", "is_staff": false, "is_active": true, "date_joined": "2026-01-01T12:00:00Z", "groups": [], "user_permissions": []}},
+{"model": "auth.user", "pk": 6, "fields": {"password": "!", "last_login": null, "is_superuser": false, "username": "gerencia_ejemplo", "first_name": "Gerencia", "last_name": "De Ejemplo", "email": "", "is_staff": false, "is_active": true, "date_joined": "2026-01-01T12:00:00Z", "groups": [], "user_permissions": []}},
+
+{"model": "server.perfilusuario", "pk": 1, "fields": {"user": 1, "rol": "ADMIN"}},
+{"model": "server.perfilusuario", "pk": 2, "fields": {"user": 2, "rol": "ANALISTA_1"}},
+{"model": "server.perfilusuario", "pk": 3, "fields": {"user": 3, "rol": "ANALISTA_2"}},
+{"model": "server.perfilusuario", "pk": 4, "fields": {"user": 4, "rol": "PLANEADOR"}},
+{"model": "server.perfilusuario", "pk": 5, "fields": {"user": 5, "rol": "LIDER_PLANTA"}},
+{"model": "server.perfilusuario", "pk": 6, "fields": {"user": 6, "rol": "GERENCIA"}},
+
+{"model": "server.familiaproducto", "pk": 1, "fields": {"nombre_familia": "FAMILIA DE EJEMPLO CON PRODUCTOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.familiaproducto", "pk": 2, "fields": {"nombre_familia": "FAMILIA DE EJEMPLO VACIA", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.familiaproducto", "pk": 3, "fields": {"nombre_familia": "FAMILIA DE EJEMPLO INACTIVA", "activo": false, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+
+{"model": "server.turno", "pk": 1, "fields": {"nombre_turno": "Turno mañana", "activo": true, "turno_creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.turno", "pk": 3, "fields": {"nombre_turno": "Turno tarde", "activo": true, "turno_creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+
+{"model": "server.cliente", "pk": 1, "fields": {"nombre_cliente": "CLIENTE DE EJEMPLO CON NIT", "nit": "900000001-1", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.cliente", "pk": 2, "fields": {"nombre_cliente": "CLIENTE DE EJEMPLO SIN NIT", "nit": null, "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.cliente", "pk": 3, "fields": {"nombre_cliente": "CLIENTE DE EJEMPLO INACTIVO", "nit": "900000003-3", "activo": false, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+
+{"model": "server.listapredefinida", "pk": 1, "fields": {"tipo": "TIPO_ESTADO_DOM", "nombre": "ESTADO DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 2, "fields": {"tipo": "TIPO_ESTADO_DOM", "nombre": "ESTADO DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 3, "fields": {"tipo": "TIPO_ESTADO_DOM", "nombre": "ESTADO DE EJEMPLO INACTIVO", "activo": false, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 4, "fields": {"tipo": "RESPONSABLE", "nombre": "RESPONSABLE DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 5, "fields": {"tipo": "RESPONSABLE", "nombre": "RESPONSABLE DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 6, "fields": {"tipo": "OBJETIVO_PLANEACION", "nombre": "OBJETIVO DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 7, "fields": {"tipo": "OBJETIVO_PLANEACION", "nombre": "OBJETIVO DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 8, "fields": {"tipo": "LIDER_PLANTA", "nombre": "LIDER DE PLANTA DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 9, "fields": {"tipo": "LIDER_PLANTA", "nombre": "LIDER DE PLANTA DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 10, "fields": {"tipo": "LIDER_ALMACEN", "nombre": "LIDER DE ALMACEN DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 11, "fields": {"tipo": "LIDER_ALMACEN", "nombre": "LIDER DE ALMACEN DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 12, "fields": {"tipo": "TIPO_NEGOCIACION", "nombre": "NEGOCIACION DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 13, "fields": {"tipo": "TIPO_NEGOCIACION", "nombre": "NEGOCIACION DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 14, "fields": {"tipo": "TIPO_MADERA", "nombre": "MADERA DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 15, "fields": {"tipo": "TIPO_MADERA", "nombre": "MADERA DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 16, "fields": {"tipo": "EMPAQUE_SERVICIO", "nombre": "EMPAQUE DE EJEMPLO UNO", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.listapredefinida", "pk": 17, "fields": {"tipo": "EMPAQUE_SERVICIO", "nombre": "EMPAQUE DE EJEMPLO DOS", "activo": true, "creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z"}},
+
+{"model": "server.productos", "pk": 1, "fields": {"nombre_producto": "PRODUCTO DE EJEMPLO A", "familia_producto": 1, "tiempo_produccion_unitario": 15, "activo": true, "producto_creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.productos", "pk": 2, "fields": {"nombre_producto": "PRODUCTO DE EJEMPLO B", "familia_producto": 1, "tiempo_produccion_unitario": 30, "activo": true, "producto_creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.productos", "pk": 3, "fields": {"nombre_producto": "PRODUCTO DE EJEMPLO C INACTIVO", "familia_producto": 1, "tiempo_produccion_unitario": 20, "activo": false, "producto_creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}},
+{"model": "server.productos", "pk": 4, "fields": {"nombre_producto": "PRODUCTO DE EJEMPLO D SIN FAMILIA", "familia_producto": null, "tiempo_produccion_unitario": 25, "activo": true, "producto_creado_por": 1, "fecha_creacion": "2026-01-01T12:00:00Z", "fecha_modificacion": "2026-01-01T12:00:00Z"}}
+]
