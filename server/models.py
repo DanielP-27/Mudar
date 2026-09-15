@@ -1,7 +1,7 @@
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.contrib.auth.models import User
-from django.db.models import Sum
+from django.db.models import Sum, Q
 
 
 # ── Suelo de los campos numéricos ─────────────────────────────────────────────
@@ -43,7 +43,7 @@ class Cliente (models.Model):
     cliente_id = models.AutoField(primary_key=True, verbose_name='Codigo cliente')
     nombre_cliente = models.CharField(max_length=200, verbose_name='Nombre cliente')
     nit = models.CharField(max_length=20, unique=True, null=True, blank=True, verbose_name='NIT')
-    activo = models.BooleanField(default=True, db_index=True, verbose_name='Cliente activo')
+    activo = models.BooleanField(default=True, verbose_name='Cliente activo')
 
     # Auditoria 
     creado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='cliente_creado')
@@ -66,7 +66,7 @@ class Cliente (models.Model):
 class FamiliaProducto(models.Model):
     familia_id = models.AutoField(primary_key=True, verbose_name='Código familia') 
     nombre_familia = models.CharField(max_length=100, verbose_name='Nombre familia')
-    activo = models.BooleanField(default=True, db_index=True, verbose_name='Familia activa')
+    activo = models.BooleanField(default=True, verbose_name='Familia activa')
 
     # Auditoria 
     creado_por = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='familia_creada_por')
@@ -92,7 +92,7 @@ class Productos(models.Model):
     nombre_producto = models.CharField (max_length=200, verbose_name='Nombre del producto')
     familia_producto = models.ForeignKey(FamiliaProducto, on_delete=models.RESTRICT, related_name='productos', verbose_name='Familia de Producto', null=True, blank=True)
     tiempo_produccion_unitario= models.IntegerField(verbose_name='Tiempo de producción de una unidad en minutos', validators=[MinValueValidator(1, message=MENSAJE_MAYOR_QUE_CERO)])
-    activo=models.BooleanField(default=True, db_index=True, verbose_name='Producto_activo')
+    activo=models.BooleanField(default=True, verbose_name='Producto_activo')
 
     # Auditoria 
 
@@ -118,7 +118,7 @@ class Turno(models.Model):
 
     turno_id = models.AutoField(primary_key=True, verbose_name = 'código del turno')
     nombre_turno = models.CharField(max_length=100, verbose_name='Nombre del turno')
-    activo = models.BooleanField(default=True, db_index=True, verbose_name = 'Turno activo')
+    activo = models.BooleanField(default=True, verbose_name = 'Turno activo')
 
     # Auditoria 
 
@@ -229,9 +229,9 @@ class ListaPredefinida(models.Model):
     ]
      
      lista_id=models.AutoField(primary_key=True, verbose_name='codigo del listado')
-     tipo = models.CharField(max_length=50, choices=TIPO_CHOICES, verbose_name='Tipo de Listado', db_index=True)
+     tipo = models.CharField(max_length=50, choices=TIPO_CHOICES, verbose_name='Tipo de Listado')
      nombre = models.CharField(max_length=200, verbose_name='Nombre',help_text='Texto que ve el usuario')
-     activo = models.BooleanField(default=True, verbose_name='Activo', db_index=True)
+     activo = models.BooleanField(default=True, verbose_name='Activo')
 
     # Elementos de auditoria para control de cambios 
      creado_por = models.ForeignKey(User,on_delete=models.RESTRICT, related_name='listas_creadas', verbose_name='Creado Por')
@@ -274,7 +274,7 @@ class Dom(models.Model):
     fecha_asignacion_dom = models.DateField(auto_now_add=True, verbose_name='Fecha asignación DOM')
     nombre_cliente=models.ForeignKey(Cliente, on_delete=models.RESTRICT, related_name='doms', verbose_name='Cliente')
     descripcion=models.TextField(blank=True, null=True, verbose_name='Descripción')
-    tipo_estado_dom = models.CharField(max_length=100, verbose_name='Tipo o Estado del DOM', db_index=True, help_text='Referencia a ListaPredifinida tipo=TIPO:ESTADO:DOM')
+    tipo_estado_dom = models.CharField(max_length=100, verbose_name='Tipo o Estado del DOM', help_text='Referencia a ListaPredifinida tipo=TIPO:ESTADO:DOM')
     fecha_solicitada_cliente = models.DateField(verbose_name= 'Fecha de entrega solicitada por el cliente')
     responsable = models.CharField(max_length=200, verbose_name='Nombre Responsable', help_text='Referencia a ListaPrededefinida tipo=RESPONSABLE')
     
@@ -319,6 +319,13 @@ class Dom(models.Model):
         verbose_name_plural = 'DOMS'
         ordering = ['-dom_id']
         constraints = [suelo('doms', 'tiempo_salida_almacen', 0, nulable=True), suelo('doms', 'cantidad_empaques', 1, nulable=True)]
+        indexes = [
+            models.Index(
+                fields=['dom_id'],
+                condition=Q(dom_liberado_cierre=False),
+                name='dom_activo_idx',
+            ),
+        ]
 
     def __str__(self):
         return f"DOM #{self.dom_id} - {self.nombre_cliente}"
@@ -945,6 +952,18 @@ class RegistroTiempoProduccion(models.Model):
         verbose_name_plural = 'Registros Tiempo Producción'
         ordering = ['-inicio']
         constraints = [suelo('registros_tiempo_produccion', 'total_segundos_pausados', 0), suelo('registros_tiempo_produccion', 'minutos_totales', 0, nulable=True)]
+        indexes = [
+            models.Index(
+                fields=['inicio'],
+                condition=~Q(estado='FINALIZADO'),
+                name='crono_abierto_idx',
+            ),
+            models.Index(
+                fields=['cerrado_por_sistema'],
+                condition=Q(cerrado_por_sistema__isnull=False, revisado_en__isnull=True),
+                name='crono_sin_revisar_idx',
+            ),
+        ]
 
     def __str__(self):
         return f"Tiempo {self.estado} - {self.minutos_totales or 0} min"
