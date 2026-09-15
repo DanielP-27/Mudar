@@ -190,7 +190,11 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 3600
     CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', cast=Csv())
 
-    (BASE_DIR / 'logs').mkdir(exist_ok=True)
+    # La ruta de los registros es la única de este bloque que difiere entre desarrollo y
+    # producción. En el servidor viven en /var/log/mudar, que es donde los busca un
+    # administrador y donde apunta fail2ban; en local, el valor por defecto deja todo igual.
+    LOG_DIR = Path(config('LOG_DIR', default=BASE_DIR / 'logs'))
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     LOGGING = {
         'version': 1,
@@ -204,19 +208,25 @@ if not DEBUG:
         'handlers': {
             'archivo': {
                 'class': 'logging.handlers.RotatingFileHandler',
-                'filename': BASE_DIR / 'logs' / 'mudar.log',
+                'filename': LOG_DIR / 'mudar.log',
                 'maxBytes': 5 * 1024 * 1024,
                 'backupCount': 3,
                 'formatter': 'detallado',
+                # Sin esto, la biblioteca abre el archivo con la codificación del sistema: cp1252 en
+                # Windows y la del servicio en Linux. Un carácter que no quepa no se degrada, se
+                # pierde: emit captura el error y descarta la línea.
+                'encoding': 'utf-8',
             },
             # Archivo propio: fail2ban vigila una ruta concreta y le conviene que todo
             # lo que hay en ella sea de su incumbencia.
             'seguridad': {
                 'class': 'logging.handlers.RotatingFileHandler',
-                'filename': BASE_DIR / 'logs' / 'seguridad.log',
+                'filename': LOG_DIR / 'seguridad.log',
                 'maxBytes': 5 * 1024 * 1024,
                 'backupCount': 3,
                 'formatter': 'detallado',
+                # Misma razón que arriba, y aquí pesa más: fail2ban no bloquea lo que no lee.
+                'encoding': 'utf-8',
             },
         },
         'loggers': {

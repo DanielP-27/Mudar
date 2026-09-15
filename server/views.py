@@ -3975,7 +3975,7 @@ HORAS_CERRADOS_RECIENTES = 48
 def _cronometros_abiertos():
     return (RegistroTiempoProduccion.objects
             .exclude(estado='FINALIZADO')
-            .select_related('usuario', 'registro_produccion__registro_planeacion__dom')
+            .select_related('usuario', 'registro_produccion__registro_planeacion')
             .prefetch_related(Prefetch(
                 'pausas',
                 queryset=PausaTiempoProduccion.objects.filter(fin_pausa__isnull=True),
