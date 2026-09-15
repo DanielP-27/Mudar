@@ -1374,7 +1374,7 @@ function PaginaEditarDom() {
                       actualizarCampoPlaneacion('fecha_planeacion', e.target.value)
                       consultarDisponibilidadTurno(planActual.turno, e.target.value, planActual.id)
                     }}
-                    disabled={!esEditable('etapa_2')}
+                    disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
                   {esEditable('etapa_2') && !planActual.fecha_planeacion && (
                     <AvisoRequeridoCierre texto="Debe diligenciarse para dar por cerrada esta etapa." />
@@ -1386,7 +1386,7 @@ function PaginaEditarDom() {
                       actualizarCampoPlaneacion('turno', toInt(e.target.value))
                       consultarDisponibilidadTurno(toInt(e.target.value), planActual.fecha_planeacion, planActual.id)
                     }}
-                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion}
+                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !!planActualOriginal?.planeacion_completa}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     <option value="">Seleccione una opción</option>
                     {turnos.map(t => (
@@ -1406,7 +1406,7 @@ function PaginaEditarDom() {
                   <input type="number"
                     value={datosTurnoDia.numero_operarios}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, numero_operarios: e.target.value }))}
-                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !planActual.turno}
+                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !planActual.turno || !!planActualOriginal?.planeacion_completa}
                     placeholder="Ingrese número de operarios"
                     min="1"
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700" />
@@ -1422,7 +1422,7 @@ function PaginaEditarDom() {
                   <select
                     value={datosTurnoDia.minutos_totales}
                     onChange={e => setDatosTurnoDia(prev => ({ ...prev, minutos_totales: e.target.value }))}
-                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !planActual.turno}
+                    disabled={!esEditable('etapa_2') || !planActual.fecha_planeacion || !planActual.turno || !!planActualOriginal?.planeacion_completa}
                     className="campo-input disabled:bg-gray-100 disabled:text-gray-700">
                     {OPCIONES_MINUTOS.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
