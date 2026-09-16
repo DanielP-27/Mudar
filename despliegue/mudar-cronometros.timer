@@ -1,0 +1,32 @@
+# Cuándo corre el barrido de cronómetros olvidados.
+#
+# Fuera del horario laboral, porque durante la jornada ya barre el endpoint de
+# avisos en cada navegación. Esto cubre noches, fines de semana y festivos, y
+# sobre todo que la regla no dependa de que una persona abra la aplicación.
+#
+# La cadencia no cambia el dato que se guarda: el cierre calcula
+# fin = inicio + tope + pausas, nunca "ahora". Solo cambia cuánto tarda en notarse.
+#
+# Se instala con:
+#   systemctl daemon-reload
+#   systemctl enable --now mudar-cronometros.timer
+# Y se comprueba con:
+#   systemctl list-timers mudar-cronometros
+#   journalctl -u mudar-cronometros
+
+[Timer]
+# 21:00 — después del último tope del día, que cae sobre las 20:00.
+# 00:00 — una pausa se da por abandonada 2 h después de iniciarse: quien pausó a
+#         las 19:30 y se fue no cumple el umbral hasta las 21:30.
+# 05:00 — el reintento, antes de que el turno de mañana abra la aplicación.
+# Sin día de la semana, así que incluye sábados y domingos: un cronómetro
+# olvidado un viernes no debe esperar al lunes.
+OnCalendar=*-*-* 00,05,21:00:00
+# Si la máquina estaba apagada a la hora prevista, la ejecución se lanza al
+# arrancar. cron simplemente se la saltaría.
+Persistent=true
+
+[Install]
+# Lo que hace que systemctl enable signifique algo: sin esta sección el
+# temporizador funcionaría hasta el siguiente reinicio y luego desaparecería.
+WantedBy=timers.target

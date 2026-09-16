@@ -1,0 +1,25 @@
+# Cierra los cronómetros de producción que nadie cerró.
+#
+# No se habilita por su cuenta: quien lo dispara es mudar-cronometros.timer, que
+# activa por omisión el servicio de su mismo nombre. Por eso aquí no hay [Install].
+#
+# Se instala copiándolo a /etc/systemd/system/ y recargando con
+# systemctl daemon-reload. Comprobar antes que las rutas de abajo existan.
+
+[Unit]
+Description=Cierra los cronómetros de producción olvidados
+# Solo ordena; no arranca esas unidades. Si PostgreSQL está parado, el barrido
+# debe fallar y quedar registrado, no levantar la base de datos por su cuenta.
+After=network.target postgresql.service
+
+[Service]
+# Arranca, hace su trabajo y termina. Sin esto, systemd esperaría un proceso que
+# se queda vivo y tomaría el final como una caída.
+Type=oneshot
+User=mudar
+Group=mudar
+# systemd no ejecuta un shell: no hay PATH, ni cd, ni variables. Por eso el
+# directorio se declara aquí — python-decouple busca el .env desde él — y la ruta
+# al intérprete es absoluta.
+WorkingDirectory=/opt/mudar
+ExecStart=/opt/mudar/venv/bin/python manage.py cerrar_cronometros

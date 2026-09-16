@@ -182,6 +182,26 @@ REST_FRAMEWORK = {
 }
 
 
+# ── Correo saliente ───────────────────────────────────────────────────────────
+# Solo para avisos técnicos al equipo
+CORREO_AVISOS = config('CORREO_AVISOS', default='')
+ADMINS = [('MUDAR', CORREO_AVISOS)] if CORREO_AVISOS else []
+
+# Por omisión, el de consola: en desarrollo el aviso se imprime en la terminal en
+# vez de enviarse, así que nada sale de la máquina ni hace falta credencial.
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = config('EMAIL_HOST', default='')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+
+# DEFAULT_FROM_EMAIL es el remitente corriente; SERVER_EMAIL, el de los avisos de
+# error. Son ajustes distintos y Django no deriva uno del otro.
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = True
@@ -228,10 +248,19 @@ if not DEBUG:
                 # Misma razón que arriba, y aquí pesa más: fail2ban no bloquea lo que no lee.
                 'encoding': 'utf-8',
             },
+            # Django engancha este manejador por defecto, pero declarar un logger
+            # 'django' propio sustituye esa configuración: sin esta entrada en 'handlers'
+            # no saldría ningún aviso.
+            'mail_admins': {
+                'class': 'django.utils.log.AdminEmailHandler',
+                # Solo desde ERROR. Mandar por correo todo lo que entra al registro lo volvería ruido.
+                'level': 'ERROR',
+                'include_html': False,
+            },
         },
         'loggers': {
             'django': {
-                'handlers': ['archivo'],
+                'handlers': ['archivo', 'mail_admins'],
                 'level': 'WARNING',
             },
             # Sin esta entrada el mensaje sube al logger raíz, que no tiene manejadores,
