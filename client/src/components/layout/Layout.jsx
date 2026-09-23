@@ -37,6 +37,13 @@ const ROLES_FRANJA = [ROLES.ADMIN, ROLES.LIDER_PLANTA, ROLES.GERENCIA]
 // Para reactivarlo, poner en true.
 const MOSTRAR_INFORMES = false
 
+// «Desactivar DOM» OCULTO (2026-09-22). El enlace apuntaba a /doms?accion=desactivar,
+// pero NADIE lee ese parámetro: ningún useSearchParams del frontend lo consulta, así
+// que la ruta era idéntica a /doms y el menú prometía una pantalla que no existe.
+// Mismo criterio que con informes: se oculta la entrada, la ruta y los archivos siguen
+// en su sitio. La limpieza del código queda pendiente. Para reactivarlo, poner en true.
+const MOSTRAR_DESACTIVAR_DOM = false
+
 function Layout({ modoLogin = false }) {
   const { usuario, cerrarSesion }   = useAutenticacion()
   const [expandido, setExpandido]   = useState(!modoLogin)
@@ -191,7 +198,7 @@ function Layout({ modoLogin = false }) {
                     <BsPencil size={13} />
                     <span>Editar DOM</span>
                   </NavLink>
-                  {ROLES_DESACTIVAR_DOM.includes(usuario?.rol) && (
+                  {MOSTRAR_DESACTIVAR_DOM && ROLES_DESACTIVAR_DOM.includes(usuario?.rol) && (
                     <NavLink to="/doms?accion=desactivar"
                       className={({ isActive }) => `
                         flex items-center gap-2 px-2 py-1.5 rounded text-xs
