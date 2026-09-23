@@ -1,0 +1,179 @@
+# La aplicación web de MUDAR: Gunicorn sirviendo Django.
+#
+# Se instala copiándolo a /etc/systemd/system/ y recargando con
+# systemctl daemon-reload. Antes de arrancar deben existir /opt/mudar con su
+# venv, /etc/mudar/env y /var/log/mudar.
+#
+# ⚠️ Esta versión NO lleva todavía el blindaje de systemd: se añade en el
+#    subpaso 8.5, después de comprobar que el servicio funciona sin él.
+
+[Unit]
+Description=Aplicación web MUDAR (Gunicorn)
+# Solo ordena; no arranca esas unidades. Si PostgreSQL está parado, la
+# aplicación debe levantar y devolver un error visible, no quedarse sin
+# arrancar: un servicio que no existe se diagnostica peor que uno que responde
+# mal. Mismo criterio que en mudar-cronometros.service.
+After=network.target postgresql.service
+
+[Service]
+# Gunicorn avisa a systemd cuando los workers están listos. Con esto,
+# systemctl start no devuelve el control hasta que la aplicación atiende de
+# verdad, en vez de en cuanto el proceso existe.
+Type=notify
+
+User=mudar
+Group=mudar
+
+# systemd no ejecuta un shell: no hay PATH, ni cd, ni variables heredadas. Por
+# eso el directorio se declara aquí y la ruta al ejecutable es absoluta.
+WorkingDirectory=/opt/mudar
+
+# Las credenciales y la SECRET_KEY. El archivo lo lee systemd antes de bajar a
+# usuario mudar, así que el servicio nunca necesita permiso sobre él.
+EnvironmentFile=/etc/mudar/env
+
+# Python almacena su salida en un búfer cuando no escribe a una terminal. Sin
+# esto, journalctl no muestra nada hasta que el búfer se llena, y un arranque
+# que falla parece un arranque mudo.
+Environment=PYTHONUNBUFFERED=1
+
+# Lo que el servicio cree queda sin permisos para "otros": 640 en archivos.
+# Importa por seguridad.log, que lleva direcciones IP.
+UMask=0027
+
+# systemd crea /var/log/mudar si no existe, con el dueño del servicio y este
+# modo, en cada arranque. Así la unidad no depende de un paso manual previo, y
+# cuando se añada ProtectSystem=strict esta carpeta queda escribible sin tener
+# que declararla aparte en ReadWritePaths.
+LogsDirectory=mudar
+LogsDirectoryMode=0750
+
+# --no-control-socket  Gunicorn 26 crea de fábrica un socket de control en
+#                  /run/user/<uid>, y esa ruta presupone un usuario con sesión
+#                  iniciada. mudar es de sistema, con nologin y hogar
+#                  /nonexistent, así que nunca existirá /run/user/105: sin esta
+#                  bandera, cada arranque deja un ERROR en el registro. No se
+#                  pierde nada — a este servicio lo gobierna systemd.
+# --workers 3      Tres procesos atendiendo. La máquina son 2 núcleos; el
+#                  tercero es el margen que absorbe al dashboard, que ocupa un
+#                  worker más de un segundo por su N+1.
+# --timeout 30     Vigilante, no presupuesto por petición: mata al worker que
+#                  lleve 30 s sin dar señales. Se revisará con medidas reales.
+# --preload        Carga Django antes de bifurcar. Los workers comparten más
+#                  memoria y, sobre todo, un error de importación hace fallar
+#                  el arranque en vez de dejar workers reiniciándose en bucle.
+# --access-logfile -   A la salida estándar, y de ahí a journald, que ya rota.
+# --access-logformat   El formato estándar más %%(L)s al final: la duración en
+#                  segundos con decimales. Es el dato con el que se decidirá si
+#                  30 s bastan.
+#                  ⚠️ El %% doble es obligatorio: en systemd un % introduce un
+#                  especificador, así que un %(h)s literal se escribe %%(h)s.
+ExecStart=/opt/mudar/venv/bin/gunicorn \
+    --bind 127.0.0.1:8000 \
+    --workers 3 \
+    --timeout 30 \
+    --preload \
+    --no-control-socket \
+    --access-logfile - \
+    --access-logformat '%%(h)s %%(l)s %%(u)s %%(t)s "%%(r)s" %%(s)s %%(b)s "%%(f)s" "%%(a)s" %%(L)s' \
+    server.wsgi:application
+
+# Al parar, la señal va solo al maestro, que cierra sus workers ordenadamente.
+# Con el modo por omisión systemd se la mandaría a todos a la vez y el maestro
+# no podría hacer el cierre limpio.
+KillMode=mixed
+# 35 s, no menos: Gunicorn da a sus workers hasta 30 para terminar lo que
+# tengan en curso, y --timeout es 30, así que un worker puede estar trabajando
+# 29 legítimamente. Con un plazo más corto, systemd mataría a mitad del cierre
+# ordenado y el KillMode=mixed de arriba no habría servido de nada.
+TimeoutStopSec=35
+
+# Si el proceso muere por cualquier causa, systemd lo levanta a los 5 segundos.
+# El límite de fábrica sigue vigente: cinco caídas en diez segundos y systemd
+# se rinde y lo deja parado, que es lo correcto — un bucle de reinicios esconde
+# el problema en vez de mostrarlo.
+Restart=always
+RestartSec=5
+
+# No se declara ExecReload a propósito: con --preload, recargar con HUP
+# reinicia los workers pero NO vuelve a leer el código. Un "reload" que no
+# recarga es peor que no tenerlo. Para desplegar código nuevo se reinicia.
+
+
+# ----------------------------------------------------------------------------
+# Blindaje (subpaso 8.5). Referencia: man systemd.exec.
+# Se comprueba con: systemd-analyze security mudar-web.service
+#
+# Quedaron FUERA a propósito, por poder romper de forma difícil de diagnosticar
+# (se retoman después de la V1.0): SystemCallFilter=@system-service,
+# ProtectProc=invisible y ProcSubset=pid.
+# ----------------------------------------------------------------------------
+
+# El servicio no necesita ninguna capacidad de root. Es posible porque escucha
+# en el 8000: atar un puerto por debajo del 1024 exigiría CAP_NET_BIND_SERVICE.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Una vez puesto, ni este proceso ni ninguno de sus hijos puede ganar
+# privilegios por un binario setuid. No se puede desactivar ni heredar al revés.
+NoNewPrivileges=yes
+
+# /tmp y /var/tmp propios e invisibles para el resto del sistema, destruidos al
+# parar el servicio.
+PrivateTmp=yes
+
+# /home, /root y /run/user se le presentan vacíos: una aplicación comprometida
+# no puede leer claves SSH ni archivos de ningún usuario.
+ProtectHome=yes
+
+# Todo el sistema de archivos en solo lectura para este servicio. La aplicación
+# no puede modificar su propio código en /opt/mudar ni dejar un binario en
+# /usr/local/bin: una ejecución de código ajeno no sobrevive a un reinicio.
+# No hace falta ReadWritePaths: systemd abre para escritura la carpeta declarada
+# arriba en LogsDirectory, que es lo único que la aplicación escribe.
+ProtectSystem=strict
+
+# Sin acceso a dispositivos físicos; solo los pseudodispositivos (null, zero,
+# random, tty).
+PrivateDevices=yes
+
+# El reloj sostiene la caducidad del token y todo el cálculo de cronómetros.
+# Django nunca lo escribe, así que cerrarlo no cuesta nada. Quita CAP_SYS_TIME,
+# bloquea las llamadas que ponen la hora y deja /dev/rtc* en solo lectura.
+ProtectClock=yes
+
+# Las cuatro vías de tocar el kernel desde el servicio.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+
+# Crear espacios de nombres es técnica habitual de escalada; crear archivos
+# setuid complementa a NoNewPrivileges; la prioridad de tiempo real permitiría
+# ahogar la máquina. Nada de eso lo hace una aplicación web en Python.
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+# Cierra la entrada de 32 bits al kernel, vía conocida para esquivar filtros.
+SystemCallArchitectures=native
+
+# Bloquea AF_PACKET, es decir capturar el tráfico de loopback — que lleva la
+# contraseña de la base de datos, porque Django habla con PostgreSQL por TCP.
+# ⚠️ AF_NETLINK es OBLIGATORIO: glibc lo usa para resolver nombres, y sin él se
+# rompe el DNS del correo de avisos.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+# Techo de memoria. Medido en el 8.3: el servicio entero consume ~45 MB en
+# reposo, así que 1G es más de veinte veces el uso real y no puede dispararse
+# por carga legítima. Su trabajo es cortar una fuga desbocada ANTES de que el
+# kernel elija víctima y se lleve por delante un proceso de PostgreSQL: el
+# límite actúa dentro del grupo de control de este servicio, así que muere
+# Gunicorn y la base ni se entera. Restart=always lo levanta en 5 s.
+MemoryMax=1G
+
+[Install]
+# Lo que hace que systemctl enable signifique algo: sin esta sección el
+# servicio arrancaría hoy y no volvería tras un reinicio.
+WantedBy=multi-user.target
