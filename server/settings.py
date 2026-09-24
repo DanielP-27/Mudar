@@ -200,6 +200,8 @@ EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 # error. Son ajustes distintos y Django no deriva uno del otro.
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
+# Para reconocer los avisos en la bandeja y poder filtrarlos. El espacio final es parte del valor.
+EMAIL_SUBJECT_PREFIX = '[MUDAR] '
 
 
 if not DEBUG:

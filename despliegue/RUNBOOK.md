@@ -482,35 +482,541 @@ sudo find /var/www/mudar -type f -exec chmod 644 {} +
 
 **No se puede probar que el frontend se sirva hasta el paso 10**, porque Nginx todavía no existe.
 
-## 10. Nginx
+## 10. Nginx ✅
 
-**Comandos:** _pendiente_
+**Decisiones tomadas el 2026-09-23, antes de teclear nada. Las tres son del ENSAYO y no viajan a GTD.**
 
-**Verificación**. Siempre por capas: Gunicorn en `127.0.0.1:8000` primero y Nginx después.
-- Una petición a `/api/auth/perfil/` a través de Nginx responde 401 (falta el token), no 400. **(T1)**
-- `curl -I /static/admin/css/base.css` a través de Nginx responde 200 con `Content-Type: text/css`. **(T2)**
-- Un archivo de prueba en el webroot de ACME, pedido por HTTP en `/.well-known/acme-challenge/`, devuelve su contenido, no `index.html`, y sin redirección 301. **(T3, parcial en WSL)**
-- `proxy_read_timeout` es mayor o igual que el `--timeout` de Gunicorn. **(T4)**
-- Una ruta de la SPA, como `/doms`, pedida directamente, devuelve `index.html`.
-- El login responde 429 al superar el límite de `limit_req`.
+1. **El 301 de `SECURE_SSL_REDIRECT`.** Con `DEBUG=False` Django responde 301 a toda petición que no traiga `X-Forwarded-Proto: https`. Opciones: que Nginx mienta enviando esa cabecera fija por el puerto 80, o montar un certificado autofirmado. **Se eligió el certificado**, porque la cabecera que viaja a GTD es `$scheme` y la otra opción dejaría sin ensayar justo la línea que cambia (objeción C2 del plan).
+2. **Nombre propio en vez de `localhost`.** HSTS se aplica **por host e ignora el puerto**: con `localhost`, el `max-age=3600` que envía Django habría forzado HTTPS durante una hora en *todos* los puertos de localhost, rompiendo el Vite de desarrollo (5173) y el `runserver` (8000). Se usa **`app.mudar.test`**; el TLD `.test` está reservado por la IETF para esto.
+3. **Los estáticos del panel van a Gunicorn, no al disco.** WhiteNoise los sirve desde dentro del proceso. La alternativa —que Nginx los leyera de `/opt/mudar/staticfiles`— exigiría meter a `www-data` dentro de `/opt/mudar`, donde viven el código y el venv. El panel lo usan dos o tres personas muy de vez en cuando: el salto de proxy no cuesta nada medible.
 
-## 11. Temporizador de cronómetros
+### 10.1 — El nombre
 
-**Comandos:** _pendiente_
+En **Windows**, PowerShell como administrador:
+```powershell
+Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value "127.0.0.1 app.mudar.test" -Encoding ascii
+```
+⚠️ **`-Encoding ascii` explícito.** Si se escribe en UTF-16 —lo que hacen `Out-File` y `>` por omisión en PowerShell 5.1— Windows deja de resolver **todos** los nombres del archivo, no solo el nuevo, y sin ningún aviso.
+
+En **WSL**:
+```
+sudo cp -p /etc/mudar/env /etc/mudar/env.bak
+sudo sed -i 's|^ALLOWED_HOSTS=.*|ALLOWED_HOSTS=app.mudar.test,localhost,127.0.0.1|' /etc/mudar/env
+sudo sed -i 's|^CSRF_TRUSTED_ORIGINS=.*|CSRF_TRUSTED_ORIGINS=https://app.mudar.test|' /etc/mudar/env
+sudo systemctl restart mudar-web && systemctl is-active mudar-web
+```
+- **`cp -p`**, no `cp` a secas: sin `-p` la copia nace con la máscara de root (644) y los secretos quedarían legibles por cualquier usuario de la máquina.
+- **El separador de `sed` es `|` y no `/`**, porque el segundo valor lleva `https://` dentro.
+- **`ALLOWED_HOSTS` conserva `localhost` y `127.0.0.1`** para poder llamar a Gunicorn directamente con `curl` en la verificación por capas del 10.3. Django compara sin el puerto.
+- **`restart` y no `reload`:** `EnvironmentFile` lo lee systemd al arrancar la unidad; el archivo puede cambiar mil veces que el proceso no se entera.
 
 **Verificación**
-- Antes de interpretar horarios, revisar el reloj con `timedatectl` y `date`. **(T13)**
-- `systemctl list-timers` muestra el próximo disparo en hora de Colombia.
-- Lanzado a mano, el servicio termina sin error y deja su salida en `journalctl`.
+- `ping app.mudar.test` desde Windows responde desde `127.0.0.1`.
+- `sudo grep -E '^(DEBUG|ALLOWED_HOSTS|CSRF_TRUSTED_ORIGINS)=' /etc/mudar/env` — se pide **solo lo que se va a mirar**: un `cat` dejaría la `SECRET_KEY` y la contraseña de la base en el historial de la terminal.
 
-## 12. Correo de avisos técnicos (B6)
+> **Dos filtros por nombre en dos capas, y se confunden constantemente.** `server_name` es de Nginx y decide *qué bloque responde*. `ALLOWED_HOSTS` es de Django y decide *si acepta* la cabecera `Host`; si no coincide, responde `400 DisallowedHost`. Ninguno le pregunta al otro.
 
-**Comandos:** _pendiente_
+### 10.2 — Instalar Nginx
+
+```
+sudo apt update && sudo apt install -y nginx
+```
+> **En Debian y Ubuntu, instalar un servidor lo deja ARRANCADO.** Es política de la distribución: el paquete habilita el servicio y lo levanta. En cuanto termina el comando, el puerto 80 ya está ocupado y la página de bienvenida se puede pedir.
 
 **Verificación**
-- Un 500 provocado genera el aviso, con el backend de consola en el ensayo y por SMTP en el servidor.
+- Antes de empezar, que el 80 esté libre: `ss -lnt` y `command -v apache2`.
+- `systemctl is-active nginx` → `active`; `curl -I http://localhost` → 200 con `Server: nginx`.
+- **`http://app.mudar.test` en el navegador de Windows muestra «Welcome to nginx!»** — primer recorrido completo del ensayo: nombre resuelto en Windows, reenvío de puertos de WSL, servicio y puerto.
+
+### 10.3 — Bloque mínimo en el 80
+
+**El orden 10.3 → 10.4 → 10.5 está forzado:** `nginx -t` falla si `ssl_certificate` apunta a un archivo que no existe, así que no se puede instalar la configuración final antes de generar el certificado. Se aprovecha para verificar por capas.
+
+```
+echo "127.0.0.1 app.mudar.test" | sudo tee -a /etc/hosts
+```
+Es el **segundo** resolvedor: WSL y Windows tienen el suyo y no se consultan entre sí. Hace falta para poder probar con `curl` desde dentro de la máquina.
+
+Después, una configuración provisional con un solo `server` en el 80 que reenvíe todo a `http://127.0.0.1:8000`, con `Host $host`, `X-Forwarded-For $remote_addr`, `X-Forwarded-Proto $scheme` y `proxy_read_timeout 35s`. Se activa así:
+```
+sudo rm /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/mudar /etc/nginx/sites-enabled/mudar
+sudo nginx -t && sudo systemctl reload nginx
+```
+- **Hay que quitar el `default`**, que trae `listen 80 default_server` y atendería cualquier `Host` que no case con otro bloque: un despiste con el nombre devolvería la página de bienvenida en vez de un error, y estarías depurando una configuración que ni se lee.
+- **Borrar un enlace simbólico no borra su destino.** El `default` real sigue en `sites-available` con sus 2.412 bytes; reactivarlo es un `ln -s`. Por eso existe el esquema de dos carpetas.
+
+**Verificación — y el éxito es un 301**
+```
+curl -I http://app.mudar.test/      →  301  Location: https://app.mudar.test/
+```
+Ese `Location` prueba cuatro cosas a la vez: Nginx hizo casar el `server_name`, reenvió a Gunicorn, **Django aceptó el `Host`** (no hay 400) y **el destino dice `app.mudar.test` y no `127.0.0.1:8000`**, que es la prueba de que `proxy_set_header Host $host` funciona. **Trampa T1 cerrada sin provocarla.**
+
+### 10.4 — Certificado autofirmado
+
+```
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/mudar-ensayo.key \
+  -out /etc/ssl/certs/mudar-ensayo.crt \
+  -subj "/CN=app.mudar.test" \
+  -addext "subjectAltName=DNS:app.mudar.test"
+```
+- **`-nodes`** = sin cifrar la clave. Cifrada, Nginx pediría la contraseña en cada arranque y el servicio no podría levantarse solo.
+- **`-addext subjectAltName` es imprescindible.** Los navegadores **ignoran el `CN`** desde hace años y validan el nombre solo contra ese campo. Un certificado con solo `CN` da error de nombre.
+- Los puntos y los `+` que imprime son el buscador de primos de OpenSSL. No significan nada.
+
+**Verificación**
+```
+openssl x509 -in /etc/ssl/certs/mudar-ensayo.crt -noout -subject -dates -ext subjectAltName
+```
+Debe mostrar `DNS:app.mudar.test`. El directorio `/etc/ssl/private` es `drwx--x---`: el grupo `ssl-cert` tiene solo `x`, así que puede abrir la clave si sabe el nombre pero **no listar** el directorio.
+
+> **Autofirmado no es débil, es no avalado.** El cifrado es idéntico al de Let's Encrypt —se midió `TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519`—; lo que falta es la cadena de confianza. El aviso del navegador **no desaparecerá nunca** aquí: `.test` está reservado y ninguna autoridad puede firmarlo.
+
+### 10.5 — Los dos bloques definitivos
+
+La configuración pasa a vivir en **`despliegue/nginx-mudar.conf`**, versionada, y se instala con:
+```
+sudo install -o root -g root -m 644 \
+  /mnt/c/Users/angel/Desktop/Mudar/despliegue/nginx-mudar.conf \
+  /etc/nginx/sites-available/mudar
+sudo nginx -t && sudo systemctl reload nginx
+```
+⚠️ **Desde el 12.7.4 el sitio depende de un segundo archivo**, `nginx-cabeceras.conf` → `/etc/nginx/snippets/mudar-cabeceras.conf`, que se instala **antes**. Ver 12.7.
+
+⚠️ **`install` y no `cp`:** fija dueño, grupo y permisos en la misma operación, sin heredar los que WSL inventa en `/mnt/c`. **Trampa T12.** En GTD el origen será otro —`scp` o el repositorio clonado—; el destino es idéntico.
+
+⚠️ **Se abandonó el método del *heredoc*.** Pegar 26 líneas de `sudo tee << 'EOF'` en la terminal se cortó a la mitad y dejó la shell en el prompt `>`. No se escribió nada —bash lee el heredoc entero antes de ejecutar el comando— pero el ciclo «editar el archivo versionado e instalarlo» es más seguro, reproducible y deja el artefacto listo para el commit.
+
+⚠️ **`listen 443 ssl http2;` y NO `http2 on;`.** La directiva suelta llegó en Nginx 1.25.1 y Ubuntu 24.04 trae la **1.24.0**, así que la forma nueva hace fallar `nginx -t`. Casi toda la documentación reciente de internet usa ya la nueva. En GTD será el mismo 1.24.0.
+
+**Verificación**
+```
+curl -I  http://app.mudar.test/                    →  301 de Nginx (Content-Length 178)
+curl -kI https://app.mudar.test/api/auth/perfil/   →  HTTP/2 401
+```
+El **401 y no 301** es el cierre del paso: Django vio `X-Forwarded-Proto: https` y dejó de redirigir. La cabecera `www-authenticate: Token` la escribe `ExpiringTokenAuthentication`, así que la petición recorrió toda la cadena. Aparece también `strict-transport-security: max-age=3600`: **HSTS se activa aquí**, y es la razón de haber elegido un nombre propio en el 10.1.
+
+### 10.6 — Los estáticos del panel
+
+Se añade `location /static/ { proxy_pass http://127.0.0.1:8000; }` y se instala igual que el 10.5.
+
+> **Este subpaso no arregla nada que esté roto: asegura algo que el 10.7 rompería.** Hoy los estáticos funcionan *por accidente*, porque `location /` se lleva absolutamente todo. En cuanto la raíz pase a servir el frontend desde el disco, dejarían de llegar a Gunicorn y el panel saldría **sin estilos**: un documento en blanco con enlaces azules. Lo confuso del síntoma es que la aplicación de React se vería perfecta, porque la sirve otro bloque.
+
+**Verificación previa, que cierra una incógnita del 7.6:** `collectstatic` corrió **como root** y Gunicorn corre como `mudar`. Se comprueba **antes** de tocar nada, aprovechando que todo va a Gunicorn:
+```
+curl -sk -o /dev/null -w '%{http_code} %{content_type} %{size_download}\n' \
+  https://app.mudar.test/static/admin/css/base.css     →  200 text/css 22120
+```
+Sale bien: el recorrido de permisos da y no hay nada que arreglar.
+
+> **Herencia de directivas.** `proxy_set_header` y `proxy_read_timeout` se declaran **una sola vez a nivel de `server`** y todos los `location` las heredan; solo `proxy_pass` va dentro de cada uno. ⚠️ La herencia es **por directiva completa**: si un `location` declarase su propio `proxy_set_header`, perdería **las tres**, no solo la que repita. El síntoma sería un 400 o un bucle de redirecciones en esa ruta y solo en esa.
+
+### 10.7 — El frontend
+
+**10.7.1 — El prefijo del panel.**
+```
+sudo sed -i 's|^ADMIN_URL=.*|ADMIN_URL=gestion/panel-ensayo/|' /etc/mudar/env
+sudo systemctl restart mudar-web && systemctl is-active mudar-web
+```
+**Por qué se parte la ruta en prefijo fijo + parte secreta.** En cuanto la raíz deja de reenviar, solo llega a Django lo que tenga su propio `location`, y el panel es uno de ellos. O Nginx conoce la ruta **completa** —y entonces el valor no adivinable de producción habría que escribirlo también en la configuración de Nginx, en dos archivos que no se conocen y con valores distintos por entorno—, o conoce solo un **prefijo estable**. Con `location /gestion/`, la configuración de Nginx queda idéntica en ensayo y en GTD, y el secreto no sale de `/etc/mudar/env`.
+- En GTD: `ADMIN_URL=gestion/<parte-secreta>/`, generada con `openssl rand -hex 6`. Sin barra inicial, con barra final. **No se reutiliza el valor del ensayo.**
+- Pedir `/gestion/` a secas da 404: Django no tiene esa ruta. Se sabe que el prefijo existe; no qué hay debajo. `ADMIN_URL` es una capa de estorbo, no un control de acceso.
+
+**10.7.2 — Recompilar el frontend**, en Windows, con `VITE_API_URL=` **vacía** en `client/.env.production`. Ver **9.4** para la comprobación vigente (`baseURL:""`).
+
+**10.7.3 — Copiar el `dist/`.** Igual que en 9.5, **con un añadido**: hay que vaciar el destino primero, porque Vite pone una huella del contenido en el nombre de cada archivo y un `cp` copia encima pero **no borra** lo que ya no existe en el origen. Los assets viejos se acumularían en cada compilación e impedirían responder a «¿qué versión se está sirviendo?».
+```
+sudo rm -rf /var/www/mudar && sudo mkdir -p /var/www/mudar \
+ && sudo cp -rT /mnt/c/Users/angel/Desktop/Mudar/client/dist /var/www/mudar \
+ && sudo chown -R root:root /var/www/mudar \
+ && sudo find /var/www/mudar -type d -exec chmod 755 {} + \
+ && sudo find /var/www/mudar -type f -exec chmod 644 {} +
+```
+⚠️ **Encadenar con `&&`.** Con saltos de línea, si el `cp` fallara los `chmod` correrían sobre un directorio vacío **sin dar error**, y tendrías un sitio vacío sin ninguna señal.
+
+⚠️ **`sudo rm -rf` no tiene papelera.** Lo peligroso no es el comando sino **un espacio de más**: `rm -rf / var/www/mudar` intenta borrar la raíz. Leer la ruta entera antes de pulsar Enter.
+
+**Verificación:** un `md5sum` de los cinco archivos en origen y destino debe coincidir. Es la comprobación que conviene usar **siempre que un archivo cruce de Windows a Linux** —y en GTD, cuando el `dist/` suba por `scp`—: prueba de una vez que no hubo truncado, conversión de finales de línea ni cambio de codificación. Los archivos llegan de `/mnt/c` como **755**, con el bit de ejecución puesto; los dos `find` lo quitan.
+
+**10.7.4 — La configuración con `try_files`.** Se instala como en el 10.5. Añade `root /var/www/mudar`, los tres `location` que van a Django (`/api/`, `/static/`, `/gestion/`), las dos reglas de caché y:
+```nginx
+location / { try_files $uri $uri/ /index.html; }
+```
+> **Nginx elige el `location` por el prefijo MÁS LARGO que case, no por el orden del archivo.** Una petición a `/api/doms/` casa con `/api/` y con `/`, y gana `/api/`. Podrías barajar los bloques y el resultado sería idéntico. La excepción es `=`, coincidencia exacta, que gana a todos.
+
+**Caché: `assets/` un año, `index.html` nunca.** Los assets llevan huella en el nombre, así que su URL cambia si cambia el código y se pueden cachear para siempre. `index.html` es el **único nombre fijo**: si el navegador se quedara con una copia vieja, seguiría pidiendo los assets anteriores aunque el despliegue ya hubiera cambiado.
+
+**10.7.5 — Verificación**
+```
+/              →  200  text/html  478 bytes
+/doms/57       →  200  text/html  478 bytes      ← el try_files, en una línea
+/assets/....js →  200  cache-control: public, max-age=31536000, immutable
+/logoMudar.png →  200  image/png                 ← el favicono deja de dar 404
+api perfil 401 · static 200 · panel 302          ← lo que va a Django sigue yendo
+```
+`/doms/57` no existe en el disco y devuelve **los mismos 478 bytes** que la raíz, o sea el mismo `index.html`. Entrar por URL directa o pulsar F5 en una pantalla interna ya no da 404.
+
+⚠️ La ruta vieja del panel pasa a devolver **200**: ya no es Django, es **la SPA atrapándola** con el `try_files`. Inofensivo y esperado.
+
+### 10.8 — El límite de peticiones al login
+
+```nginx
+limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;   # contexto http, arriba del archivo
+
+location = /api/auth/login/ {
+    limit_req zone=login burst=10 nodelay;
+    limit_req_status 429;
+    proxy_pass http://127.0.0.1:8000;
+}
+```
+- **`zone=login:10m` son 10 MEGABYTES de memoria compartida, no 10 minutos.** Dan para unas 160.000 IPs. El tiempo va en `rate`.
+- **El `http` de Nginx no es el protocolo**, es el bloque que contiene *toda* la configuración web, cifrada o no. **No existe ningún bloque `https`.** Nuestro archivo se incluye dentro de `http`, así que esta posición es la correcta.
+- **La ruta es `/api/auth/login/`** (`server/urls.py:86`). El `/api/login/` de `CLAUDE.md` **no existe**: si se copia mal, el límite se aplica a una ruta fantasma y nadie se entera.
+- **`=` es coincidencia exacta.** Sin él, la ruta casaría con `/api/` y no se limitaría nada.
+- **`limit_req_status 429`** porque el valor por omisión es **503**, que miente: dice «servidor no disponible» y tanto una persona como un monitor lo leerían como una caída.
+
+> **El número es GENEROSO a propósito, y el reparto es contrario a la intuición.** En la planta todos los equipos salen por **una sola IP pública**, así que comparten cubo y un cambio de turno son cinco ingresos casi simultáneos — es la objeción que archivó el tope de intentos fallidos (8.4.1). Y sobre todo: si Nginx rechaza aquí, **la petición no llega a Django**, no se escribe la línea en `seguridad.log` y **`fail2ban` se queda ciego**. Apretar este cerrojo estropea al que de verdad distingue un intento fallido de uno bueno. **`limit_req` generoso, `fail2ban` estricto.**
+
+**Verificación medida (2026-09-23)** — 16 POST seguidos:
+```
+1-11  → 401      pasan: 1 del rate + 10 del burst
+12-16 → 429
+tras 12 s: 401, 401, 429        ← 2 plazas recuperadas, una cada 6 s
+16 GET a /api/auth/perfil/ → 401 x16, ningún 429   ← el `=` aisló la ruta
+sudo grep -c 'usuario=x ' /var/log/mudar/seguridad.log → 13
+```
+Los **13** son las que llegaron a Django. Las cinco con 429 **no dejaron línea**: el reparto con `fail2ban` queda probado con datos, no con argumentos.
+
+> 🪤 **HALLAZGO DEL 10.8, y rompe el paso 13 en silencio.** El registro decía `11:37` mientras el sistema decía `19:07`: siete horas. No es un error — **Django escribe sus registros en `America/Bogota`** porque `TIME_ZONE` lo fija al arrancar, mientras el sistema operativo estaba en `Europe/Madrid`. `fail2ban` lee `seguridad.log` y compara la fecha **con el reloj del sistema**: con esa diferencia, todas las líneas le parecerían viejísimas, caerían fuera de su ventana de vigilancia y **no banearía a nadie jamás**, sin error ni aviso. Se cierra alineando el sistema: `sudo timedatectl set-timezone America/Bogota`. **Comprobar la zona antes del paso 11 y del 13.** En GTD, un servidor entregado en UTC reproduce esto idéntico.
+
+### 10.9 — La excepción de ACME
+
+```
+sudo mkdir -p /var/www/certbot/.well-known/acme-challenge
+```
+```nginx
+location ^~ /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+    default_type "text/plain";
+}
+location / { return 301 https://$host$request_uri; }
+```
+El `return 301` pasa de estar a nivel de `server` a estar **dentro de `location /`**, o se tragaría el desafío.
+- **`^~`** = «si el prefijo casa, no sigas buscando». Con solo estos dos `location` bastaría el prefijo más largo, pero lo deja explícito y protege de una regla con expresión regular futura.
+- **`default_type text/plain`** porque el archivo del desafío **no tiene extensión** y Nginx lo serviría como binario.
+- ⚠️ **No es solo para la emisión: la renovación usa este mismo camino.** Si queda mal, funciona 90 días y luego el certificado vence de madrugada, sin aviso útil y con el HSTS impidiendo entrar en claro a mirar qué pasa.
+
+**Verificación en WSL, parcial pero suficiente.** Se comprueba **el buzón, no el cartero**: `.test` no lo puede validar ninguna autoridad, así que se pone una ficha falsa a mano.
+```
+echo "prueba-acme-10.9" | sudo tee /var/www/certbot/.well-known/acme-challenge/prueba > /dev/null
+curl -i http://app.mudar.test/.well-known/acme-challenge/prueba
+```
+→ `200 OK`, `Content-Type: text/plain`, **sin 301**. Y hay que comprobar que el resto del 80 **sigue redirigiendo**: `/`, `/doms/57` y `/api/doms/` deben dar 301 conservando la ruta.
+
+> **En qué consiste el desafío.** `certbot` pide el certificado, Let's Encrypt responde con una ficha aleatoria, `certbot` escribe un archivo cuyo **nombre es la ficha** y cuyo **contenido es la ficha, un punto y la huella SHA-256 de la clave pública de tu cuenta**, y Let's Encrypt pide esa URL **desde internet y por el puerto 80 en claro**. La segunda mitad del contenido es imprescindible: si bastara la ficha, cualquiera que la interceptara —viaja en claro— podría obtener un certificado de tu dominio.
+
+### 10.10 — Batería de verificación
+
+Con todo instalado, las diez comprobaciones. **Siempre por capas: Gunicorn en `127.0.0.1:8000` primero y Nginx después.**
+- `/api/auth/perfil/` a través de Nginx responde **401**, no 400. **(T1)**
+- `/static/admin/css/base.css` responde **200** con `Content-Type: text/css`. **(T2)**
+- El desafío de ACME por el 80 devuelve su contenido, no `index.html`, y **sin 301**. **(T3, parcial en WSL)**
+- `proxy_read_timeout` (**35 s**) ≥ `--timeout` de Gunicorn (**30 s**). **(T4)** ⚠️ Al comprobarlo con `grep`, `mudar-web.service` menciona `--timeout` **tres veces** —dos en comentarios—; hay que quedarse con la línea real o la comparación numérica falla.
+- Una ruta de la SPA, `/doms/57`, devuelve `index.html` con el mismo tamaño que la raíz.
+- El login responde **429** al superar el límite.
+- El puerto 80 redirige todo lo demás con **301**.
+- El panel en `/gestion/...` responde **302** hacia su login.
+- Los assets llevan `Cache-Control: public, max-age=31536000, immutable`, **una sola cabecera**.
+- `nginx`, `mudar-web` y `postgresql` activos; **80 y 443 en `0.0.0.0`, 8000 y 5432 solo en `127.0.0.1`**.
+
+**Calibración de errores, para no confundir una respuesta negativa con una avería.** Las herramientas del navegador pintan en rojo todo estado ≥ 400, y eso incluye respuestas legítimas:
+- **404** — llegó a Django y no hay nada en esa ruta. *La cadena funciona.*
+- **400** — llegó a Django y rechazó el `Host`. *Fallo de `ALLOWED_HOSTS`.* ⚠️ Desde el 12.7 un `Host` ajeno ya no llega a Django: lo corta Nginx sin responder. Un 400 por `Host` indica ahora que el nombre **sí** está en `server_name` y **no** en `ALLOWED_HOSTS`: las dos listas divergen.
+- **502** — Nginx no obtuvo respuesta de Gunicorn. *Servicio caído o `proxy_pass` mal.*
+- **Conexión rechazada** — nadie escucha en ese puerto. *Nginx caído.*
+- **Demasiadas redirecciones** — falta `X-Forwarded-Proto`.
+
+**Si la cadena estuviera rota no habría código de estado ninguno**: verías conexión rechazada, reinicio de conexión o tiempo agotado. Que exista un número ya prueba que los dos extremos hablaron.
+
+## 11. Temporizador de cronómetros ✅
+
+**Objetivo:** que el cierre de cronómetros olvidados deje de depender de que alguien abra la aplicación. Hoy solo barre cuando una persona navega y el frontend pide los avisos; con el temporizador lo dispara el sistema a las 21:00, 00:00 y 05:00, aunque no haya nadie delante. Cubre noches, fines de semana y festivos.
+
+**Lo que este paso verifica es la FONTANERÍA, no la lógica de negocio:** que la unidad arranca, corre como el usuario correcto, recibe las credenciales y deja rastro en el diario. Qué cerrar y con qué `fin` ya tiene su propia suite de pruebas, y en el ensayo las doce tablas de operación están vacías, así que el barrido encuentra cero.
+
+**Son tres eslabones y conviene no confundirlos:**
+```
+.timer   →  a las 21:00 activa...
+.service →  ...que ejecuta, como el usuario mudar y con las credenciales...
+.py      →  ...server/management/commands/cerrar_cronometros.py, que hace el trabajo
+```
+Las dos unidades son configuración declarativa, sin lógica. El código es el tercero.
+
+> 🔴 **REQUISITO PREVIO, viene del 10.8.** Comprobar con `timedatectl` que el sistema operativo está en `America/Bogota` **antes** de interpretar ningún horario. Los temporizadores de systemd usan la zona del sistema, no la de Django. En WSL hay que reaplicarlo tras cada arranque si Windows no está también en esa zona; en GTD se fija una vez en el paso 3.
+>
+> ⚠️ **Con el sistema en otra zona, el barrido de las 21:00 caería en mitad del turno de tarde**, cerrando cronómetros vivos. Es el fallo más caro de este paso y no da ningún error.
+
+### 11.0 — El defecto que traía la unidad
+
+`mudar-cronometros.service`, escrito el 2026-09-16, **no declaraba `EnvironmentFile`**. Habría muerto en el primer disparo, a las 21:00, sin nadie delante:
+- `/opt/mudar` **no tiene ningún `.env`** —solo `.env.example`—, así que `python-decouple` no tiene de dónde leer.
+- `settings.py` hace **20 llamadas a `config()`**, y `SECRET_KEY` y las credenciales de la base **no tienen valor por omisión**: Django lanza `UndefinedValueError` al importar.
+- El comentario del `WorkingDirectory` decía que estaba ahí porque «python-decouple busca el `.env` desde él». **Describía un mecanismo que no existe en esta máquina** — misma familia del 8.3.4 de `CLAUDE.md`: un comentario que fabrica documentación falsa.
+
+Se añadieron tres directivas, todas copiadas de `mudar-web.service` para que las dos unidades no diverjan:
+```ini
+EnvironmentFile=/etc/mudar/env       # sin ella el comando muere al importar Django
+Environment=PYTHONUNBUFFERED=1       # T9: sin ella el diario parece vacío
+LogsDirectory=mudar                  # garantiza /var/log/mudar aunque mudar-web
+LogsDirectoryMode=0750               # no haya arrancado nunca; mismo modo que allí
+```
+
+### 11.1 — Instalar las dos unidades
+
+```
+sudo install -o root -g root -m 644 \
+  /mnt/c/Users/angel/Desktop/Mudar/despliegue/mudar-cronometros.service \
+  /mnt/c/Users/angel/Desktop/Mudar/despliegue/mudar-cronometros.timer \
+  -t /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+- **`-t`** indica que el último argumento es el **directorio** de destino, no un nombre de archivo. Es lo que permite pasar dos orígenes de una vez.
+- **`daemon-reload` no es opcional.** systemd mantiene su catálogo **en memoria**: hasta ese comando, para él las unidades no existen y un `start` respondería que no las encuentra. Es el mismo principio que `EnvironmentFile` —el archivo en disco y el proceso en memoria son cosas distintas— y volverá a aparecer en el 11.4.
+
+**Verificación**
+```
+systemctl list-unit-files 'mudar-*'
+systemd-analyze verify /etc/systemd/system/mudar-cronometros.{service,timer}
+systemctl show mudar-cronometros.service -p Type -p User -p WorkingDirectory -p EnvironmentFiles
+```
+- `mudar-cronometros.service` sale como **`static`**, y **es lo correcto**: no tiene sección `[Install]`, así que no se puede habilitar ni deshabilitar. Quien la activa es el temporizador, que por omisión dispara el servicio de su mismo nombre. Con `[Install]` alguien podría habilitarla suelta y el comando correría sin horario.
+- `systemd-analyze verify` es el equivalente de `nginx -t`: **el silencio es el éxito**.
+- En lo cargado debe verse `EnvironmentFile=/etc/mudar/env (ignore_errors=no)`. Ese `no` importa: si el archivo faltara, la unidad **falla ruidosamente** en vez de arrancar sin credenciales y morir con un error confuso de Django.
+
+### 11.2 — Lanzar el servicio a mano
+
+```
+sudo systemctl start mudar-cronometros.service
+journalctl -u mudar-cronometros.service --since today --no-pager
+```
+Se lanza **antes** de activar el temporizador, para separar «el comando funciona» de «el horario funciona». Con `Type=oneshot`, `start` no devuelve el control hasta que el proceso termina.
+
+**Verificación — la línea que lo prueba todo**
+```
+python[5612]: 0 cerrados de 0 abiertos
+```
+Esa la escribe el comando de Python, y demuestra cuatro cosas de golpe: **las credenciales llegaron** (Django importó sin `UndefinedValueError`), **habló con PostgreSQL** (para decir cero tuvo que consultar), **`PYTHONUNBUFFERED` funciona** (la salida aparece en el diario) y corrió como `mudar`.
+
+⚠️ **`○ inactive (dead)` NO es un fallo.** En una unidad `Type=oneshot` es el estado normal tras terminar bien: arrancó, trabajó y salió. Los datos reales son `Result=success` y `ExecMainStatus=0`.
+
+### 11.3 — Activar el temporizador
+
+```
+sudo systemctl enable --now mudar-cronometros.timer
+```
+Dos acciones en un comando: **`enable`** crea el enlace que lo arranca al encender la máquina —para eso sirve la sección `[Install]` del `.timer`— y **`--now`** lo pone en marcha ya.
+
+**Verificación**
+```
+date '+%Y-%m-%d %H:%M:%S %Z (%z)'
+systemctl list-timers mudar-cronometros --all --no-pager
+```
+```
+NEXT                        LEFT  LAST  UNIT                     ACTIVATES
+Wed 2026-09-23 21:00:00 -05   7h     -  mudar-cronometros.timer  mudar-cronometros.service
+```
+🔑 **El `-05` es la comprobación que importa.** Con el sistema en `Europe/Madrid` ese «21:00» habrían sido las 14:00 en la planta. Mirar el desplazamiento, no solo la hora.
+
+También debe verse `active`, `enabled` y `Persistent=yes`.
+
+### 11.4 — Probar que dispara de verdad
+
+**Estar programado y disparar son cosas distintas, y la primera no demuestra la segunda.** Se adelanta el horario con un ***drop-in***, se observa y se restaura. **La unidad original no se toca**, así que deshacerlo es borrar una carpeta.
+
+```
+sudo mkdir -p /etc/systemd/system/mudar-cronometros.timer.d
+sudo tee /etc/systemd/system/mudar-cronometros.timer.d/prueba.conf > /dev/null << 'EOF'
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+EOF
+sudo systemctl daemon-reload && systemctl list-timers mudar-cronometros --no-pager
+```
+- ⚠️ **`OnCalendar=` vacío es imprescindible.** Es una directiva de **lista acumulativa**: sin la línea vacía, el horario nuevo se **sumaría** a los tres originales en vez de sustituirlos. Pasa igual con `ExecStart` y otras directivas de lista.
+- ⚠️ **`AccuracySec=1s`.** systemd agrupa los disparos con una holgura de **un minuto** por omisión, para despertar varias tareas a la vez y ahorrar energía. Sin esta línea esperarías sin ver nada y pensarías que falla.
+
+**Verificación**
+```
+journalctl -u mudar-cronometros.service --since today --no-pager | grep -E 'Starting|cerrados'
+systemctl list-timers mudar-cronometros --all --no-pager
+```
+Debe aparecer `LAST` poblado y ejecuciones nuevas en el diario. **Resultado del ensayo (2026-09-23):** tres ejecuciones —una a mano y dos por el temporizador—, todas con `Result=success`.
+
+> **Un regalo de la prueba:** los dos disparos salieron a **cinco segundos** uno del otro, no a un minuto. El primero no encajaba con «segundo 30». Es **`Persistent=true` actuando**: al recargar con un horario nuevo, systemd calculó un disparo «perdido» y lo lanzó de inmediato. Esa es justo la propiedad que importa en producción — si la máquina estuviera apagada a las 21:00, el barrido correría al arrancar en vez de saltarse el día.
+
+**Restaurar, y no se olvida: mientras el fragmento esté, el servicio corre cada minuto.**
+```
+sudo rm -rf /etc/systemd/system/mudar-cronometros.timer.d && sudo systemctl daemon-reload
+systemctl show mudar-cronometros.timer -p TimersCalendar --value
+```
+Debe volver a `OnCalendar=*-*-* 00,05,21:00:00` con `next_elapse` a las 21:00. El `LAST` conserva la huella de la prueba, que es lo deseable.
+
+### 11.5 — Blindaje *(PENDIENTE, no urgente)*
+
+Trasplantar a esta unidad las **20 directivas** de endurecimiento de `mudar-web.service` (líneas 114-174). **Todas aplican sin modificar:** el perfil del cronómetro es estrictamente más pequeño —no escucha en ningún puerto, no recibe entrada de nadie—, así que un conjunto probado sobre el que hace más vale para el que hace menos.
+
+Método, el mismo del 8.5: **medir antes** con `systemd-analyze security`, trasplantar, instalar, **lanzar a mano y confirmar que sigue funcionando**, medir después. Ese cuarto paso es el que importa: **el blindaje rompe cosas en silencio**, y una directiva de más mata el comando con un error de permisos que no se parece en nada a su causa. **20-35 minutos**, casi todo verificación.
+
+**Por qué no es urgente:** al cronómetro no lo puede alcanzar nadie. Corre tres veces al día, dos segundos, con un comando fijo y sin entrada. La única vía de compromiso es haber comprometido ya el código de `/opt/mudar`, y en ese escenario `mudar-web` cayó primero. **Lo que se gana es consistencia**, no defensa: dos unidades con el mismo usuario, el mismo código y las mismas credenciales, y solo una blindada, es una asimetría que desconcierta a quien lo audite dentro de un año.
+
+## 12. Correo de avisos técnicos (B6) y endurecimiento de Nginx ✅
+
+**Objetivo:** comprobar que un 500 real, dentro de Gunicorn y bajo systemd, genera un aviso por correo, y que un error del cliente no lo genera. En el ensayo el *backend* es el de consola: el aviso se escribe en la salida de Gunicorn, que va al diario. **El diario hace de buzón.** El envío real por Microsoft 365 se prueba en D, con credenciales.
+
+**Por qué filtra así, y no lo decidimos nosotros:** HTTP asigna los 4xx al cliente y los 5xx al servidor, y Django registra los primeros como `WARNING` y los segundos como `ERROR`. Lo único nuestro es el umbral: avisar desde `ERROR`. **Excepción que lo complica:** `DisallowedHost` es un 400 que Django registra como `ERROR` y que, por tanto, **avisa**. De ahí sale el 12.7.
+
+### 12.1 — Encender el interruptor
+
+`ADMINS` vacío es un interruptor, no un olvido: sin destinatario, Django descarta el aviso sin error.
+```
+sudo grep -E '^(CORREO_AVISOS|EMAIL_BACKEND|DEFAULT_FROM_EMAIL)=' /etc/mudar/env   # debe salir vacío
+sudo cp -p /etc/mudar/env /etc/mudar/env.bak
+echo 'CORREO_AVISOS=avisos@mudar.test' | sudo tee -a /etc/mudar/env > /dev/null
+sudo systemctl restart mudar-web
+systemctl is-active mudar-web
+```
+- **`sudo tee -a` y no `sudo echo … >>`:** la redirección la hace la shell del usuario, sin permisos de root, y fallaría con `Permission denied`.
+- **`restart` y no `reload`:** systemd lee `EnvironmentFile` solo al nacer el proceso.
+- `EMAIL_BACKEND` **no se declara** en el ensayo: por omisión es el de consola.
+
+**Verificación:** la variable está en el entorno **del proceso vivo**, no solo en el archivo: `sudo cat /proc/<MainPID>/environ | tr '\0' '\n' | grep CORREO`.
+
+### 12.2 — Abrir el buzón
+
+En una **segunda terminal**: `sudo journalctl -u mudar-web -n 0 -f`. El `-n 0` la deja en blanco, así que todo lo que aparezca es consecuencia de lo que se haga después.
+
+### 12.3 — Control negativo: un error que no avisa
+
+```
+curl -sk -o /dev/null -w '%{http_code}\n' --resolve app.mudar.test:443:127.0.0.1 \
+  https://app.mudar.test/api/ruta-que-no-existe/
+```
+**404**, `WARNING` en `mudar.log` y **ningún correo**. En el buzón aparece **una línea**, la de acceso de Gunicorn (`--access-logfile -`): es registro, no aviso.
+
+La ruta tiene que empezar por `/api/`: cualquier otra la responde Nginx con `index.html` y Django no se entera.
+
+### 12.4 — Provocar el 500
+
+```
+sudo systemctl stop postgresql
+systemctl is-active postgresql@16-main              # inactive
+curl -sk -o /dev/null -w '%{http_code}\n' --resolve app.mudar.test:443:127.0.0.1 \
+  -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"prueba","password":"prueba"}' https://app.mudar.test/api/auth/login/
+```
+- Se comprueba **`postgresql@16-main`**, no `postgresql`: la segunda es una unidad envoltorio que da `active` aunque el clúster esté parado.
+- **El usuario y la contraseña tienen que ir rellenos**, aunque sean falsos: con un cuerpo vacío `LoginView` responde 400 en la validación (`views.py:355`) sin llegar a la base. Con los dos campos llega a `authenticate()` (`:368`) y ahí falla.
+
+**Resultado del ensayo (2026-09-24):** **500**, aviso en el buzón y `ERROR django.request` en `mudar.log`. En `seguridad.log`, nada: **un login que termina en 500 no es un intento fallido** y `fail2ban` no lo cuenta.
+
+### 12.5 — Leer el aviso
+
+- 🔴 **`From:` sale vacío.** Es el defecto de B6: `DEFAULT_FROM_EMAIL` cae en `EMAIL_HOST_USER`, vacío. La consola no protesta; **Microsoft 365 rechazaría el correo.** En GTD, `DEFAULT_FROM_EMAIL` es obligatoria.
+- **El 500 es genérico, el aviso no:** trae la excepción, la línea (`views.py:368`) y la petición.
+- **Los secretos salen tapados** con `********************`: `SafeExceptionReporterFilter` oculta todo nombre con `KEY`, `PASS`, `TOKEN` o `AUTH`, incluida la cabecera `Authorization`. La contraseña del login tampoco sale (`POST: No POST data`), porque DRF lee el JSON por otra vía.
+- **Lo que sí sale es un mapa del sistema:** `ALLOWED_HOSTS`, nombre y usuario de la base, rutas y versión de Django. **El destinatario tiene que ser un buzón interno del equipo.**
+- El `=3D` y las líneas cortadas con `=` son la codificación *quoted-printable*; un cliente de correo lo decodifica.
+
+**Cambio de código que salió de aquí:** `EMAIL_SUBJECT_PREFIX = '[MUDAR] '` en `settings.py`, para reconocer y filtrar los avisos. 🔴 **Tiene que estar commiteado y subido antes del paso 15**, que clona desde GitHub.
+
+### 12.6 — Restaurar
+
+```
+sudo systemctl start postgresql
+systemctl is-active postgresql@16-main              # active
+```
+El login vuelve a responder **401 sin reiniciar Gunicorn**: con `CONN_MAX_AGE = 0` Django abre conexión nueva en cada petición y no guarda ninguna rota. Y ahora sí escribe `Login fallido` en `seguridad.log`.
+
+### 12.7 — Endurecimiento de Nginx
+
+**Objetivo:** que Nginx deje de reenviarlo todo y filtre lo que no es nuestro. Tres cambios, cada uno medido antes y después.
+
+**Por qué, medido en el 12.7.1.** Una petición que pregunta por la IP en vez del dominio —lo que hacen los barridos automáticos, que recorren todo internet y llegan a una IP nueva en horas— caía en el **primer bloque del archivo**, el de MUDAR, a falta de un `default_server`. Consecuencias:
+- Por la IP pelada se veía la pantalla de acceso de la aplicación.
+- Bajo `/api/`, Django respondía 400 `DisallowedHost`, lo registraba como `ERROR` y **mandaba un aviso por cada petición**.
+- 🔴 **El aviso se envía de forma síncrona, dentro del *worker*.** Con SMTP real cuesta del orden de un segundo (sin medir) y hay tres *workers*: un robot insistente los tendría ocupados mandando correos mientras los usuarios esperan. **Deja de ser ruido y pasa a ser una forma barata de frenar la aplicación.**
+- `DisallowedHost` va a `mudar.log`, no a `seguridad.log`, así que `fail2ban` tampoco lo vería.
+
+**12.7.1 — Medir el antes**
+```
+curl -sk -o /dev/null -w '%{http_code}\n' --resolve app.mudar.test:443:127.0.0.1 \
+  -H 'Host: 179.50.108.153' https://app.mudar.test/api/                  # 400 + aviso
+curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1/            # 200: la aplicación
+curl -skI --resolve app.mudar.test:443:127.0.0.1 https://app.mudar.test/ # Server: nginx/1.24.0 (Ubuntu)
+```
+Se usa la IP de GTD en el `Host` y no `127.0.0.1` porque en el ensayo `ALLOWED_HOSTS` incluye `localhost` y `127.0.0.1`. ⚠️ **En GTD, `ALLOWED_HOSTS` lleva solo `app.mudarcolombia.com`.**
+
+**12.7.2 — Bloque por omisión.** En `nginx-mudar.conf`, antes del bloque del puerto 80:
+```nginx
+server {
+    listen 80 default_server;
+    listen 443 ssl http2 default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    return 444;
+}
+```
+- **`ssl_reject_handshake`** rechaza el saludo TLS sin presentar certificado, así que el bloque no necesita uno **y no enseña el nuestro**, que lleva el dominio escrito. Existe desde Nginx 1.19.4.
+- **`return 444`** cierra la conexión sin enviar ni una cabecera.
+- El nombre se decide **dos veces**: en el saludo TLS (SNI) y en la cabecera `Host`. Quien llega sin SNI lo corta `ssl_reject_handshake`; quien finge el SNI y manda otro `Host` lo corta el `444`.
+- Los parámetros del `listen 443` (`ssl http2`) deben coincidir con los del bloque de MUDAR: son del puerto, no del `server`.
+- El sitio `default` de Ubuntu **no debe estar activo**, o habría dos `default_server` en el 80 y `nginx -t` fallaría. Comprobado: solo está `mudar` en `sites-enabled`.
+
+**12.7.3 — `server_tokens off;`**, en contexto `http`, arriba del archivo. Va en nuestro archivo y no en `/etc/nginx/nginx.conf` para que viaje con él; allí está comentado, así que no hay duplicado.
+
+**12.7.4 — Cabeceras de seguridad en lo que sirve Nginx.** Archivo nuevo **`despliegue/nginx-cabeceras.conf`** con `Strict-Transport-Security`, `X-Frame-Options DENY` y `X-Content-Type-Options nosniff`, todas con `always`. Se incluye con `include snippets/mudar-cabeceras.conf;` **en cada uno de los tres `location` que sirven del disco**: `/assets/`, `= /index.html` y `/`.
+- ⚠️ **No a nivel de `server`:** `add_header` sigue la misma regla de herencia que `proxy_set_header`. `/assets/` e `/index.html` declaran su `Cache-Control` y perderían las heredadas: justo la página de acceso saldría sin protección.
+- **No en `/api/`, `/static/` ni `/gestion/`:** Django ya las pone, y saldrían duplicadas.
+- 🔴 **HSTS queda declarado en dos sitios**, `settings.py` y `nginx-cabeceras.conf`. Se suben **juntos** a un año (T15).
+
+**Instalación, en este orden.** El archivo de cabeceras va **primero**: si el sitio llega antes, su `include` apunta a un archivo que no existe y `nginx -t` falla.
+```
+sudo install -o root -g root -m 644 /mnt/c/Users/angel/Desktop/Mudar/despliegue/nginx-cabeceras.conf /etc/nginx/snippets/mudar-cabeceras.conf
+sudo install -o root -g root -m 644 /mnt/c/Users/angel/Desktop/Mudar/despliegue/nginx-mudar.conf /etc/nginx/sites-available/mudar
+md5sum <los dos orígenes> <los dos destinos>        # iguales de dos en dos
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**12.7.5 — Medir el después.** Resultado del ensayo (2026-09-24):
+- **Host falso con SNI legítimo:** conexión cortada, `curl` sale con **92** (flujo HTTP/2 cerrado). Ningún aviso y ninguna línea en `mudar.log`.
+- **IP pelada por 443:** `curl` **35**, `tlsv1 unrecognized name`.
+- **IP pelada por 80:** `curl` **52**, `Empty reply from server`.
+- **Dominio legítimo:** `/` 200, `/api/` inexistente 404 y puerto 80 con 301. Igual que antes.
+- **Cabecera `Server: nginx`**, sin versión, también en el pie de las páginas de error.
+- **Las tres cabeceras** en `/`, `/index.html`, `/assets/…` y `/doms/57`, cada una con su `Cache-Control` intacto. El 404 de `/api/` las trae **una sola vez**: son las de Django.
+- **Navegador:** la aplicación funciona entera, `F5` en una ruta interna funciona y la consola no muestra ningún error.
+
+### 12.8 — Limpieza
+
+`sudo rm /etc/mudar/env.bak`. Era una segunda copia de la `SECRET_KEY` y de la contraseña de la base. `/etc/mudar/` queda con un solo archivo, `env`, `root:root 600`.
+
+**Lo que este paso NO cubre:** que la aplicación esté **caída**. Si Gunicorn muere, no queda nadie que envíe el aviso, y el silencio es idéntico al de un día sin incidencias. Hace falta un monitor externo; decisión post-V1.0.
 
 ## 13. `ufw` y `fail2ban`
+
+> 🪤 **DOS TRAMPAS DE FECHA, las dos silenciosas. Vienen del 10.8.**
+> 1. **Las zonas horarias tienen que coincidir.** `fail2ban` compara la fecha de cada línea de
+>    `seguridad.log` **con el reloj del sistema**. Django escribe en `America/Bogota`; si el sistema
+>    está en otra zona, todas las líneas caen fuera de la ventana de vigilancia y **no se banea a
+>    nadie jamás**, sin error ni aviso.
+> 2. **El `datepattern` debe reconocer la coma** de `2026-09-22 12:03:15,883`, antes de los
+>    milisegundos. Si no la reconoce, descarta las líneas en silencio.
+>
+> 🔎 **Y el límite de Nginx condiciona lo que esta jaula puede ver.** Lo que `limit_req` rechaza con
+> 429 **no llega a Django** y por tanto **no deja línea**. Medido en el 10.8: de 16 peticiones, 13
+> quedaron registradas y 5 no. Por eso el límite se dejó generoso.
 
 **Comandos:** _pendiente_. En WSL solo se puede probar parcialmente.
 
@@ -559,6 +1065,6 @@ sudo find /var/www/mudar -type f -exec chmod 644 {} +
 14. **URL incrustada en el `dist/`:** si está mal, se recompila, no se edita. Desde el 10.7.2 el paquete
     **no lleva dominio**: se comprueba `baseURL:""`, no `localhost`, que da falsos positivos de las
     librerías. → Pasos 9.4 y 10.7
-15. **HSTS:** sube de 1 hora a 1 año solo con el certificado estable. → Bloque D
+15. **HSTS:** sube de 1 hora a 1 año solo con el certificado estable, y **en dos sitios a la vez**: `SECURE_HSTS_SECONDS` en `settings.py` y `max-age` en `nginx-cabeceras.conf` (desde el 12.7.4). → Bloque D
 
 **Pendientes para el bloque D:** T3 con el dominio y la IP reales, T4 bajo carga real y T15.

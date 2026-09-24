@@ -18,8 +18,29 @@ After=network.target postgresql.service
 Type=oneshot
 User=mudar
 Group=mudar
-# systemd no ejecuta un shell: no hay PATH, ni cd, ni variables. Por eso el
-# directorio se declara aquí — python-decouple busca el .env desde él — y la ruta
-# al intérprete es absoluta.
+
+# systemd no ejecuta un shell: no hay PATH, ni cd, ni variables heredadas. Por
+# eso el directorio del proyecto se declara aquí y la ruta al intérprete es
+# absoluta.
 WorkingDirectory=/opt/mudar
+
+# Las credenciales y la SECRET_KEY. Lo lee systemd como root y después baja a
+# mudar, que NO puede abrir ese archivo (600, root).
+#
+# ⚠️ Sin esta línea el comando muere al importar Django, antes de hacer nada:
+#    settings.py hace 20 llamadas a config() y SECRET_KEY y las credenciales de
+#    la base no tienen valor por omisión. En el servidor NO hay ningún .env en
+#    /opt/mudar, así que python-decouple no tiene de dónde leerlas.
+EnvironmentFile=/etc/mudar/env
+
+# Sin esto, Python acumula su salida en un búfer y la suelta al terminar. En un
+# comando que falla a mitad, el diario se queda vacío y parece que nunca corrió.
+Environment=PYTHONUNBUFFERED=1
+
+# Garantiza /var/log/mudar con el dueño y el modo correctos aunque esta unidad
+# se dispare antes de que mudar-web haya arrancado alguna vez. Mismos valores
+# que allí, para que las dos no se pisen el modo.
+LogsDirectory=mudar
+LogsDirectoryMode=0750
+
 ExecStart=/opt/mudar/venv/bin/python manage.py cerrar_cronometros
