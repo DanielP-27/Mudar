@@ -36,7 +36,7 @@ Se escribe durante el ensayo en WSL (bloque C) y se ejecuta después en el servi
 ## 3. Sistema base ✅
 
 **Comandos**
-- 3.1 Actualizar: `sudo apt update && sudo apt upgrade -y`. Para comprobar: `apt list --upgradable` no lista nada y `/var/run/reboot-required` no existe.
+- 3.1 Actualizar: `sudo apt update && sudo apt upgrade -y`. Para comprobar: `/var/run/reboot-required` no existe y `apt list --upgradable` no lista nada **salvo actualizaciones escalonadas** (*phased updates*): Ubuntu reparte algunas de forma gradual y `apt upgrade` las retiene a propósito con `deferred due to phasing`. No son un fallo. *(Hueco del 15: el 24-sep quedaron cinco así, `apparmor` y `libaudit` entre ellas.)*
 - 3.2 Zona horaria: `sudo timedatectl set-timezone America/Bogota`. No imprime nada si sale bien.
 - 3.3 Reloj (NTP): en Ubuntu 24.04 ya viene activo (`systemd-timesyncd`), no hubo que hacer nada. Se comprueba con `timedatectl`. ⚠️ En el servidor, la salida restringida de GTD tiene que dejar pasar el puerto 123/UDP.
 - 3.4 Diario persistente: `/var/log/journal` ya existe en la imagen de Ubuntu 24.04, así que el diario se guarda en disco. Si no existiera: `sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald`.
@@ -297,7 +297,16 @@ Las pruebas verifican la lógica de negocio. La capa de seguridad de producción
   Se prefiere que la orden no exista a que exista y mienta. **Para desplegar código nuevo: `systemctl restart`.** Comparte más memoria entre workers (copia al
   escribir); impide recargar código sin reiniciar, cosa que aquí no molesta.
 
-**Comandos:** _pendiente_
+**Comandos** *(escritos el 2026-09-24, hueco del 15: aquí ponía «pendiente»)*. La unidad de `despliegue/` ya lleva el blindaje, así que se instala de una vez:
+```
+sudo install -o root -g root -m 644 /opt/mudar/despliegue/mudar-web.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now mudar-web
+systemctl is-active mudar-web
+sudo ss -ltnp | grep 8000                  # solo 127.0.0.1:8000, cuatro procesos gunicorn
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Forwarded-Proto: https' http://127.0.0.1:8000/api/auth/perfil/   # 401
+systemd-analyze security mudar-web.service | tail -n 1                                                          # 3.1 OK
+```
+La secuencia de abajo es cómo se construyó la unidad, por capas; se conserva como historia.
 
 **Secuencia de siete subpasos** *(aprobada el 2026-09-22)*. El reparto es el de la sesión 1: Angel ejecuta
 lo que lleva `sudo`, Claude verifica desde fuera con `wsl -d Ubuntu-24.04 -- …` y anota aquí.
@@ -1071,6 +1080,7 @@ datepattern = ^%%Y-%%m-%%d %%H:%%M:%%S,%%f
 - `%%` duplicado porque en estos archivos `%` introduce una referencia a otra variable.
 
 ### 13.4 — Probar el filtro antes de confiarle bloqueos
+⚠️ **En un servidor nuevo, `seguridad.log` está vacío** y `fail2ban-regex` da `0 lines`, que no prueba nada. Antes, provocar un login fallido: un `POST` a `/api/auth/login/` con un usuario inventado. *(Hueco del 15.)*
 ```
 sudo fail2ban-regex /var/log/mudar/seguridad.log /etc/fail2ban/filter.d/mudar-login.conf
 ```
@@ -1230,10 +1240,93 @@ gpg --decrypt --pinentry-mode loopback --no-symkey-cache \
 
 **Resultado del ensayo:** 23 KB (`gpg` comprime antes de cifrar), `AES with 256-bit key salted & iterated - SHA512`; al descifrar, los tres archivos con sus tamaños exactos. **Es la copia que usa el paso 15.**
 
-## 15. Repetición desde cero
+## 15. Repetición desde cero ✅
 
 - `wsl --unregister Ubuntu-24.04`, reinstalar y ejecutar los pasos 2 a 14 **solo** con este archivo.
 - Todo lo que haya que consultar fuera de este archivo se anota aquí antes de seguir.
+- **Es además el simulacro de desastre:** en el 7.5, en lugar de la semilla, se restauran `globales.sql` (primero) y el volcado desde la copia cifrada. Se anota la hora de inicio y la de fin: la diferencia es el tiempo real de caída que se promete al cliente (CLAUDE.md 6.2).
+
+### 15.0 — Preparación ✅ (2026-09-24)
+Todo lo que el simulacro necesita, fuera del Ubuntu antes de borrarlo. En `C:\Users\angel\Respaldos_MUDAR\`, cifrado con la contraseña del gestor, **la misma para todo**:
+- `mudar-respaldo-2026-09-24_0900.tar.gpg` — piezas 1 y 2 (globales y volcado) y `commit.txt`. Del 14.7.
+- `mudar-env-2026-09-24.gpg` — pieza 3, `/etc/mudar/env`. **Imprescindible:** `globales.sql` trae el hash de la contraseña **actual** de `mudar_app`; con un `env` nuevo, el rol se quedaría con la vieja y la aplicación no conectaría.
+```
+sudo cat /etc/mudar/env | gpg --symmetric --cipher-algo AES256 --pinentry-mode loopback --no-symkey-cache \
+  -o /mnt/c/Users/angel/Respaldos_MUDAR/mudar-env-<fecha>.gpg
+```
+Comprobación **sin mostrar secretos**: `gpg --decrypt … | cut -d= -f1` lista solo los nombres, y `gpg --decrypt … | md5sum` debe dar la misma huella que `sudo md5sum /etc/mudar/env`. Resultado: 13 variables y `0b15c2fe…` en los dos.
+- ⚠️ **No silenciar `gpg` con `2>/dev/null`:** con `--pinentry-mode loopback` la **pregunta de la contraseña** sale por la salida de errores. Silenciada, no se ve, `gpg` no descifra nada y `md5sum` devuelve `d41d8cd98f00b204e9800998ecf8427e`, la huella de una entrada **vacía**.
+- ⚠️ **Rotar una contraseña obliga a sacar una copia nueva de este archivo**, y a tomar de nuevo los globales: si no van a juego, la restauración falla por sincronía.
+
+**Pieza 6, el `dist/`**, recompilado en Windows desde `0ca2fc8` con el árbol de `client/` limpio (`git status --short client` vacío), `npm ci` y `npm run build`: 147 módulos, 1,94 s, `baseURL:""`. `npm audit --omit=dev`: 0. **Idéntico byte a byte al que servía el ensayo**, compilado el 23-sep desde un árbol sucio: aquellos cambios no tocaban el frontend. Desde hoy, el `dist/` es trazable a un commit.
+
+**El volcado encaja con el código:** `commit.txt` dice `3c0f3eb` y el que se clonará es `0ca2fc8`; entre los dos, ningún cambio en `server/migrations`.
+
+**Red de seguridad del ensayo:** `wsl --export Ubuntu-24.04 C:\Users\angel\WSL_respaldo\ubuntu-ensayo-2026-09-24.tar` (1,9 GB), desde PowerShell y tras `wsl --shutdown`. La carpeta tiene que existir antes: `--export` no la crea (`Wsl/ERROR_PATH_NOT_FOUND`). Si el simulacro se atasca: `wsl --unregister Ubuntu-24.04` y `wsl --import Ubuntu-24.04 <carpeta> <archivo.tar>`. **Lleva `/etc/mudar/env` sin cifrar**: no sale de la máquina y se borra cuando el paso 15 salga bien.
+
+### 15.1 — Los tres desvíos del simulacro
+Una sola diferencia con una instalación nueva: la base y sus secretos **no se crean, se recuperan**. Todo lo demás, del paso 2 al 14, se ejecuta tal cual.
+
+**Desvío A — paso 5: el rol se restaura, no se crea.** Sustituye al 5.2. Con un rol nuevo, su contraseña no coincidiría con la del `env` recuperado y la aplicación no conectaría.
+```
+sudo -v
+sudo install -d -o postgres -g postgres -m 700 /tmp/restauracion
+gpg --decrypt --pinentry-mode loopback --no-symkey-cache \
+  /mnt/c/Users/angel/Respaldos_MUDAR/mudar-respaldo-2026-09-24_0900.tar.gpg \
+  | sudo -u postgres tar -xf - -C /tmp/restauracion
+sudo -u postgres psql -f /tmp/restauracion/2026-09-24_0900/globales.sql
+sudo -u postgres psql -c "\du"
+```
+- **Error esperado, uno solo:** `role "postgres" already exists`. La instalación nueva ya trae ese rol; `psql` sigue con el resto y el `ALTER ROLE` que va detrás se aplica igual.
+- `\du` debe mostrar `mudar_app` **sin atributos**, como en el 5.2 original.
+- `/tmp/restauracion` es `700` de `postgres`: contiene los datos y los hashes.
+
+El **5.3 no cambia** (`createdb … mudar_db`). **Justo después**, la restauración, igual que en el 14.5:
+```
+time sudo -u postgres pg_restore --dbname=mudar_db --exit-on-error /tmp/restauracion/2026-09-24_0900/mudar_db.dump
+sudo rm -rf /tmp/restauracion
+```
+- La prueba **con contraseña** del 5.4 (T6) se aplaza a después del 7.1: la contraseña ya no se genera aquí, llega con el `env`.
+
+**Desvío B — paso 7.1: el `env` se descifra, no se escribe.** El paso 4 ya dejó `/etc/mudar/env` creado con `600`; `tee` escribe dentro sin cambiarle los permisos.
+```
+sudo -v
+gpg --decrypt --pinentry-mode loopback --no-symkey-cache \
+  /mnt/c/Users/angel/Respaldos_MUDAR/mudar-env-2026-09-24.gpg | sudo tee /etc/mudar/env > /dev/null
+sudo md5sum /etc/mudar/env          # 0b15c2fe84c292cdd152d2e8d2141781
+sudo ls -l /etc/mudar/env           # -rw------- root root
+```
+- Trae los valores del ensayo ya ajustados en los pasos 10 y 12, así que **los `sed` del paso 10 no cambian nada** y en el **12.1 `CORREO_AVISOS` ya está**: no se añade otra vez, o quedaría duplicada.
+
+**Desvío C — paso 7.5: la semilla desaparece.** Ni `semilla.json`, ni `sembrar`, ni `changepassword`: usuarios, catálogos y contraseñas vienen en el volcado.
+- El **7.4 cambia de papel**: `migrate` debe responder `No migrations to apply`, y lo que importa es `migrate --check` con `status=0`.
+- **Conteos conocidos**, los de la semilla del 19-sep: 9 usuarios, 9 perfiles, 7 familias, 2 turnos (ids 1 y 3), 55 clientes, 37 listas y 29 productos.
+
+**Prueba final y fin del cronómetro:** entrar en `https://app.mudar.test` como `ADMINISTRADOR` **con la contraseña de siempre**. Si entra, el volcado trajo los usuarios y sus contraseñas intactos. Se anota la hora: la diferencia con la del `wsl --unregister` es el tiempo de caída.
+
+### 15.16 — Resultado del simulacro (2026-09-24)
+
+**Tiempos**, midiendo dos cosas distintas:
+- **Caída del servidor:** 11:32:22 (`wsl --unregister`).
+- **Servicio restablecido:** 12:58:10, primer login de `ADMINISTRADOR` con su contraseña de siempre y dashboard con datos → **1 h 25 min 48 s**. Es lo que percibe el cliente: los pasos 11 a 14 protegen y mantienen el servidor, pero no hacen falta para trabajar.
+- **Servidor completo:** 13:07:02, primer respaldo del servidor nuevo → **1 h 34 min 40 s**.
+- Es la cifra de **la primera vez**, con cada paso explicado y verificado y tres huecos resueltos sobre la marcha. Quien ya conoce el procedimiento tarda bastante menos; como compromiso con el cliente es el peor caso.
+
+**Lo que quedó demostrado:** con solo GitHub, las dos copias cifradas de `Respaldos_MUDAR`, el `dist/` compilado y este runbook, el servidor se reconstruye entero **con datos, usuarios y contraseñas intactos**. La prueba central —que el rol restaurado de `globales.sql` y el `env` descifrado van a juego— pasó a la primera: `mudar_app` conectó por TCP con la contraseña del archivo. Restauración del volcado: 1,7 s. Las pruebas: `OK`. `migrate`: `No migrations to apply` (el volcado de `3c0f3eb` encaja con el código de `0ca2fc8`). El primer respaldo nuevo registró `0ca2fc8` en `commit.txt`: el código que corre ahora.
+- **La caducidad de sesión sobrevivió a la restauración:** el token del navegador venía en el volcado, llevaba más de 60 min sin uso y se rechazó (`/login?sesion=expirada`).
+
+**Tres huecos, corregidos ya en su paso:**
+1. **3.1** — `apt list --upgradable` no queda vacío si hay actualizaciones escalonadas.
+2. **8** — la sección decía `Comandos: pendiente`; solo estaban descritos en una frase.
+3. **13.4** — en un servidor nuevo `seguridad.log` está vacío; hay que provocar un login fallido antes de `fail2ban-regex`.
+
+**Dos mejoras de procedimiento, para D:**
+- **Instalar desde `/opt/mudar/despliegue/`**, el código clonado, y no desde `/mnt/c`. Es lo que se hará en GTD —allí no existe `/mnt/c`— y garantiza que se instala lo commiteado. Se usó así en los pasos 8, 10, 11, 13 y 14.
+- **Con la configuración ya escrita, el paso 10 son cuatro bloques:** instalar Nginx (y en WSL el nombre en `/etc/hosts`) · certificado y `/var/www/certbot` · cabeceras, sitio, quitar `default`, `ln -s`, `nginx -t && reload` · la batería de verificación. En GTD el certificado cambia por certbot.
+
+**Artefactos de WSL que no viajan a GTD:** `/etc/hosts` lo **regenera WSL** en cada arranque (la línea de `app.mudar.test` se pierde; las pruebas usan `curl --resolve` y no dependen de ella) · la zona horaria llega ya en `America/Bogota` porque WSL la hereda de Windows.
+
+**Red de seguridad:** `C:\Users\angel\WSL_respaldo\ubuntu-ensayo-2026-09-24.tar` ya cumplió su función y se puede borrar.
 
 ## 16. Commit
 
