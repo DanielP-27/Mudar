@@ -1,0 +1,23 @@
+# Cuándo corre el respaldo nocturno de la base.
+#
+# 21:30, media hora después del primer barrido de cronómetros (21:00): el
+# volcado recoge los cronómetros olvidados ya cerrados. El turno de tarde sale
+# a las 19:00, así que la planta no está escribiendo.
+#
+# Se instala con:
+#   systemctl daemon-reload
+#   systemctl enable --now mudar-respaldo.timer
+# Y se comprueba con:
+#   systemctl list-timers mudar-respaldo
+#   journalctl -u mudar-respaldo
+
+[Timer]
+OnCalendar=*-*-* 21:30:00
+# Si la máquina estaba apagada a la hora prevista, el respaldo se lanza al
+# arrancar. Sin esto, esa noche se perdería.
+Persistent=true
+
+[Install]
+# Lo que hace que systemctl enable signifique algo: sin esta sección el
+# temporizador funcionaría hasta el siguiente reinicio y luego desaparecería.
+WantedBy=timers.target

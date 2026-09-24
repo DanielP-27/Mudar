@@ -1,0 +1,28 @@
+# Respaldo nocturno de la base de MUDAR.
+#
+# No se habilita por su cuenta: quien lo dispara es mudar-respaldo.timer, que
+# activa por omisión el servicio de su mismo nombre. Por eso aquí no hay [Install].
+#
+# Se instala copiándolo a /etc/systemd/system/ y recargando con
+# systemctl daemon-reload. Requiere /usr/local/sbin/mudar-respaldo
+# (despliegue/mudar-respaldo.sh) y la carpeta /srv/respaldo (postgres, 700).
+
+[Unit]
+Description=Respaldo nocturno de la base de MUDAR
+# Solo ordena; no arranca PostgreSQL. Si la base está parada, el respaldo debe
+# fallar y quedar registrado, no levantarla por su cuenta.
+After=postgresql.service
+
+[Service]
+# Arranca, hace su trabajo y termina. Sin esto, systemd esperaría un proceso que
+# se queda vivo y tomaría el final como una caída.
+Type=oneshot
+
+# Entra a PostgreSQL por el socket local sin contraseña (peer): el usuario de
+# Linux y el rol se llaman igual. Los globales solo los lee un superusuario.
+User=postgres
+Group=postgres
+
+# Sin EnvironmentFile, a diferencia de mudar-web y del cronómetro: el respaldo no
+# carga Django ni necesita ningún secreto de /etc/mudar/env.
+ExecStart=/usr/local/sbin/mudar-respaldo

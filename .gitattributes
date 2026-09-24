@@ -1,0 +1,5 @@
+# Lo de despliegue/ se instala en Linux: siempre con saltos de línea LF, también
+# en la copia de trabajo de Windows. Con CRLF, un script que empieza por
+# #!/bin/bash no arranca (el sistema busca «bash\r»), y el ensayo instalaría
+# bytes distintos de los que llegan al servidor con git clone.
+despliegue/* text eol=lf

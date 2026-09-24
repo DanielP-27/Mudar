@@ -36,6 +36,8 @@ logs/
 *.dump
 *.sql
 *.backup
+# Excepción con nombre propio: una consulta del despliegue, sin datos.
+!despliegue/conteo-filas.sql
 
 # Claves y certificados
 *.pem

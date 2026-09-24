@@ -1004,7 +1004,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 **Lo que este paso NO cubre:** que la aplicación esté **caída**. Si Gunicorn muere, no queda nadie que envíe el aviso, y el silencio es idéntico al de un día sin incidencias. Hace falta un monitor externo; decisión post-V1.0.
 
-## 13. `ufw` y `fail2ban`
+## 13. `ufw` y `fail2ban` ✅
 
 > 🪤 **DOS TRAMPAS DE FECHA, las dos silenciosas. Vienen del 10.8.**
 > 1. **Las zonas horarias tienen que coincidir.** `fail2ban` compara la fecha de cada línea de
@@ -1014,27 +1014,221 @@ sudo nginx -t && sudo systemctl reload nginx
 > 2. **El `datepattern` debe reconocer la coma** de `2026-09-22 12:03:15,883`, antes de los
 >    milisegundos. Si no la reconoce, descarta las líneas en silencio.
 >
+> 📜 **El formato de la línea es un contrato entre dos archivos.** `LoginView` (`server/views.py`)
+> escribe `Login fallido usuario=… ip=…` y `despliegue/fail2ban-filtro.conf` lo lee con una expresión
+> regular. **Si se cambia el mensaje en `views.py`** —otra palabra, otro orden, la IP en otra
+> posición—, **`fail2ban` deja de ver los intentos sin dar ningún error**: la jaula sigue activa, los
+> contadores se quedan en cero y parece que nadie ataca. Cualquier cambio en ese mensaje se acompaña
+> del cambio en el filtro y de un `fail2ban-regex` que lo confirme (13.4).
+>
 > 🔎 **Y el límite de Nginx condiciona lo que esta jaula puede ver.** Lo que `limit_req` rechaza con
 > 429 **no llega a Django** y por tanto **no deja línea**. Medido en el 10.8: de 16 peticiones, 13
 > quedaron registradas y 5 no. Por eso el límite se dejó generoso.
 
-**Comandos:** _pendiente_. En WSL solo se puede probar parcialmente.
+**Objetivo:** cerrar la máquina a todo lo que no sea la web y bloquear a quien insista en adivinar contraseñas. **`ufw` es el filtro fijo**: desde fuera solo se entra por el 80 y el 443, venga quien venga. **`fail2ban` es el filtro dinámico**: lee `seguridad.log` y, cuando una IP acumula intentos fallidos, escribe una regla que la corta durante un tiempo y la quita sola después.
 
-**Verificación**
-- Un login fallido escribe en `seguridad.log` la línea `Login fallido usuario=… ip=…`.
-- `fail2ban-regex` sobre `seguridad.log` con el filtro da `Lines matched` mayor que 0. **(T11)**
-- `fail2ban-client status <jail>` muestra la jaula activa.
-- `ufw status verbose` muestra abiertos solo los puertos previstos.
+**Decisiones (2026-09-24):**
+- **Umbrales: 10 fallos en 10 minutos ⇒ 1 hora de bloqueo.** Holgados a propósito: parte de los usuarios tiene poca soltura. Nginx frena la ráfaga (10 por minuto) y `fail2ban` corta a quien insiste.
+- 🔴 **La IP pública de la planta va en `ignoreip`.** Todos sus equipos salen por una sola IP y `fail2ban` bloquea IPs, no cuentas: sin la excepción, diez errores de operarios distintos bloquearían la planta entera. **En el repositorio queda como marcador comentado** (es público); el valor real se escribe solo en el servidor. Pendiente de confirmar por MUDAR.
+- **SSH en GTD, solo desde el rango de la VPN**, con una regla de `ufw` que va **antes** del `enable`. En el WSL no hay SSH. Pendiente de la respuesta de GTD (rango, exclusividad y si llega con esa IP o traducida por NAT).
 
-## 14. Respaldo y restauración
+### 13.1 — Instalar
+```
+sudo apt update && sudo apt install -y ufw fail2ban
+```
+`ufw` se instala **inactivo**. `fail2ban` arranca solo con una jail `sshd` que no molesta aunque no haya SSH.
 
-**Comandos:** _pendiente_
+🪤 **Ubuntu trae `/etc/fail2ban/jail.d/defaults-debian.conf` con `backend = systemd` en `[DEFAULT]`**, heredado por todas las jails. Con él, una jail lee el diario del sistema, **ignora `logpath` y no detecta nada**, sin error. Nuestra jail declara el suyo. El mismo archivo fija `banaction = nftables`, que es lo que usamos.
 
-**Verificación**
-- `pg_restore --list` lee el volcado sin error.
-- La restauración en una base **nueva** termina, la aplicación arranca contra ella y los conteos coinciden. **(T7)**
-- Junto al volcado queda guardado el `git rev-parse HEAD` del código que lo generó.
-- Se anota cuánto tardó la restauración.
+### 13.2 — `ufw`
+```
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+# En GTD, AQUÍ: sudo ufw allow from <rango_VPN> to any port 22 proto tcp
+sudo ufw logging low
+sudo ufw show added          # revisar antes de encender
+sudo ufw enable              # pregunta por SSH: responder y
+sudo ufw status verbose
+```
+- `deny` es `DROP`: un puerto cerrado **no contesta**, así que quien lo prueba ni siquiera confirma que la máquina existe.
+- La salida queda abierta: correo (587), DNS y actualizaciones. Cerrarla se descartó por minimalismo: un atacante usaría el 443, que tiene que seguir abierto.
+- `logging low` escribe en `/var/log/ufw.log` las conexiones **rechazadas**. Anotar no es bloquear: una IP que aparece ahí puede seguir entrando por el 443.
+- El reenvío aparece como `disabled (routed)`: el sistema tiene `ip_forward = 0` y no hace de router.
+- Lo interno (Nginx → Gunicorn en el 8000, Django → PostgreSQL en el 5432) va por `lo`, que `ufw` permite siempre.
+
+**Verificación:** `Status: active`, las cuatro reglas (80 y 443, en IPv4 e IPv6), la aplicación responde 200 **también desde el navegador de Windows**, y `curl https://github.com` da 200 (la salida funciona).
+
+### 13.3 — El filtro
+`despliegue/fail2ban-filtro.conf` → `/etc/fail2ban/filter.d/mudar-login.conf`:
+```ini
+failregex = ^\s*WARNING server\.seguridad Login fallido usuario=.* ip=<HOST>$
+datepattern = ^%%Y-%%m-%%d %%H:%%M:%%S,%%f
+```
+- `fail2ban` reconoce la fecha, **la recorta** y aplica `failregex` al resto; por eso empieza por `^\s*`.
+- `.*` voraz y `$` al final: se toma **la última** `ip=`. La que alguien escriba dentro del usuario no cuenta.
+- `%%` duplicado porque en estos archivos `%` introduce una referencia a otra variable.
+
+### 13.4 — Probar el filtro antes de confiarle bloqueos
+```
+sudo fail2ban-regex /var/log/mudar/seguridad.log /etc/fail2ban/filter.d/mudar-login.conf
+```
+**Resultado del ensayo:** 32 de 32 líneas reconocidas, fecha reconocida en las 32 **(T11 cerrada)**, 0 perdidas. `seguridad.log` solo contiene intentos fallidos, así que no sobra ninguna línea.
+
+**El usuario trucado.** Un login con usuario `x ip=8.8.8.8` deja `usuario=x ip=8.8.8.8 ip=127.0.0.1`. Pasando esa línea sola:
+```
+sudo fail2ban-regex -v "$(sudo tail -n 1 /var/log/mudar/seguridad.log)" /etc/fail2ban/filter.d/mudar-login.conf
+```
+extrae **`127.0.0.1`**. Un atacante no puede hacer que se bloquee a otro —por ejemplo, a la planta— escribiendo su IP en el usuario.
+
+### 13.5 — La jail
+`despliegue/fail2ban-jaula.conf` → `/etc/fail2ban/jail.d/mudar.conf`. Se instala **después** del filtro.
+```
+sudo fail2ban-client reload && sudo fail2ban-client status mudar-login
+```
+**Verificación:** los valores efectivos con `fail2ban-client get mudar-login maxretry|findtime|bantime|ignoreip|logpath`. `backend` no se puede consultar así en la 1.0.2; se confirma en `/var/log/fail2ban.log` con `Jail 'mudar-login' uses poller`.
+
+### 13.6 — Un bloqueo real y su reversión
+En el ensayo todo llega desde `127.0.0.1`, que `fail2ban` protege por **dos** vías: `ignoreip` e `ignoreself`. Se quitan **en memoria**:
+```
+sudo fail2ban-client set mudar-login delignoreip 127.0.0.1/8
+sudo fail2ban-client set mudar-login ignoreself false
+for i in $(seq 1 10); do curl -sk -o /dev/null -w "$i: %{http_code}\n" --resolve app.mudar.test:443:127.0.0.1 \
+  -X POST -H 'Content-Type: application/json' -d '{"username":"atacante","password":"x"}' \
+  https://app.mudar.test/api/auth/login/; done
+sudo fail2ban-client status mudar-login
+sudo nft list table inet f2b-table
+```
+**Resultado del ensayo:** diez 401, `Currently banned: 1` con `127.0.0.1`. Por el 443, conexión rechazada; **directo a Gunicorn por el 8000, responde** (301, por faltar `X-Forwarded-Proto`): el bloqueo solo cubre la web. La regla dice `tcp dport { 80, 443 } ip saddr @addr-set-mudar-login reject`.
+
+> **Por qué corta aunque `ufw` permita el 443:** la cadena de `fail2ban` tiene prioridad `filter - 1` y se evalúa **antes** que la de `ufw` (`filter`). Gana la primera regla que coincide.
+
+**Reversión:**
+```
+sudo fail2ban-client set mudar-login unbanip 127.0.0.1
+sudo systemctl restart fail2ban
+sudo fail2ban-client get mudar-login ignoreself      # True
+```
+⚠️ **`reload` NO basta.** Restaura `ignoreip` pero deja `ignoreself` en `False`: la jail queda distinta de su archivo sin que nada lo señale. Tras cualquier prueba con `set`, **`restart`**.
+
+`unbanip` es también el comando de producción para desbloquear a alguien por error; si no, el bloqueo caduca solo a la hora.
+
+### 13.7 — Que sobreviva a un reinicio
+`wsl --shutdown` desde PowerShell y volver a entrar. En GTD, un `sudo reboot`.
+
+`ufw.service` es *oneshot*: tras un `ufw enable` a mano figura como `inactive` aunque las reglas estén cargadas, porque la unidad no llegó a ejecutarse. **Solo un reinicio prueba que carga sola.**
+
+**Resultado del ensayo:** tras el reinicio, `ufw`, `fail2ban`, `nginx`, `mudar-web`, `postgresql@16-main` y el temporizador activos; las reglas de `ufw` cargadas, las dos jails arriba con `ignoreself` en `True`, la web responde 200 desde WSL y desde Windows, la API 401 y la zona horaria sigue en `America/Bogota`.
+
+**Lo que el ensayo no puede responder:** 🔴 **si la NAT de GTD conserva la IP de origen.** Si el tráfico llegara con una IP de GTD, `fail2ban` bloquearía a todos o a nadie, y la auditoría registraría la misma IP en todas las filas. Se comprueba en D mirando las IPs de `access.log` de Nginx.
+
+## 14. Respaldo y restauración ✅
+
+**Objetivo:** que cada noche se genere solo un respaldo de la base que **se pueda restaurar**, y demostrarlo restaurándolo. Sigue el procedimiento de `CLAUDE.md` 6.2: un respaldo que nunca se restauró es una hipótesis.
+
+**Tres capas, complementarias (decidido el 2026-09-24):**
+1. **El volcado nocturno en `/srv/respaldo`**, 14 días. Cubre lo que más ocurre —error humano, migración fallida, dato borrado— y se restaura en segundos.
+2. **La copia de la máquina de GTD** (BUaaS, 50 GB), que se lleva el disco entero y con él `/srv/respaldo`. Cubre perder el servidor. No sustituye a la 1: restaura la máquina entera, no una base, y una imagen de un PostgreSQL en marcha es, como mucho, un apagón.
+3. **La copia cifrada manual en la máquina de Angel.** Cubre perder al proveedor. **Cadencia sin decidir** (CLAUDE.md 6.2).
+
+**Decisiones:** a las **21:30** (media hora después del barrido de las 21:00; recoge los cronómetros ya cerrados) · como el usuario **`postgres`** (los globales con hashes solo los lee un superusuario) · un **fallo del respaldo no avisa** en la V1.0: se revisa cada domingo con el reinicio manual.
+
+### 14.1 — La carpeta
+```
+sudo install -d -o postgres -g postgres -m 700 /srv/respaldo
+```
+⚠️ **En GTD, antes: `findmnt /srv/respaldo`.** Es un volumen propio de 4 GB. Si no estuviera montado, la carpeta se crearía en la raíz y los respaldos llenarían los 12 GB del sistema sin que nada avisara.
+
+### 14.2 — El script
+`despliegue/mudar-respaldo.sh` → `/usr/local/sbin/mudar-respaldo`, **root:root 755** (`postgres` lo ejecuta pero no puede modificarlo). Cada ejecución deja `/srv/respaldo/AAAA-MM-DD_HHMM/` con `globales.sql`, `mudar_db.dump` (formato *custom*) y `commit.txt`.
+- `set -euo pipefail`: un `pg_dump` fallido detiene el script en vez de dejar un archivo vacío y decir «completo».
+- `umask 077`: carpetas 700 y archivos 600, solo `postgres`.
+- Escribe en `….incompleto` y renombra al final: un fallo a mitad no deja una carpeta con nombre de respaldo válido.
+- 🪤 **`git` rechaza un repositorio ajeno** (`dubious ownership`: `/opt/mudar` es de root y el script corre como `postgres`). Se autoriza solo esa orden con `git -c safe.directory=/opt/mudar`. Si aun así falla, escribe `desconocido` y **el volcado se hace igual**: la versión se reconstruye desde `django_migrations`.
+- Retención: `find … -name '20*' -mtime +13 -exec rm -rf -- {} +`. El `-name '20*'` es el seguro: solo caen carpetas con nombre de fecha.
+- 🔴 **El `#!/bin/bash` exige saltos de línea LF.** Con CRLF el sistema buscaría `bash\r` y el script no arrancaría. Comprobar con `file` que no dice `CRLF`. Motivo de peso para el `.gitattributes` del paso 16.
+```
+sudo install -o root -g root -m 755 /mnt/c/Users/angel/Desktop/Mudar/despliegue/mudar-respaldo.sh /usr/local/sbin/mudar-respaldo
+file /usr/local/sbin/mudar-respaldo && bash -n /usr/local/sbin/mudar-respaldo && echo "sintaxis OK"
+```
+
+### 14.3 — El temporizador
+`mudar-respaldo.service` (`Type=oneshot`, `User=postgres`, `After=postgresql.service`) y `mudar-respaldo.timer` (`OnCalendar=*-*-* 21:30:00`, `Persistent=true`).
+- **Sin `EnvironmentFile`:** el respaldo no carga Django ni necesita secretos.
+- **La zona horaria es la del sistema**, no se declara en el temporizador: tiene que ser `America/Bogota` de todos modos por `fail2ban`, y una sola fuente de verdad es más fácil de vigilar.
+```
+sudo install -o root -g root -m 644 …/mudar-respaldo.service …/mudar-respaldo.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now mudar-respaldo.timer
+systemctl list-timers mudar-respaldo.timer
+```
+
+### 14.4 — El primer respaldo, a mano
+```
+sudo systemctl start mudar-respaldo.service
+journalctl -u mudar-respaldo -n 10 --no-pager
+sudo ls -la /srv/respaldo/<carpeta>/
+sudo cat /srv/respaldo/<carpeta>/commit.txt
+```
+🪤 **`sudo ls /srv/respaldo/*/` falla:** el `*` lo sustituye **tu** shell, con tus permisos, antes que `sudo`; como no puedes ver dentro de una carpeta 700, pasa el texto literal. O se escribe el nombre, o `sudo bash -c 'ls /srv/respaldo/*/'`.
+
+**Revisión semanal del domingo — la carpeta más reciente:** `sudo bash -c 'ls -1d /srv/respaldo/20* | tail -n 1'`.
+
+**Resultado del ensayo (2026-09-24):** 2 s, 124 KB. `mudar_db.dump` 111.293 bytes, `globales.sql` 797 (roles `mudar_app` con hash y `postgres`), `commit.txt` = `3c0f3eb`, el commit que tiene `/opt/mudar` —no el de hoy, que es justo lo que tiene que decir—.
+
+### 14.5 — La restauración cronometrada
+En una base **nueva**, gemela de la original (mismas opciones que en el paso 5):
+```
+sudo -u postgres createdb --owner=mudar_app --encoding=UTF8 --locale=es_CO.UTF-8 --template=template0 mudar_verif
+time sudo -u postgres pg_restore --dbname=mudar_verif --exit-on-error /srv/respaldo/<carpeta>/mudar_db.dump
+```
+- **`--exit-on-error`**: sin él, `pg_restore` sigue tras un error y puede dejar una base a medias que parece completa.
+- `globales.sql` no se restaura aquí: los roles ya existen. En un servidor nuevo va **primero**.
+
+**Conteo fila a fila** con `despliegue/conteo-filas.sql` (reutilizable en la verificación trimestral):
+```
+SQL=/mnt/c/Users/angel/Desktop/Mudar/despliegue/conteo-filas.sql
+sudo -u postgres psql -d mudar_db    -At -f $SQL > /tmp/conteo_viva.txt
+sudo -u postgres psql -d mudar_verif -At -f $SQL > /tmp/conteo_verif.txt
+diff /tmp/conteo_viva.txt /tmp/conteo_verif.txt && echo "IDENTICAS: $(wc -l < /tmp/conteo_viva.txt) tablas"
+```
+⚠️ **Rutas largas en una sola línea se parten al pegarlas** en la terminal y `psql` recibe `-f` sin argumento. La variable lo evita; en órdenes largas, `\` al final de cada línea.
+
+**Resultado del ensayo:** `real 0m1.398s`; **IDENTICAS: 29 tablas**. **Proyección** (no medida): con ~50 filas por DOM —23 medidas en la base de desarrollo, el doble por prudencia— y 1.000 DOM al año, entre 3 y 6 s al año de operación y entre 15 y 30 s a los cinco años. **El tiempo que se promete al cliente no lo marca `pg_restore`** sino todo lo de antes: detectar, decidir, recuperar el volcado y, en el peor caso, rehacer el servidor. Eso lo mide el paso 15.
+
+### 14.6 — La aplicación sobre la base restaurada
+Sin tocar el servicio: órdenes sueltas de Django apuntando a `mudar_verif`. systemd admite **dos `EnvironmentFile`** y, si una variable está en los dos, **gana el segundo**; así se sustituye solo el nombre sin editar `/etc/mudar/env`:
+```
+echo 'DB_NAME=mudar_verif' | sudo tee /etc/mudar/env.verif > /dev/null
+sudo systemd-run --uid=mudar --gid=mudar --wait --pipe --collect \
+  --property=EnvironmentFile=/etc/mudar/env \
+  --property=EnvironmentFile=/etc/mudar/env.verif \
+  --working-directory=/opt/mudar \
+  /opt/mudar/venv/bin/python manage.py migrate --check
+```
+**Primero se confirma a qué base apunta** con `manage.py shell -c "from django.db import connection; print(connection.settings_dict['NAME'])"`: si el segundo archivo no sustituyera nada, todo lo demás estaría probando la viva.
+
+**Resultado del ensayo:** `mudar_verif` y `migrate --check` con `status=0`: el código de `3c0f3eb` reconoce la base restaurada. No se comparó el dashboard: con las tablas de operación vacías no muestra nada, y los conteos exactos prueban lo mismo con más precisión.
+
+### 14.7 — Limpieza y copia cifrada
+```
+sudo -u postgres dropdb mudar_verif          # no pide confirmación: comprobar el nombre
+sudo rm /etc/mudar/env.verif
+rm /tmp/conteo_viva.txt /tmp/conteo_verif.txt
+```
+**La copia cifrada**, a `C:\Users\angel\Respaldos_MUDAR\` —fuera del repositorio y fuera de OneDrive—, con la contraseña en el gestor de Angel y **la misma para todas las copias manuales**:
+```
+sudo -v                                       # para que no coincida con la pregunta de gpg
+sudo tar -C /srv/respaldo -cf - <carpeta> \
+  | gpg --symmetric --cipher-algo AES256 --pinentry-mode loopback --no-symkey-cache \
+    -o /mnt/c/Users/angel/Respaldos_MUDAR/mudar-respaldo-<carpeta>.tar.gpg
+gpg --decrypt --pinentry-mode loopback --no-symkey-cache \
+  /mnt/c/Users/angel/Respaldos_MUDAR/mudar-respaldo-<carpeta>.tar.gpg | tar -tvf -
+```
+- **`--no-symkey-cache`** en las dos órdenes: sin él, `gpg` recuerda la contraseña unos minutos y la comprobación descifraría **sin pedirla**, así que no probaría que la del gestor es la buena.
+- **Se descifra pegando la contraseña desde el gestor**, no de memoria.
+
+**Resultado del ensayo:** 23 KB (`gpg` comprime antes de cifrar), `AES with 256-bit key salted & iterated - SHA512`; al descifrar, los tres archivos con sus tamaños exactos. **Es la copia que usa el paso 15.**
 
 ## 15. Repetición desde cero
 
@@ -1044,6 +1238,7 @@ sudo nginx -t && sudo systemctl reload nginx
 ## 16. Commit
 
 - Commit de `despliegue/` y de este runbook, después de revisar que no contiene secretos.
+- **Pendiente para este commit: `.gitattributes` con `despliegue/* text eol=lf`.** Con `core.autocrlf=true` en Windows, los archivos de `despliegue/` salen a la carpeta con CRLF, e `install` los copia así al ensayo (`nginx-mudar.conf` y las dos `.service`, comprobado con `file` el 2026-09-24). Nginx y systemd lo toleran, pero en GTD el `git clone` en Linux los dejará en LF: **el ensayo no prueba los mismos bytes que producción** y el `md5sum` pierde parte de su sentido.
 
 ---
 
