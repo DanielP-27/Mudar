@@ -1140,7 +1140,7 @@ sudo fail2ban-client get mudar-login ignoreself      # True
 **Tres capas, complementarias (decidido el 2026-09-24):**
 1. **El volcado nocturno en `/srv/respaldo`**, 14 días. Cubre lo que más ocurre —error humano, migración fallida, dato borrado— y se restaura en segundos.
 2. **La copia de la máquina de GTD** (BUaaS, 50 GB), que se lleva el disco entero y con él `/srv/respaldo`. Cubre perder el servidor. No sustituye a la 1: restaura la máquina entera, no una base, y una imagen de un PostgreSQL en marcha es, como mucho, un apagón.
-3. **La copia cifrada manual en la máquina de Angel.** Cubre perder al proveedor. **Cadencia sin decidir** (CLAUDE.md 6.2).
+3. **La copia cifrada manual en la máquina de Angel.** Cubre perder al proveedor. **Cadencia: semanal los lunes y una extra antes de cada cambio en el servidor; se conservan 8 semanales y la primera de cada mes durante un año** (decidido el 2026-09-28).
 
 **Decisiones:** a las **21:30** (media hora después del barrido de las 21:00; recoge los cronómetros ya cerrados) · como el usuario **`postgres`** (los globales con hashes solo los lee un superusuario) · un **fallo del respaldo no avisa** en la V1.0: se revisa cada domingo con el reinicio manual.
 
