@@ -1133,6 +1133,20 @@ sudo fail2ban-client get mudar-login ignoreself      # True
 
 **Lo que el ensayo no puede responder:** 🔴 **si la NAT de GTD conserva la IP de origen.** Si el tráfico llegara con una IP de GTD, `fail2ban` bloquearía a todos o a nadie, y la auditoría registraría la misma IP en todas las filas. Se comprueba en D mirando las IPs de `access.log` de Nginx.
 
+**Resultado en GTD (2026-10-02):** la NAT **conserva** la IP de origen (la IP pública del cliente llega en `X-Forwarded-For` y `fail2ban` bloqueó esa misma IP en el 13.6). Reinicio a las 08:41:51, de vuelta en ~25 s: los cinco servicios `active`, `ufw` con 80/443 y el 22 desde `10.20.30.0/24`, jails `mudar-login` y `sshd`, `ignoreip` con la IP de la planta, y los temporizadores de cronómetros (21:00), respaldo (21:30) y actualizaciones (03:00).
+
+**Actualizaciones automáticas — antes del reinicio (decidido el 2026-09-17).** Se instalan solas, pero **a las 03:00** y no a las 06:00 de serie, que es el arranque del turno; y **sin reinicio automático**:
+```
+sudo mkdir -p /etc/systemd/system/apt-daily-upgrade.timer.d && printf '[Timer]\nOnCalendar=\nOnCalendar=*-*-* 03:00\nRandomizedDelaySec=0\n' | sudo tee /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf
+sudo systemctl daemon-reload && systemctl status apt-daily-upgrade.timer --no-pager | grep -E 'Active|Trigger'
+printf '// Decision del 2026-09-17: sin reinicio automatico. Reinicio manual semanal (domingo).\nUnattended-Upgrade::Automatic-Reboot "false";\n' | sudo tee /etc/apt/apt.conf.d/52unattended-upgrades-mudar
+apt-config dump | grep Automatic-Reboot
+```
+- 🪤 **El `OnCalendar=` vacío es imprescindible:** `OnCalendar` se acumula, y sin él la instalación correría a las 03:00 **y** a las 06:00.
+- El `52` se lee después del `50` del paquete y gana. `Automatic-Reboot` ya es `false` de serie: el archivo deja la decisión escrita y la protege.
+
+**Reinicio manual, cada domingo** (03:00 Bogotá): si existe `/var/run/reboot-required` —núcleo nuevo, a veces `systemd` o la biblioteca de C—, `sudo reboot` y la batería de arriba. Sin vigilancia externa, un reinicio automático fallido lo descubriría la planta a las 06:00; se pasa a automático cuando la haya.
+
 ## 14. Respaldo y restauración ✅
 
 **Objetivo:** que cada noche se genere solo un respaldo de la base que **se pueda restaurar**, y demostrarlo restaurándolo. Sigue el procedimiento de `CLAUDE.md` 6.2: un respaldo que nunca se restauró es una hipótesis.
@@ -1176,7 +1190,7 @@ systemctl list-timers mudar-respaldo.timer
 ### 14.4 — El primer respaldo, a mano
 ```
 sudo systemctl start mudar-respaldo.service
-journalctl -u mudar-respaldo -n 10 --no-pager
+sudo journalctl -u mudar-respaldo -n 10 --no-pager
 sudo ls -la /srv/respaldo/<carpeta>/
 sudo cat /srv/respaldo/<carpeta>/commit.txt
 ```
@@ -1239,6 +1253,18 @@ gpg --decrypt --pinentry-mode loopback --no-symkey-cache \
 - **Se descifra pegando la contraseña desde el gestor**, no de memoria.
 
 **Resultado del ensayo:** 23 KB (`gpg` comprime antes de cifrar), `AES with 256-bit key salted & iterated - SHA512`; al descifrar, los tres archivos con sus tamaños exactos. **Es la copia que usa el paso 15.**
+
+**En GTD (2026-10-02) no hay `/mnt/c`:** se cifra en el servidor hacia `/tmp` y se baja por `scp`. La carpeta pasa a `C:\Users\angel\Documents\Respaldos_MUDAR\` (Documentos no está sincronizada con OneDrive; si algún día se activa la copia de carpetas de OneDrive, moverla). El `env` va en su propio archivo y se verifica **contando** variables, nunca mostrándolas:
+```
+sudo -v
+sudo tar -C /srv/respaldo -cf - <carpeta> | gpg --symmetric --cipher-algo AES256 --pinentry-mode loopback --no-symkey-cache -o /tmp/mudar-respaldo-<carpeta>.tar.gpg
+sudo cat /etc/mudar/env | gpg --symmetric --cipher-algo AES256 --pinentry-mode loopback --no-symkey-cache -o /tmp/mudar-env-<fecha>.gpg
+gpg --decrypt --pinentry-mode loopback --no-symkey-cache /tmp/mudar-respaldo-<carpeta>.tar.gpg | tar -tvf -
+gpg --decrypt --pinentry-mode loopback --no-symkey-cache /tmp/mudar-env-<fecha>.gpg | grep -oE '^[A-Z_]+=' | wc -l
+```
+Desde PowerShell: `scp "aguila@10.180.145.66:/tmp/mudar-*.gpg" C:\Users\angel\Documents\Respaldos_MUDAR\`; comparar `sha256sum` a los dos lados y borrar `/tmp/mudar-*.gpg` del servidor.
+
+**Resultado en GTD:** `2026-10-02_0854` → 23.716 B (dump 111.465, globales 797, `commit.txt` 41) · `env` 1.353 B, 20 variables.
 
 ## 15. Repetición desde cero ✅
 

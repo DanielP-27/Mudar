@@ -279,7 +279,7 @@ function PaginaCrearDom() {
               valor={formatearFecha(new Date())}
               nota="Se genera automáticamente" />
             <CampoLectura label="Número DOM"
-              valor="El número de registro DOM es asignado automaticamente por el sistema al guardar el registro"
+              valor="El número de registro DOM es asignado automáticamente por el sistema al guardar el registro"
               nota="Se asigna al guardar" />
           </div>
 

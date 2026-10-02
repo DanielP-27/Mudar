@@ -86,7 +86,7 @@ function frasePrincipal(estado, resumen) {
   if (estado === 'alertando') {
     // Un conteo siempre con el mismo formato: el detalle está dentro, y es la razón de
     // desplegar. Enumerar motivos aquí no cabe en un teléfono.
-    return `${resumen.marcados} de ${resumen.abiertos} requiere atención`
+    return `${resumen.marcados} de ${resumen.abiertos} requieren atención`
   }
 
   if (resumen.abiertos === 0) return 'No hay cronómetros abiertos'

@@ -577,7 +577,7 @@ function PaginaEditarDom() {
       return acc + cant * (pp?.tiempo_unitario_efectivo ?? unitarioDe(prod.id))
     }, 0)
     if (capacidad && tiempoTotalIntencionado > capacidad) {
-      setError(`No hay capacidad suficiente en el turno. Disponible: ${capacidad} min, Requerido: ${tiempoTotalIntencionado} min.`)
+      setError(`No hay capacidad suficiente en el turno. Disponible: ${capacidad} min, requerido: ${tiempoTotalIntencionado} min.`)
       return
     }
 
@@ -646,7 +646,7 @@ function PaginaEditarDom() {
       const continuar = window.confirm(
         `Este cambio deja el turno con un déficit de ${previewTurnoDia.deficit_minutos} min, ` +
         `afectando a: ${previewTurnoDia.doms.map(d => `${d.nombre_cliente} (${d.minutos_ocupados} min)`).join(', ')}. ` +
-        `¿Deseas continuar de todas formas?`
+        `¿Desea continuar de todas formas?`
       )
       if (!continuar) return
     }
@@ -1480,7 +1480,7 @@ function PaginaEditarDom() {
                   </div>
 
                   <div>
-                    <p className="text-xs text-gray-600">Tu planeación</p>
+                    <p className="text-xs text-gray-600">Su planeación</p>
                     <p className="text-lg font-bold text-gray-800">
                       {planActual?.tiempo_proyectado ?? '—'} min
                     </p>
@@ -1643,7 +1643,7 @@ function PaginaEditarDom() {
                     ))}
                   </select>
                 </CampoFormulario>
-                <CampoFormulario label="Orden de tratamiento termico en turno y fecha">
+                <CampoFormulario label="Orden de tratamiento térmico en turno y fecha">
                   <input type="number" value={planActual.orden_tratamiento ?? ''}
                     onChange={e => actualizarCampoPlaneacion('orden_tratamiento', e.target.value)}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa}
@@ -1676,12 +1676,12 @@ function PaginaEditarDom() {
                     onChange={v => actualizarCampoPlaneacion('encartonar', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
-                <CampoFormulario label="¿Productos requieren grafado y elaboración de fundas">
+                <CampoFormulario label="¿Productos requieren grafado y elaboración de fundas?">
                   <SelectSiNo name="planeacion_grafado_fundas" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.grafado_fundas)}
                     onChange={v => actualizarCampoPlaneacion('grafado_fundas', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
                 </CampoFormulario>
-                <CampoFormulario label="¿Producto requiere Control de tiempo y ensamble en armadora?">
+                <CampoFormulario label="¿Producto requiere control de tiempo y ensamble en armadora?">
                   <SelectSiNo name="planeacion_control_tiempo" soloLectura={!esEditable('etapa_2')} variante="lectura" value={boolToStr(planActual.control_tiempo)}
                     onChange={v => actualizarCampoPlaneacion('control_tiempo', strToBool(v))}
                     disabled={!esEditable('etapa_2') || !!planActualOriginal?.planeacion_completa} />
@@ -1828,7 +1828,7 @@ function PaginaEditarDom() {
                   </CampoFormulario>
                 </div>
                 <CampoRequeridoCierre>
-                  <CampoFormulario label="¿Actividades de almacen realizadas según planeación para este DOM?">
+                  <CampoFormulario label="¿Actividades de almacén realizadas según planeación para este DOM?">
                     <SelectSiNo name="almacen_dom_realizado_planeacion" soloLectura={!esEditable('etapa_3')} variante="lectura" value={boolToStr(almacenActual.dom_realizado_planeacion)}
                       onChange={v => actualizarCampoHijo('almacen', 'dom_realizado_planeacion', strToBool(v), idxAlmacen)}
                       disabled={!esEditable('etapa_3') || almacenActualOriginal?.materias_liberadas} />
@@ -2143,7 +2143,7 @@ function PaginaEditarDom() {
                   onDesbloquear={() => desbloquear('tratamiento', tratamientoActual.id, 'Tratamiento')}
                   guardando={guardando}
                 >
-                  <CampoFormulario label="¿Actividades de tratamiento termico realizadas según planeación?">
+                  <CampoFormulario label="¿Actividades de tratamiento térmico realizadas según planeación?">
                     <SelectSiNo name="tratamiento_completado" soloLectura={!esEditable('etapa_5')} value={boolToStr(tratamientoActual.tratamiento_completado)}
                       onChange={v => actualizarCampoHijo('tratamiento', 'tratamiento_completado', strToBool(v), idxTratamiento)}
                       disabled={!esEditable('etapa_5') || tratamientoActualOriginal?.tratamiento_completado} />
@@ -2310,7 +2310,7 @@ function PaginaEditarDom() {
           <span className="text-[#1A56A0] font-bold">
             {produccionActual?.numero_personas_asignadas} persona{produccionActual?.numero_personas_asignadas !== 1 ? 's' : ''}
           </span>{' '}
-          asignadas a esta producción?
+          asignada{produccionActual?.numero_personas_asignadas !== 1 ? 's' : ''} a esta producción?
         </span>
       </ModalBase>
 

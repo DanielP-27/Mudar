@@ -122,7 +122,7 @@ function PaginaClientes() {
 
   // Desactiva un cliente previa confirmación
   const manejarDesactivar = async (cliente) => {
-    if (!await pedirConfirmacion('¿Está seguro que desea desactivar este cliente?')) return
+    if (!await pedirConfirmacion('¿Está seguro de que desea desactivar este cliente?')) return
     setError(null)
     try {
       await desactivarCliente(cliente.cliente_id)

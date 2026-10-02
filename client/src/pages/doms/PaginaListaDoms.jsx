@@ -238,7 +238,7 @@ function PaginaListaDoms() {
           {/* Número de DOM */}
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
-              No. DOM
+              N.º DOM
             </label>
             <input type="number" min="1"
               value={filtroNumeroDom}

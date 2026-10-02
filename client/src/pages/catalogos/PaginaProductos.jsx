@@ -141,7 +141,7 @@ function PaginaProductos() {
 
   // Desactiva un producto previa confirmación
   const manejarDesactivar = async (producto) => {
-    if (!await pedirConfirmacion('¿Está seguro que desea desactivar este producto?')) return
+    if (!await pedirConfirmacion('¿Está seguro de que desea desactivar este producto?')) return
     setError(null)
     try {
       await desactivarProducto(producto.producto_id)
